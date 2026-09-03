@@ -225,7 +225,7 @@ export function renderSrsiOverview(hz, capMin) {
     const cv = lc.cv, fv = lc.fv;
     const freshTxt = fv == null ? '—' : (fv === 0 ? '当下' : fv + '根前');
     const freshCls = fv != null && fv <= 3 ? (cv === 'buy' || cv === 'goldHook' ? 'ov-fresh-buy' : 'ov-fresh-sell') : '';
-    const crossTxt = cv === 'goldHook' ? '金钩' : cv === 'deathHook' ? '死钩' : cv === 'buy' ? '▲金叉' : cv === 'sell' ? '▼死叉' : '无';
+    const crossTxt = cv === 'goldHook' ? '▲金钩' : cv === 'deathHook' ? '▼死钩' : cv === 'buy' ? '▲金叉' : cv === 'sell' ? '▼死叉' : '无';
     const crossCls = cv === 'goldHook' ? 'ov-hook-gold' : cv === 'deathHook' ? 'ov-hook-death' : cv === 'buy' ? 'ov-cross-buy' : cv === 'sell' ? 'ov-cross-sell' : '';
     const eng = r.energy || { dir: null, score: 0 };
     const engCls = eng.score >= 60 ? 'ov-eng-hi' : eng.score >= 30 ? 'ov-eng-mid' : 'ov-eng-lo';
@@ -235,7 +235,7 @@ export function renderSrsiOverview(hz, capMin) {
       <span class="kchart-ov-k">${r.k != null ? r.k.toFixed(1) : '--'}</span>
       <span class="kchart-ov-d">${r.d != null ? r.d.toFixed(1) : '--'}</span>
       <span class="kchart-ov-zone ${zoneCls[r.zone]}">${zoneLbl[r.zone]}</span>
-      <span class="kchart-ov-cross ${crossCls}">${crossTxt}</span>
+      <span class="kchart-ov-cross ${crossCls} ${r.reversed ? 'ov-reversed' : ''}">${crossTxt}${r.reversed ? ' ↺' : ''}${r.gapNow != null ? `<span class="kchart-ov-gap"> 间${r.gapNow.toFixed(1)}${r.gapTrend === 'up' ? '↑' : r.gapTrend === 'down' ? '↓' : '–'}</span>` : ''}</span>
       <span class="kchart-ov-eng ${engCls}" title="${r.energy ? r.energy.reason : ''}">${engTxt}</span>
       <span class="kchart-ov-fresh ${freshCls}">${freshTxt}</span>
     </div>`;
@@ -526,7 +526,8 @@ export function kPresetCombos(name) {
 
 // ---- 多周期 SRSI 速览表（纯数据，可单测）----
 // 对每个已勾选 TF 计算 srsiPanelSeries 的末根 K/D、区域、最近穿越方向与新鲜度(根数)。
-// 返回 { rows: [{tf,k,d,zone,crossing,fresh}], bull, bear }
+// 返回 { rows: [{tf,k,d,zone,crossing,fresh,hook,hookFresh,reversed,gapNow,gapPrev,gapTrend,energy}], bull, bear }
+//   reversed: 该周期最近信号是否已被反向动量否决；bull/bear 计数已对反转行做翻转。
 export function buildSrsiOverview(selTfs, srsiCfg, priceMap, bars = 150) {
   const rows = [];
   let bull = 0, bear = 0;
@@ -546,17 +547,26 @@ export function buildSrsiOverview(selTfs, srsiCfg, priceMap, bars = 150) {
       for (let i = sl.hooks.length - 1; i >= 0; i--) {
         if (sl.hooks[i]) { row.hook = sl.hooks[i]; row.hookFresh = sl.hooks.length - 1 - i; break; }
       }
-      // 按穿越方向计（与「穿越」列同源：金叉/金钩=偏多，死叉/死钩=偏空），不再用当前 K 与 50 的位置
-      const lc = latestCross(row);
-      if (lc.cv === 'buy' || lc.cv === 'goldHook') bull++;
-      else if (lc.cv === 'sell' || lc.cv === 'deathHook') bear++;
+      // K-D 间距动能（加速/减弱）：当前间距 vs 前一根间距
+      const nSl = sl.k.length;
+      const gapNow = (row.k != null && row.d != null) ? Math.abs(row.k - row.d) : null;
+      const gapPrev = (nSl >= 2 && sl.k[nSl - 2] != null && sl.d[nSl - 2] != null) ? Math.abs(sl.k[nSl - 2] - sl.d[nSl - 2]) : null;
+      let gapTrend = 'flat';
+      if (gapNow != null && gapPrev != null) {
+        if (gapNow > gapPrev * 1.1) gapTrend = 'up';
+        else if (gapNow < gapPrev * 0.9) gapTrend = 'down';
+      }
+      row.gapNow = gapNow; row.gapPrev = gapPrev; row.gapTrend = gapTrend;
+      // 反转判定：信号意图 vs 当前瞬时 K/D 方向（死/金 钩/叉 被反向动量否决 → 已反转）
+      row.reversed = isReversed(row);
       row.energy = hookEnergy(row);
     } else {
       row.energy = { dir: null, score: 0, isHook: false, reason: '数据不足' };
     }
     rows.push(row);
   });
-  return { rows, bull, bear };
+  const cb = countBullBear(rows);
+  return { rows, bull: cb.bull, bear: cb.bear };
 }
 
 // 由速览表统计 → 聚合结论
@@ -582,6 +592,34 @@ export function latestCross(row) {
   const hookFresh = (row.hook != null && row.hookFresh != null) ? row.hookFresh : Infinity;
   const useHook = hookFresh <= crossFresh;
   return { cv: useHook ? row.hook : row.crossing, fv: useHook ? row.hookFresh : row.fresh };
+}
+
+// 反转判定（纯函数，可单测）：信号意图 vs 当前瞬时 K/D 方向。
+// 死叉/死钩(bear) 但当前 K>D → 空头被买回(已反转, 偏多)；金叉/金钩(bull) 但当前 K<D → 多头被砸回(已反转, 偏空)。
+export function isReversed(row) {
+  if (!row) return false;
+  const lc = latestCross(row);
+  if (!lc.cv) return false;
+  const bear = lc.cv === 'sell' || lc.cv === 'deathHook';
+  const bull = lc.cv === 'buy' || lc.cv === 'goldHook';
+  if (row.k == null || row.d == null || !isFinite(row.k) || !isFinite(row.d)) return false;
+  const EPS = 0.5;
+  return bear ? (row.k - row.d > EPS) : bull ? (row.d - row.k > EPS) : false;
+}
+
+// 多周期速览共识计数（纯函数，可单测）：按「穿越」列方向计多/空；若该行已反转则翻转贡献（死勾反转→计多 / 金勾反转→计空）。
+export function countBullBear(rows) {
+  let bull = 0, bear = 0;
+  (rows || []).forEach(row => {
+    const lc = latestCross(row);
+    if (!lc.cv) return;
+    let contrib = (lc.cv === 'buy' || lc.cv === 'goldHook') ? 'bull'
+                : (lc.cv === 'sell' || lc.cv === 'deathHook') ? 'bear' : null;
+    if (!contrib) return;
+    if (row.reversed) contrib = contrib === 'bull' ? 'bear' : 'bull';
+    if (contrib === 'bull') bull++; else bear++;
+  });
+  return { bull, bear };
 }
 
 // 单周期 SRSI KD 能量分（用户概念：KD 线间距大 + 远离 50 中线 + 钩刚激活 → 能量足）：
@@ -634,12 +672,13 @@ export function pickConfirm(rows, expectDir) {
     if (lc.cv == null || lc.fv == null) return;
     const isHook = lc.cv === 'goldHook' || lc.cv === 'deathHook';
     const dir = (lc.cv === 'buy' || lc.cv === 'goldHook') ? 'buy' : 'sell';
-    cands.push({ dir, fresh: lc.fv, tf: r.tf, isHook });
+    cands.push({ dir, fresh: lc.fv, tf: r.tf, isHook, reversed: isReversed(r) });
   });
   cands.sort((a, b) => a.fresh - b.fresh);
-  const confirm = cands.length ? cands[0] : { dir: null, fresh: null, tf: null, isHook: false };
-  confirm.contrarian = !!(expectDir && confirm.dir != null && confirm.dir !== expectDir);
-  confirm.confirmed = !confirm.contrarian && confirm.dir != null && confirm.fresh <= 3;
+  const confirm = cands.length ? cands[0] : { dir: null, fresh: null, tf: null, isHook: false, reversed: false };
+  // 已反转信号不作为反向确认（其原方向已被动量否决）：不触发 contrarian 门控、也不计为有效确认
+  confirm.contrarian = !!(expectDir && confirm.dir != null && confirm.dir !== expectDir) && !confirm.reversed;
+  confirm.confirmed = !confirm.contrarian && confirm.dir != null && confirm.fresh <= 3 && !confirm.reversed;
   return confirm;
 }
 
@@ -898,6 +937,49 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const obCount = rows.filter(r => r.zone === 'overbought').length;
   const osCount = rows.filter(r => r.zone === 'oversold').length;
 
+  // —— 反转 / 全周期K / K-D间距动能（供置信度修正与说明）——
+  const allAbove = rows.length && rows.every(r => r.k != null && r.d != null && r.k > r.d);
+  const allBelow = rows.length && rows.every(r => r.k != null && r.d != null && r.k < r.d);
+  const allOB = rows.length && rows.every(r => r.zone === 'overbought');
+  const allOS = rows.length && rows.every(r => r.zone === 'oversold');
+  // 反转韧性：所选 confirm 已反转 → 原空头被反转(K>D)=偏多韧性 / 原多头被反转(K<D)=偏空韧性
+  let reversalAdd = 0; const reversalParts = []; let revNote = null;
+  if (confirm.reversed && confirm.dir) {
+    const bear = confirm.dir === 'sell';
+    if (bear && up !== false) { reversalAdd = 8; reversalParts.push('死信号反转+8(多头韧性)'); }
+    else if (!bear && up !== true) { reversalAdd = 8; reversalParts.push('金信号反转+8(空头韧性)'); }
+    else if (bear && up === false) { reversalAdd = -8; reversalParts.push('死信号反转-8'); }
+    else if (!bear && up === true) { reversalAdd = -8; reversalParts.push('金信号反转-8'); }
+    revNote = (bear ? '死勾/死叉' : '金勾/金叉') + '已反转(' + (bear ? 'K>D' : 'K<D') + ')→' + (bear ? '偏多韧性' : '偏空韧性');
+  }
+  // 全周期 K>D / K<D 强信号
+  let periodKAdd = 0;
+  if (allAbove) periodKAdd = 10;
+  else if (allBelow) periodKAdd = -10;
+  // K-D 间距动能（加速/减弱）：与方向基准一致时加速+, 减弱-；超买收窄=背离预警
+  let gapAdd = 0; const gapParts = [];
+  rows.forEach(r => {
+    if (r.gapNow == null || r.gapPrev == null) return;
+    const gdir = r.k > r.d ? 'buy' : (r.k < r.d ? 'sell' : null);
+    if (!gdir) return;
+    const accel = r.gapNow > r.gapPrev * 1.1;
+    const decel = r.gapNow < r.gapPrev * 0.9;
+    if (up === true && gdir === 'buy' && accel) gapAdd += 3;
+    else if (up === true && gdir === 'buy' && decel) gapAdd -= 3;
+    else if (up === false && gdir === 'sell' && accel) gapAdd += 3;
+    else if (up === false && gdir === 'sell' && decel) gapAdd -= 3;
+    if (r.zone === 'overbought' && decel) gapParts.push(r.tf + '超买动能失速(背离预警)');
+  });
+  gapAdd = Math.max(-12, Math.min(12, gapAdd));
+  // 新鲜信号却动能减弱 → 额外 -5
+  if (confirm.dir && !confirm.reversed && confirm.fresh != null && confirm.fresh <= 3) {
+    const cr = byTf[confirm.tf];
+    if (cr && cr.gapNow != null && cr.gapPrev != null && cr.gapNow < cr.gapPrev * 0.9) gapAdd -= 5;
+  }
+  let periodRisk = '';
+  if (allAbove && allOB) periodRisk = '中(全周期超买,防冲顶)';
+  else if (allBelow && allOS) periodRisk = '中(全周期超卖,防赶底)';
+
   // 纪律清单
   const rules = [];
   let trendNote;
@@ -959,6 +1041,13 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
       : (gateWait
         ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前 ✅ 已确认(反向) → ' + (want === 'buy' ? '回调中勿追多, 等金叉/金钩确认回调结束再低吸' : '反弹中勿追空, 等死叉/死钩确认反弹结束再做空'))
         : (confirm.dir ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前, 需等更新鲜确认') : '近期无穿越信号, 观望'))
+  });
+
+  // 反转信号识别：若最近信号已反转，说明原方向被动量否决 → 翻转计入，不作为有效反向确认
+  rules.push({
+    name: '信号反转识别',
+    ok: !confirm.reversed || (confirm.dir === 'sell' ? up !== false : up !== true),
+    note: confirm.reversed ? (revNote + ' → 翻转计' + (confirm.dir === 'sell' ? '多' : '空')) : '近期信号未反转'
   });
 
   // 短周期锚定（能量领跑）：最高能量的周期驱动近期走势，方向与方向基准一致 → 顺势增强，相反 → 动能衰减警惕
@@ -1056,7 +1145,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   if (gateWait) {
     // 反向确认已成立 → 观望: 不加分、不当「未确认」, 理由行已说明
   } else if (confirmed) { conf += confirm.isHook ? 15 : 10; confParts.push(confirm.isHook ? '钩确认+15' : '入场已确认+10'); }
-  else if (confirm.dir) { conf -= 5; confParts.push('未确认-5'); }
+  else if (confirm.dir && !confirm.reversed) { conf -= 5; confParts.push('未确认-5'); }
   if (dir.startsWith('做多') && dailyRow.zone === 'overbought') { conf -= 10; confParts.push('日线超买-10'); }
   if (dir.startsWith('做空') && dailyRow.zone === 'oversold') { conf -= 10; confParts.push('日线超卖-10'); }
   // 宏观冲突扣分（方向 vs 宏观 7d/30d 反向）
@@ -1071,6 +1160,15 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   } else if (strategy !== 'energy-leader' && !leader && rows.length && rows.every(r => !r.energy || r.energy.score < 30)) {
     conf -= 5; confParts.push('信号耗尽-5');
   }
+  // 反转韧性加/扣分
+  if (reversalAdd) { conf += reversalAdd; confParts.push(reversalParts[0]); }
+  // 全周期 K>D/D 强信号
+  if (periodKAdd) { conf += periodKAdd; confParts.push(periodKAdd > 0 ? '全周期K>D 强势+10' : '全周期K<D 强势-10'); }
+  // K-D 间距动能（加速/减弱）
+  if (gapAdd) { conf += gapAdd; confParts.push('KD间距动能' + (gapAdd > 0 ? '+' : '') + gapAdd); }
+  if (gapParts.length) confParts.push(gapParts.join('/'));
+  // 全周期超买/超卖护栏：封顶置信度
+  if (periodRisk) { conf = Math.min(conf, 80); }
   conf = Math.max(10, Math.min(90, conf));
   const confLabel = conf >= 70 ? '高' : conf >= 45 ? '中' : '低';
 
@@ -1084,6 +1182,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   // 信号生命周期/强度（仅呈现层, 统一追加到所有档位 reason 尾部 + 单独 field 供 DOM）
   const life = signalLifecycle(confirm, leader, energyRows);
   if (life && life.txt) reason += '；信号: ' + life.txt;
+  if (revNote) reason += '；' + revNote;
 
   return {
     strategy,
@@ -1093,13 +1192,13 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     trend,
     multiTf: { bull, bear, verdict },
     zones,
-    confirm: { dir: confirm.dir, fresh: confirm.fresh, tf: confirm.tf, isHook: confirm.isHook, confirmed, contrarian: confirm.contrarian },
+    confirm: { dir: confirm.dir, fresh: confirm.fresh, tf: confirm.tf, isHook: confirm.isHook, confirmed, contrarian: confirm.contrarian, reversed: confirm.reversed },
     leading: leader ? { tf: leader.tf, dir: leader.dir, score: leader.score, isHook: leader.isHook, isClear: leader.isClear } : null,
     energyRows: energyRows.map(e => ({ tf: e.tf, dir: e.energy.dir, score: e.energy.score, isHook: e.energy.isHook })),
     signalLife: life,
     entry: {
       dir, conf, confLabel, confParts, reason, entryCue, stop, target,
-      risk: (dir.startsWith('做多') && dailyRow.zone === 'overbought') || (dir.startsWith('做空') && dailyRow.zone === 'oversold') ? '中(长周期极端反向)' : '低'
+      risk: periodRisk || ((dir.startsWith('做多') && dailyRow.zone === 'overbought') || (dir.startsWith('做空') && dailyRow.zone === 'oversold') ? '中(长周期极端反向)' : '低')
     },
     rules
   };

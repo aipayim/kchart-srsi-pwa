@@ -327,6 +327,8 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-ov-cross.ov-hook-death{color:#FF5252;font-weight:700}
 .kchart-ov-fresh.ov-fresh-buy{color:#00E5FF}
 .kchart-ov-fresh.ov-fresh-sell{color:#FFB300}
+.kchart-ov-cross.ov-reversed{outline:2px solid #fff;outline-offset:2px;border-radius:4px;padding:1px 5px;margin-left:2px;}
+.kchart-ov-gap{opacity:.7;font-size:.85em;margin-left:4px;}
 .kchart-ov-eng.ov-eng-hi{color:#00E676;font-weight:700}
 .kchart-ov-eng.ov-eng-mid{color:#FFB300}
 .kchart-ov-eng.ov-eng-lo{color:var(--text2)}

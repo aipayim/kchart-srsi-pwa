@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle } from '../src/tech2/kchart.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle, isReversed, countBullBear } from '../src/tech2/kchart.js';
 import { KLINE_TF } from '../src/engine/timeframe.js';
 
 let passed = 0, failed = 0;
@@ -411,6 +411,44 @@ console.log('\n[kchart: 速览结论 overviewVerdict]');
   ok('全中性→中性', overviewVerdict(0, 0) === '中性');
 }
 
+console.log('\n[kchart: 反转判定 isReversed / countBullBear]');
+{
+  ok('死钩+K>D→已反转', isReversed({ hook: 'deathHook', hookFresh: 2, crossing: null, fresh: null, k: 75, d: 70 }) === true);
+  ok('死叉+K<D→未反转', isReversed({ crossing: 'sell', fresh: 2, hook: null, hookFresh: null, k: 60, d: 70 }) === false);
+  ok('金钩+K<D→已反转', isReversed({ hook: 'goldHook', hookFresh: 2, crossing: null, fresh: null, k: 25, d: 30 }) === true);
+  ok('金叉+K>D→未反转', isReversed({ crossing: 'buy', fresh: 2, hook: null, hookFresh: null, k: 80, d: 70 }) === false);
+  ok('无信号→false', isReversed({ crossing: null, fresh: null, hook: null, hookFresh: null, k: 70, d: 70 }) === false);
+  ok('缺K/D→false', isReversed({ hook: 'deathHook', hookFresh: 2 }) === false);
+  // countBullBear：死钩被反转→翻转计多
+  const r1 = [{ hook: 'deathHook', hookFresh: 2, crossing: null, fresh: null, k: 75, d: 70 }, { crossing: 'buy', fresh: 1, hook: null, hookFresh: null, k: 80, d: 70 }];
+  r1.forEach(r => r.reversed = isReversed(r));
+  const cb1 = countBullBear(r1);
+  ok('countBullBear 死钩反转→全计多', cb1.bull === 2 && cb1.bear === 0);
+  const r2 = [{ hook: 'deathHook', hookFresh: 2, crossing: null, fresh: null, k: 60, d: 70 }, { crossing: 'buy', fresh: 1, hook: null, hookFresh: null, k: 80, d: 70 }];
+  r2.forEach(r => r.reversed = isReversed(r));
+  const cb2 = countBullBear(r2);
+  ok('countBullBear 死钩未反转→正常计空', cb2.bull === 1 && cb2.bear === 1);
+  // buildSrsiOverview 行携带 reversed / gap 字段
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.5); return a; };
+  const ov = buildSrsiOverview(['5m', '1h'], srsi, { '5m': rising(500), '1h': rising(500) }, 150);
+  ok('概览行含 reversed 字段', ov.rows.every(r => 'reversed' in r));
+  ok('概览行含 gapNow/gapTrend 字段', ov.rows.every(r => 'gapNow' in r && 'gapTrend' in r));
+}
+
+console.log('\n[kchart: 反转/全周期K/D/间距动能 进入纪律分析]');
+{
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const risingAll = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 10) * 15 + i * 0.05); return a; };
+  const pm = { '5m': risingAll(500), '15m': risingAll(500), '1h': risingAll(500), '4h': risingAll(500) };
+  const s = analyzeTradeDiscipline(pm, srsi, { bars: 150, mainTF: '15m' });
+  ok('全周期K>D→趋势方向已判定', typeof s.trend.up === 'boolean' && !!s.trend.tf);
+  ok('全周期K>D→一致偏多', s.multiTf.verdict === '一致偏多');
+  ok('全周期K>D→置信含强势+10', s.entry.confParts.some(p => p.includes('全周期K>D 强势+10')));
+  ok('confirm 对象含 reversed 字段', 'reversed' in s.confirm);
+  ok('纪律清单含「信号反转识别」规则', s.rules.some(r => r.name === '信号反转识别'));
+}
+
 console.log('\n[kchart: 钩信号 dirName / pickConfirm]');
 {
   ok('dirName buy 普通→金叉', dirName('buy', false) === '金叉');
@@ -581,7 +619,7 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S1 主周期(15m)超卖', s1.zones.main === 'oversold');
   ok('S1 建议做多', s1.entry.dir === '做多');
   ok('S1 置信度中等(≥45)', s1.entry.conf >= 45);
-  ok('S1 6条纪律规则(含短周期锚定)', s1.rules.length === 6);
+  ok('S1 7条纪律规则(含短周期锚定+反转识别)', s1.rules.length === 7);
   ok('S1 顺势交易规则通过', s1.rules[0].ok === true);
   ok('S1 回调≠反转规则通过(上涨趋势回调=低吸)', s1.rules.find(r => r.name === '回调≠反转').ok === true);
   ok('S1 signalLife 存在并写入 reason', !!s1.signalLife && s1.entry.reason.includes('信号: ') && s1.signalLife.txt.length > 0);
@@ -614,7 +652,7 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
 
   // S7 规则名称固定6条
   const names = s1.rules.map(r => r.name);
-  ok('S7 6条规则名称', names.join('|') === '顺势交易|多周期共振|逆势信号警惕|回调≠反转|信号只是提示|短周期锚定');
+  ok('S7 7条规则名称', names.join('|') === '顺势交易|多周期共振|逆势信号警惕|回调≠反转|信号只是提示|信号反转识别|短周期锚定');
 
   // S8 回归: 趋势不受勾选周期影响（用全部TF数据但klineSel只勾短周期）
   // 完整数据: 5m/15m下降, 4h/1d上升 → 方向基准取 ≤capMin(4h) 的最长 = 4h 上升
@@ -644,13 +682,13 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   const s10 = analyzeTradeDiscipline({ '5m': riseThenDip(500), '15m': rising(500), '1h': rising(500), '4h': rising(500) }, srsi, { bars: 150, mainTF: '1h' });
   ok('S10 观察态有止损值', s10.entry.stop != null && s10.entry.stop > 0);
 
-  // S12 门控: 4h 上升 + 5m 最近死叉(contrarian fresh=0) → 观望
+  // S12 门控: 4h 上升 + 5m 最近死叉(contrarian fresh≤3) → 观望。注意死叉须未被反转(当前 K<D)，否则按反转逻辑不触发门控
   const uptrend = (n, step = 0.3) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * step); return a; };
   const contrarianFixture = () => {
-    const a = uptrend(600, 0.15); const last = a[a.length - 1];
-    for (let i = 1; i <= 50; i++) a.push(last - i * 1);
-    const bot = a[a.length - 1];
-    for (let i = 1; i <= 10; i++) a.push(bot + i * 12);
+    const a = [];
+    for (let i = 0; i < 580; i++) a.push(100 + i * 0.4 + Math.sin(i / 6) * 6);
+    const last = a[a.length - 1];
+    for (let i = 1; i <= 4; i++) a.push(last - i * 20);
     return a;
   };
   const s12 = analyzeTradeDiscipline({
