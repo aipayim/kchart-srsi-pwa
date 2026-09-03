@@ -328,7 +328,7 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-ov-fresh.ov-fresh-buy{color:#00E5FF}
 .kchart-ov-fresh.ov-fresh-sell{color:#FFB300}
 .kchart-ov-cross{white-space:nowrap;overflow:visible}
-.kchart-ov-cross.ov-reversed{background:rgba(255,179,0,0.14);border-radius:4px;padding:1px 4px;color:#FFB300}
+.kchart-ov-cross.ov-reversed{background:rgba(255,255,255,0.12);border-radius:4px;padding:1px 4px;}
 .kchart-ov-gap{opacity:.6;font-size:.85em;margin-left:1px;}
 .kchart-ov-eng.ov-eng-hi{color:#00E676;font-weight:700}
 .kchart-ov-eng.ov-eng-mid{color:#FFB300}
