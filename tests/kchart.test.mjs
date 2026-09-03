@@ -812,8 +812,8 @@ console.log('\n[kchart: 实时价 discLiveInfo]');
   const a1 = discLiveInfo('BTCUSDT', { entry: { dir: '做多', target: 700.1, stop: 673.6 } });
   ok('D1 价格取自 window.S', a1.price === 686.41);
   ok('D1 价格涨跌着色(chg<0→down)', a1.priceCls === 'disc-down');
-  ok('D1 距目标% 正确', close(a1.toTarget, (686.41 - 700.1) / 700.1 * 100));
-  ok('D1 距止损% 正确', close(a1.toStop, (686.41 - 673.6) / 673.6 * 100));
+  ok('D1 距目标% 正确', close(a1.toTarget, (700.1 - 686.41) / 686.41 * 100));
+  ok('D1 距止损% 正确', close(a1.toStop, (673.6 - 686.41) / 686.41 * 100));
   ok('D1 未达目标→targetCls空', a1.targetCls === '');
   ok('D1 未破止损→stopCls空', a1.stopCls === '');
 
@@ -831,7 +831,7 @@ console.log('\n[kchart: 实时价 discLiveInfo]');
   // 做空: 目标673.6(低于现价), 止损700.1(高于现价); 现价670<目标→已到目标→targetCls=disc-pos
   globalThis.window = { S: { prices: { BTCUSDT: { last: 670, chg: 1 } } } };
   const a4 = discLiveInfo('BTCUSDT', { entry: { dir: '做空', target: 673.6, stop: 700.1 } });
-  ok('D4 做空 距目标% 正确', close(a4.toTarget, (670 - 673.6) / 673.6 * 100));
+  ok('D4 做空 距目标% 正确', close(a4.toTarget, (673.6 - 670) / 670 * 100));
   ok('D4 做空 现价<目标→已到目标 targetCls=disc-pos', a4.targetCls === 'disc-pos');
   ok('D4 做空 现价<止损→stopCls空', a4.stopCls === '');
 

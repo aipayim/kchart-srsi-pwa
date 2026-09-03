@@ -269,8 +269,8 @@ export function discLiveInfo(sym, analysis) {
   const isShort = !!(analysis && analysis.entry && analysis.entry.dir.startsWith('做空'));
   const t = analysis && analysis.entry && analysis.entry.target;
   const s = analysis && analysis.entry && analysis.entry.stop;
-  if (t != null) { out.toTarget = (p.last - t) / t * 100; if ((isLong && p.last >= t) || (isShort && p.last <= t)) out.targetCls = 'disc-pos'; }
-  if (s != null) { out.toStop = (p.last - s) / s * 100; if ((isLong && p.last <= s) || (isShort && p.last >= s)) out.stopCls = 'disc-neg'; }
+  if (t != null) { out.toTarget = (t - p.last) / p.last * 100; if ((isLong && p.last >= t) || (isShort && p.last <= t)) out.targetCls = 'disc-pos'; }
+  if (s != null) { out.toStop = (s - p.last) / p.last * 100; if ((isLong && p.last <= s) || (isShort && p.last >= s)) out.stopCls = 'disc-neg'; }
   return out;
 }
 

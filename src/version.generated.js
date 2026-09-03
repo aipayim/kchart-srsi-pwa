@@ -2,8 +2,8 @@
 // 版本号单一来源: package.json version + git tag/commit。
 // 执行 "npm run version:gen" 重新生成。
 export const APP_VERSION = "1.0.0";
-export const APP_TAG = "v1.5.1";
-export const APP_COMMIT = "17d866e";
-export const APP_DESCRIBE = "v1.5.1";
+export const APP_TAG = "";
+export const APP_COMMIT = "2d75f24";
+export const APP_DESCRIBE = "2d75f24";
 export const APP_DIRTY = true;
-export const APP_BUILD_TIME = "2026-09-03T11:46:30.977Z";
+export const APP_BUILD_TIME = "2026-09-03T12:19:25.891Z";
