@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dev-dist/
+data/
+*.log
+npm-debug.log*
+.DS_Store
+.env
+.env.*
+*.local
+*.bak
+.wrangler/
