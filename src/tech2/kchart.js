@@ -235,7 +235,7 @@ export function renderSrsiOverview(hz, capMin) {
       <span class="kchart-ov-k">${r.k != null ? r.k.toFixed(1) : '--'}</span>
       <span class="kchart-ov-d">${r.d != null ? r.d.toFixed(1) : '--'}</span>
       <span class="kchart-ov-zone ${zoneCls[r.zone]}">${zoneLbl[r.zone]}</span>
-      <span class="kchart-ov-cross ${crossCls} ${r.reversed ? 'ov-reversed' : ''}">${crossTxt}${r.reversed ? ' ↺' : ''}${r.gapNow != null ? `<span class="kchart-ov-gap"> 间${r.gapNow.toFixed(1)}${r.gapTrend === 'up' ? '↑' : r.gapTrend === 'down' ? '↓' : '–'}</span>` : ''}</span>
+      <span class="kchart-ov-cross ${crossCls} ${r.reversed ? 'ov-reversed' : ''}">${crossTxt}${r.gapNow != null ? `<span class="kchart-ov-gap">${r.gapNow.toFixed(1)}${r.gapTrend === 'up' ? '↑' : r.gapTrend === 'down' ? '↓' : '–'}</span>` : ''}</span>
       <span class="kchart-ov-eng ${engCls}" title="${r.energy ? r.energy.reason : ''}">${engTxt}</span>
       <span class="kchart-ov-fresh ${freshCls}">${freshTxt}</span>
     </div>`;
