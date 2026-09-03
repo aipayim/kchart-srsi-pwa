@@ -328,6 +328,9 @@ function updateDiscLivePrice(box) {
   }
 }
 
+// HTML 转义：纪律面板用 innerHTML 渲染 reason/note/confParts，避免其中的 '<'（如 K<D）被当成标签开头截断
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
 export function renderTradeDiscipline(hz, capMin) {
   const box = document.getElementById('kchartDisc');
   if (!box) return;
@@ -369,7 +372,7 @@ export function renderTradeDiscipline(hz, capMin) {
     `<div class="kchart-disc-rule ${r.ok ? 'disc-rule-ok' : 'disc-rule-warn'}">
       <span class="disc-rule-icon">${r.ok ? '✓' : '⚠'}</span>
       <span class="disc-rule-name">${r.name}</span>
-      <span class="disc-rule-note">${r.note}</span>
+      <span class="disc-rule-note">${esc(r.note)}</span>
     </div>`
   ).join('');
   const confPartsHtml = entry.confParts.length ? entry.confParts.join(' · ') : '基准' + entry.conf;
@@ -413,7 +416,7 @@ export function renderTradeDiscipline(hz, capMin) {
           <span class="disc-conf ${confColor}">${entry.confLabel} · ${entry.conf}</span>
           <span class="disc-risk">${entry.risk}</span>
         </div>
-        <div class="disc-reason">${entry.reason}</div>
+        <div class="disc-reason">${esc(entry.reason)}</div>
         <div class="disc-nowprice">当前价: <span id="kchartDiscPrice">—</span> <span id="kchartDiscDist" class="disc-dist"></span></div>
         <div class="disc-plan"><span class="disc-plan-item">入场: ${entry.entryCue}</span><span class="disc-plan-item">目标: ${entry.target != null ? entry.target.toFixed(2) : '—'}</span><span class="disc-plan-item">止损: ${entry.stop != null ? entry.stop.toFixed(2) : '—'}</span></div>
       </div>
@@ -456,7 +459,7 @@ export function renderTradeDiscipline(hz, capMin) {
             ${signalLife ? `<div class="disc-life">信号生命周期: <b class="${signalLife.cls}">${signalLife.txt}</b> · 信号置信 <b>${signalLife.conf}</b> · 能量 ${signalLife.score}</div>` : ''}
             ${tradeBarHtml}
             <div class="disc-rules">${rulesHtml}</div>
-            <div class="disc-conf-detail">调整: ${confPartsHtml}</div>
+            <div class="disc-conf-detail">调整: ${esc(confPartsHtml)}</div>
           </div>
         </details>
       </div>
@@ -950,7 +953,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     else if (!bear && up !== true) { reversalAdd = 8; reversalParts.push('金信号反转+8(空头韧性)'); }
     else if (bear && up === false) { reversalAdd = -8; reversalParts.push('死信号反转-8'); }
     else if (!bear && up === true) { reversalAdd = -8; reversalParts.push('金信号反转-8'); }
-    revNote = (bear ? '死勾/死叉' : '金勾/金叉') + '已反转(' + (bear ? 'K>D' : 'K<D') + ')→' + (bear ? '偏多韧性' : '偏空韧性');
+    revNote = (bear ? '死钩/死叉' : '金钩/金叉') + '已反转(' + (bear ? 'K>D' : 'K<D') + ')→' + (bear ? '偏多韧性' : '偏空韧性');
   }
   // 全周期 K>D / K<D 强信号
   let periodKAdd = 0;
@@ -1169,7 +1172,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   if (gapParts.length) confParts.push(gapParts.join('/'));
   // 全周期超买/超卖护栏：封顶置信度
   if (periodRisk) { conf = Math.min(conf, 80); }
-  conf = Math.max(10, Math.min(90, conf));
+  conf = Math.max(10, Math.min(90, Math.round(conf)));
   const confLabel = conf >= 70 ? '高' : conf >= 45 ? '中' : '低';
 
   // 宏观冲突文本（用于额外横幅）
