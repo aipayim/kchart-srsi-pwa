@@ -99,6 +99,7 @@
     <div class="kchart-ovhead" onclick="document.getElementById('pwaSettings').classList.toggle('closed')">⚙ 模拟真实交易设置（本地持久化）<span class="kchart-ovarrow">▾</span></div>
     <div id="pwaSettingsBody" class="kchart-settings-body">
       <div class="setting-row"><label>快捷交易</label><select id="pwaTradeOn" onchange="pwaTradeOn(this.value)"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+      <div class="setting-row"><label>本机TSEV自学习</label><select id="pwaLocalLoop" onchange="window.setKLocalLoop && window.setKLocalLoop(this.value==='1')"><option value="1" selected>开启(累积本机样本)</option><option value="0">关闭</option></select></div>
       <div class="setting-row"><label>现货 USDT 池</label><input id="pwaSimSpot" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
       <div class="setting-row"><label>永续U本位 USDT 池</label><input id="pwaSimPerp" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
       <div style="font-size:9px;color:var(--text2);margin:4px 0 2px">各币本位库存（现货与永续同量，仅填一次）</div>

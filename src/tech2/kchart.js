@@ -7,6 +7,58 @@ import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detec
 import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
 import { regimeStrategy } from '../engine/regimeParams.js';
+import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights } from '../engine/disciplineAnalysis.js';
+
+// ---- TSEV 权重（全局：dev 下 /data 训练 或 生产 /tsev-weights.json 快照；本机：IndexedDB 由 localLoop 训练）----
+let _tsevWeights = null;     // { 'name|cond|side': logitWeight }
+let _tsevLoading = false;
+let _tsevInfo = { globalN: 0, localN: 0, source: 'classic' };
+export function getTsevWeights() { return _tsevWeights || {}; }
+export function getTsevInfo() { return _tsevInfo; }
+
+// 读取本机权重（由 src/pwa/localLoop.js 注册到 globalThis.__localTsev）。浏览器才有，Node 环境返回 null。
+async function loadLocalTsevWeights() {
+  try {
+    const api = (typeof globalThis !== 'undefined') && globalThis.__localTsev;
+    if (api && typeof api.getWeights === 'function') return await api.getWeights();
+  } catch { /* 忽略 */ }
+  return null;
+}
+
+// 全局权重：dev 下 /data/discipline-factors.jsonl 训练；生产回退到静态 /tsev-weights.json（由 gen-tsev-weights.mjs 生成）。
+async function loadGlobalTsevWeights() {
+  if (typeof fetch !== 'function') return { weights: {}, n: 0 };
+  // dev：用原始 jsonl 现场训练（含最新样本）
+  const dt = await fetch('/data/discipline-factors.jsonl').then(r => (r && r.ok ? r.text() : null)).catch(() => null);
+  if (dt) {
+    const rows = parseJsonl(dt).filter(r => Array.isArray(r.factors) && r.fut);
+    if (rows.length) return { weights: trainTsevWeights(rows, { horizon: 'h4', MIN_SAMPLE: TSEV_CFG.MIN_SAMPLE, Z_THRESH: TSEV_CFG.Z_THRESH }), n: rows.length };
+  }
+  // 生产：静态快照（no-store 避免 SW 缓存旧权重）
+  const jt = await fetch('/tsev-weights.json', { cache: 'no-store' }).then(r => (r && r.ok ? r.json() : null)).catch(() => null);
+  if (jt && jt.weights) return { weights: jt.weights, n: jt.n || 0 };
+  return { weights: {}, n: 0 };
+}
+
+// 合并：本机优先（本机样本≥阈值用本机，否则全局，否则经典兜底）。
+export async function loadTsevWeights(force) {
+  if (_tsevWeights && !force) return _tsevWeights;
+  if (_tsevLoading) return _tsevWeights;
+  _tsevLoading = true;
+  try {
+    const g = await loadGlobalTsevWeights();
+    const l = await loadLocalTsevWeights();
+    const merged = combineWeights(g.weights, l && l.weights, { globalN: g.n, localN: (l && l.n) || 0 });
+    _tsevWeights = merged.weights;
+    _tsevInfo = { globalN: g.n, localN: (l && l.n) || 0, source: merged.source };
+  } catch {
+    _tsevWeights = {};
+    _tsevInfo = { globalN: 0, localN: 0, source: 'classic' };
+  } finally {
+    _tsevLoading = false;
+  }
+  return _tsevWeights;
+}
 
 // ---- 逻辑画布尺寸：宽固定，高随子图数量自适应 ----
 const W = 1000;
@@ -213,9 +265,9 @@ export function renderSrsiOverview(hz, capMin) {
     ? ` 死区自适应${hz.deadZone.toFixed(2)}%(${hz.ratio >= 1 ? '高波动' : '低波动'})`
     : ` 死区固定${(hz ? hz.deadZone : THRESH.HORIZON_DEAD_FIXED).toFixed(2)}%`;
   // 脚部把「决策依据(趋势方向)」与「风险背景(大趋势/宏观)」分开标注，避免误读
-  // "宏观7d↓=应该做空"。趋势方向决定做多做空；大趋势方向只用于降置信度、不改方向。
+  // "宏观7d↓=应该看空"。趋势方向决定看多看空；大趋势方向只用于降置信度、不改方向。
   const trendTxt = tr
-    ? `<br>【趋势方向·决策】${tr.up === true ? '↑做多' : tr.up === false ? '↓做空' : '—横盘'}(${tr.tf} ${tr.spreadPct.toFixed(1)}%${tr.flat ? ' 横盘' : ''})${mt && mt.up != null ? ` ·【大趋势·仅扣分】${mt.tf}${mt.up === true ? '↑' : '↓'}(${mt.spreadPct.toFixed(1)}%)` : ''}${deadTxt}`
+    ? `<br>【趋势方向·决策】${tr.up === true ? '↑看多' : tr.up === false ? '↓看空' : '—横盘'}(${tr.tf} ${tr.spreadPct.toFixed(1)}%${tr.flat ? ' 横盘' : ''})${mt && mt.up != null ? ` ·【大趋势·仅扣分】${mt.tf}${mt.up === true ? '↑' : '↓'}(${mt.spreadPct.toFixed(1)}%)` : ''}${deadTxt}`
       + `<br><span style="opacity:.8" title="短周期(速览表)只定入场时机与置信度；大趋势与趋势方向相反时仅降低置信度、不改变方向">短周期箭头≠趋势方向，大趋势反向≠翻方向，仅降置信度</span>`
     : '';
   const zoneCls = { overbought: 'ov-bear', oversold: 'ov-bull', neutral: '' };
@@ -265,8 +317,8 @@ export function discLiveInfo(sym, analysis) {
   if (!p || p.last == null) return null;
   const out = { price: p.last, chg: p.chg || 0, toTarget: null, toStop: null, targetCls: '', stopCls: '', priceCls: '' };
   out.priceCls = p.chg > 0 ? 'disc-up' : p.chg < 0 ? 'disc-down' : '';
-  const isLong = !!(analysis && analysis.entry && analysis.entry.dir.startsWith('做多'));
-  const isShort = !!(analysis && analysis.entry && analysis.entry.dir.startsWith('做空'));
+  const isLong = !!(analysis && analysis.entry && analysis.entry.dir.startsWith('看多'));
+  const isShort = !!(analysis && analysis.entry && analysis.entry.dir.startsWith('看空'));
   const t = analysis && analysis.entry && analysis.entry.target;
   const s = analysis && analysis.entry && analysis.entry.stop;
   if (t != null) { out.toTarget = (t - p.last) / p.last * 100; if ((isLong && p.last >= t) || (isShort && p.last <= t)) out.targetCls = 'disc-pos'; }
@@ -359,7 +411,7 @@ export function renderTradeDiscipline(hz, capMin) {
   const { trend, multiTf, zones, confirm, entry, rules, leading, energyRows, strategy, signalLife } = analysis;
   const stratLabel = strategy === 'energy-leader' ? '能量领跑' : strategy === 'freshest-signal' ? '动量跟随' : '趋势跟随';
   const stratCls = strategy === 'energy-leader' ? 'strat-leader' : strategy === 'freshest-signal' ? 'strat-fresh' : 'strat-baseline';
-  const dirColor = entry.dir.startsWith('做多') ? 'disc-bull' : entry.dir.startsWith('做空') ? 'disc-bear' : 'disc-neutral';
+  const dirColor = entry.dir.startsWith('看多') ? 'disc-bull' : entry.dir.startsWith('看空') ? 'disc-bear' : 'disc-neutral';
   const confColor = entry.confLabel === '高' ? 'conf-high' : entry.confLabel === '中' ? 'conf-mid' : 'conf-low';
   const zoneEmoji = { overbought: '🔴超买', oversold: '🟢超卖', neutral: '⚪中性' };
   const trendEmoji = trend.up === true ? '📈' : trend.up === false ? '📉' : '—';
@@ -380,8 +432,8 @@ export function renderTradeDiscipline(hz, capMin) {
 
   // ---- 风险带：聚合负向因子 → 一句直觉警告（仅呈现层，不改判断逻辑）----
   const riskItems = [];
-  const dirLong = entry.dir.startsWith('做多');
-  const dirShort = entry.dir.startsWith('做空');
+  const dirLong = entry.dir.startsWith('看多');
+  const dirShort = entry.dir.startsWith('看空');
   if (dirLong && zones.daily === 'overbought') riskItems.push('日线超买(反向)');
   if (dirShort && zones.daily === 'oversold') riskItems.push('日线超卖(反向)');
   if (multiTf.verdict === '分歧') riskItems.push('多周期分歧');
@@ -397,11 +449,18 @@ export function renderTradeDiscipline(hz, capMin) {
   let warnTxt = '无显著风险';
   if (riskItems.length) {
     if (riskItems.includes('日线超买')) warnTxt = dirLong ? '⚠ 日线超买, 仅当回调低吸, 勿追高' : '⚠ 日线超买, 反弹高位, 谨慎';
-    else if (riskItems.includes('日线超卖')) warnTxt = dirShort ? '⚠ 日线超卖, 仅当反弹做空, 勿追空' : '⚠ 日线超卖, 回调低位, 谨慎';
+    else if (riskItems.includes('日线超卖')) warnTxt = dirShort ? '⚠ 日线超卖, 仅当反弹看空, 勿追空' : '⚠ 日线超卖, 回调低位, 谨慎';
     else if (riskItems.includes('宏观反向')) warnTxt = '⚠ 大趋势与方向反向, 仅降置信, 勿满仓';
     else warnTxt = '⚠ ' + riskItems[0] + ', 注意风控';
   }
   const evidenceOpen = cfg.discEvidenceOpen ? ' open' : '';
+
+  // ---- TSEV 数据源 / 样本量可视化（让用户直观看到权重来自全局还是本机、样本多少）----
+  const ti = getTsevInfo();
+  const srcLabel = ti.source === 'local' ? '本机(你的设备)' : ti.source === 'global' ? '全局(官方)' : '经典逻辑(未启用)';
+  const loopStat = (typeof globalThis !== 'undefined' && globalThis.__localTsev) ? globalThis.__localTsev.status() : null;
+  const loopTxt = loopStat ? (' · 本机loop ' + (loopStat.enabled ? '开' : '关') + ' · 本机样本 ' + (loopStat.sampleCount || 0)) : '';
+  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积；也可刷新后下载官方最新全局权重）</span></div>`;
 
   box.innerHTML = `
     <div class="kchart-disc-header">
@@ -432,7 +491,7 @@ export function renderTradeDiscipline(hz, capMin) {
       <div class="disc-bandrow">
         <div class="disc-band disc-band-evidence">
           <div class="disc-blk-label">方向依据</div>
-          <div class="disc-band-txt">EMA(${trend.tf}) ${trend.up === true ? '↑ 做多基准' : trend.up === false ? '↓ 做空基准' : '横盘观望'} ${trend.spreadPct.toFixed(2)}%</div>
+          <div class="disc-band-txt">EMA(${trend.tf}) ${trend.up === true ? '↑ 看多基准' : trend.up === false ? '↓ 看空基准' : '横盘观望'} ${trend.spreadPct.toFixed(2)}%</div>
         </div>
         <div class="disc-band disc-band-timing">
           <div class="disc-blk-label">时机(动能)</div>
@@ -463,6 +522,8 @@ export function renderTradeDiscipline(hz, capMin) {
           </div>
         </details>
       </div>
+
+      ${tsevBar}
     </div>
   `;
 }
@@ -858,18 +919,18 @@ export function deadZoneValue(mode, pctHis, opts = {}) {
 // 宏观冲突扣分: 方向与宏观反向时按宏观 spread% 缩放, clamp [10,20]; 同向/观望→0。
 export function conflictPenalty(mt, dir) {
   if (!mt || mt.up == null || !dir || dir === '观望') return 0;
-  const conflict = (dir.startsWith('做多') && mt.up === false) || (dir.startsWith('做空') && mt.up === true);
+  const conflict = (dir.startsWith('看多') && mt.up === false) || (dir.startsWith('看空') && mt.up === true);
   if (!conflict) return 0;
   return Math.max(10, Math.min(20, Math.abs(mt.spreadPct) * 0.5));
 }
 
-// 趋势(长周期EMA)与动能(SRSI共识)背离时的显式说明——双向对称，避免"速览一致偏多"与"纪律做空"视觉矛盾。
+// 趋势(长周期EMA)与动能(SRSI共识)背离时的显式说明——双向对称，避免"速览一致偏多"与"纪律看空"视觉矛盾。
 // 仅当两者明确相反时提示；同向/分歧/趋势数据不足均返回 null(避免误报或伪造一致)。
 export function trendConflictNote(up, verdict, trendTF) {
   if (up === false && verdict === '一致偏多')
-    return 'SRSI 多周期一致偏多，但长周期(' + trendTF + ') EMA 向下=主趋势偏空：金叉/金钩仅视为下跌中的反弹（回调≠反转），不逆势做多，等反转确认';
+    return 'SRSI 多周期一致偏多，但长周期(' + trendTF + ') EMA 向下=主趋势偏空：金叉/金钩仅视为下跌中的反弹（回调≠反转），不逆势看多，等反转确认';
   if (up === true && verdict === '一致偏空')
-    return 'SRSI 多周期一致偏空，但长周期(' + trendTF + ') EMA 向上=主趋势偏多：死叉/死钩仅视为上涨中的回调，不盲目做空';
+    return 'SRSI 多周期一致偏空，但长周期(' + trendTF + ') EMA 向上=主趋势偏多：死叉/死钩仅视为上涨中的回调，不盲目看空';
   return null;
 }
 
@@ -881,6 +942,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const bars = opts.bars || 150;
   const mainTF = opts.mainTF || '4h';
   const klineSel = opts.klineSel || {};
+  const weights = opts.weights; // TSEV 权重（不传则运行时取 loadTsevWeights 的缓存；为空 → 走经典逻辑兜底）
   const allTfs = Object.keys(priceMap || {}).filter(tf => KLINE_TF.includes(tf)).sort((a, b) => minutesOf(a) - minutesOf(b));
   if (!allTfs.length) return null;
   // SRSI/共识仅用用户勾选的 TF，方向基准用全部 TF 中 ≤capMin 的最长周期
@@ -987,8 +1049,8 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const rules = [];
   let trendNote;
   if (trend.label === '数据不足') trendNote = '数据不足, 无法判断趋势';
-  else if (up === true) trendNote = '方向基准(' + trendTF + ') EMA20>EMA120, 顺势做多为主';
-  else if (up === false) trendNote = '方向基准(' + trendTF + ') EMA 向下, 顺势做空为主';
+  else if (up === true) trendNote = '方向基准(' + trendTF + ') EMA20>EMA120, 顺势看多为主';
+  else if (up === false) trendNote = '方向基准(' + trendTF + ') EMA 向下, 顺势看空为主';
   else trendNote = '方向基准(' + trendTF + ') EMA 价差 ' + trend.spreadPct.toFixed(2) + '% 低于死区 ' + deadZone.toFixed(2) + '%, 横盘观望';
   rules.push({ name: '顺势交易', ok: up === true, note: trendNote });
 
@@ -1022,10 +1084,10 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   } else if (up === false) {
     if (mainRow.zone === 'overbought') {
       const depthNote = obCount >= 2 ? '(多周期均超买, 深度反弹)' : '(仅部分超买, 常规反弹)';
-      prNote = '反弹中 主周期(' + mainTFUse + ')超买, 方向基准仍向下 → 视为反弹' + depthNote + ', 等死叉做空, 勿追多';
+      prNote = '反弹中 主周期(' + mainTFUse + ')超买, 方向基准仍向下 → 视为反弹' + depthNote + ', 等死叉看空, 勿追多';
       prOk = true;
     } else {
-      prNote = '方向基准向下, 主周期未超买, 等反弹做空';
+      prNote = '方向基准向下, 主周期未超买, 等反弹看空';
       prOk = false;
     }
   } else if (trend.label === '数据不足') {
@@ -1042,7 +1104,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     note: confirmed
       ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前 ✅ 已确认')
       : (gateWait
-        ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前 ✅ 已确认(反向) → ' + (want === 'buy' ? '回调中勿追多, 等金叉/金钩确认回调结束再低吸' : '反弹中勿追空, 等死叉/死钩确认反弹结束再做空'))
+        ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前 ✅ 已确认(反向) → ' + (want === 'buy' ? '回调中勿追多, 等金叉/金钩确认回调结束再低吸' : '反弹中勿追空, 等死叉/死钩确认反弹结束再看空'))
         : (confirm.dir ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前, 需等更新鲜确认') : '近期无穿越信号, 观望'))
   });
 
@@ -1076,11 +1138,11 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   } else if (gateWait) {
     dir = '观望'; base = 30;
     reason = want === 'buy'
-      ? '方向基准上升(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线回调中, 观望: 勿追多(下跌未完)亦勿逆势做空(趋势向上), 等金叉/金钩确认回调结束再低吸'
-      : '方向基准下降(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线反弹中, 观望: 勿追空(反弹未完)亦勿逆势做多(趋势向下), 等死叉/死钩确认反弹结束再做空';
+      ? '方向基准上升(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线回调中, 观望: 勿追多(下跌未完)亦勿逆势看空(趋势向上), 等金叉/金钩确认回调结束再低吸'
+      : '方向基准下降(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线反弹中, 观望: 勿追空(反弹未完)亦勿逆势看多(趋势向下), 等死叉/死钩确认反弹结束再看空';
     entryCue = want === 'buy'
-      ? '等 短周期金叉/金钩 确认回调结束, 或 ' + trendTF + ' 方向翻空后再考虑做空'
-      : '等 短周期死叉/死钩 确认反弹结束, 或 ' + trendTF + ' 方向翻多后再考虑做多';
+      ? '等 短周期金叉/金钩 确认回调结束, 或 ' + trendTF + ' 方向翻空后再考虑看空'
+      : '等 短周期死叉/死钩 确认反弹结束, 或 ' + trendTF + ' 方向翻多后再考虑看多';
     stop = null; target = null;
   } else if (strategy === 'energy-leader' && leader && leader.dir) {
     // 趋势极性约束: 逆势领跑仅当 独一档且能量≥70 才允许覆盖方向(顺势领跑/趋势未明直接用)
@@ -1088,7 +1150,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     const aligned = up == null || (up === true) === isBuy;
     const strongOverride = leader.isClear && leader.score >= 70;
     if (aligned || strongOverride) {
-      dir = isBuy ? '做多' : '做空';
+      dir = isBuy ? '看多' : '看空';
       base = Math.max(40, Math.min(70, leader.score));
       reason = '策略[能量领跑]: ' + leader.tf + ' 能量 ' + leader.score + ' ' + (isBuy ? '偏多' : '偏空') + '领跑' + (aligned ? ', 与方向基准一致 → 顺势' : ', 逆势独一档高能, 短线动能反转');
       entryCue = '等 ' + (confirm.tf || '短周期') + ' ' + (confirm.isHook ? (isBuy ? '金钩' : '死钩') : (isBuy ? '金叉' : '死叉')) + '确认 + 价格企稳';
@@ -1096,44 +1158,44 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
       target = trend.e20 != null && (isBuy ? trend.e20 > p : trend.e20 < p) ? trend.e20 : (isBuy ? p * 1.02 : p * 0.98);
     } else {
       // 弱逆势领跑不覆盖 → 回落到趋势基线逻辑
-      if (up === true && mainRow.zone === 'oversold') { dir = '做多'; base = 70; reason = '方向基准向上 + ' + mainTFUse + '超卖回调 → 顺势低吸(策略能量领跑, 但领跑' + leader.tf + '弱逆势不覆盖)'; entryCue = '等 ' + (confirm.tf || '短周期') + ' ' + (confirm.isHook ? '金钩' : '金叉') + '确认 + 价格企稳'; stop = p - 1.5 * atrP; target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02; }
-      else if (up === true) { dir = '做多(观察)'; base = 45; reason = '方向基准向上, 领跑' + leader.tf + '能量' + leader.score + '偏空但不够强(需≥70独一档) → 不逆势, 等回调'; entryCue = '回踩 ' + mainTFUse + ' 支撑或 EMA20 再考虑'; stop = p - 1.0 * atrP; target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02; }
+      if (up === true && mainRow.zone === 'oversold') { dir = '看多'; base = 70; reason = '方向基准向上 + ' + mainTFUse + '超卖回调 → 顺势低吸(策略能量领跑, 但领跑' + leader.tf + '弱逆势不覆盖)'; entryCue = '等 ' + (confirm.tf || '短周期') + ' ' + (confirm.isHook ? '金钩' : '金叉') + '确认 + 价格企稳'; stop = p - 1.5 * atrP; target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02; }
+      else if (up === true) { dir = '看多(观察)'; base = 45; reason = '方向基准向上, 领跑' + leader.tf + '能量' + leader.score + '偏空但不够强(需≥70独一档) → 不逆势, 等回调'; entryCue = '回踩 ' + mainTFUse + ' 支撑或 EMA20 再考虑'; stop = p - 1.0 * atrP; target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02; }
     }
   } else if (strategy === 'freshest-signal' && confirm.dir) {
     // 趋势极性约束: 逆势动量仅当已确认(≤3根) 才覆盖; 顺势直接用
     const isBuy = confirm.dir === 'buy';
     const aligned = up == null || (up === true) === isBuy;
     if (aligned || confirmed) {
-      dir = isBuy ? '做多' : '做空';
+      dir = isBuy ? '看多' : '看空';
       base = 70;
       reason = '策略[动量跟随]: ' + confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前(最新信号)' + (aligned ? ', 与方向基准一致' : ', 已确认动量反转');
       entryCue = (confirm.isHook ? (isBuy ? '金钩' : '死钩') : (isBuy ? '金叉' : '死叉')) + '已确认, 顺势入场';
       stop = p - (isBuy ? 1.0 : -1.0) * atrP;
       target = trend.e20 != null && (isBuy ? trend.e20 > p : trend.e20 < p) ? trend.e20 : (isBuy ? p * 1.02 : p * 0.98);
     } else if (up === false) {
-      dir = '做空(观察)'; base = 45; reason = '方向基准向下, ' + confirm.tf + '动量偏多但已' + confirm.fresh + '根前未确认 → 不逆势, 等反弹'; entryCue = '反弹至 ' + mainTFUse + ' 压力或 EMA20 再考虑'; stop = p + 1.0 * atrP; target = trend.e20 != null && trend.e20 < p ? trend.e20 : p * 0.98;
+      dir = '看空(观察)'; base = 45; reason = '方向基准向下, ' + confirm.tf + '动量偏多但已' + confirm.fresh + '根前未确认 → 不逆势, 等反弹'; entryCue = '反弹至 ' + mainTFUse + ' 压力或 EMA20 再考虑'; stop = p + 1.0 * atrP; target = trend.e20 != null && trend.e20 < p ? trend.e20 : p * 0.98;
     }
   } else if (trend.flat) {
     dir = '观望'; base = 30;
     reason = '方向基准(' + trendTF + ') EMA 价差仅 ' + trend.spreadPct.toFixed(2) + '% < 死区 ' + deadZone.toFixed(2) + '%, 无明确趋势 → 观望';
     entryCue = '等 ' + trendTF + ' 价差突破死区(' + deadZone.toFixed(2) + '%) 或 SRSI 共振确认';
   } else if (up === true && mainRow.zone === 'oversold') {
-    dir = '做多'; base = 70; reason = '方向基准向上 + ' + mainTFUse + '超卖回调 → 顺势低吸';
+    dir = '看多'; base = 70; reason = '方向基准向上 + ' + mainTFUse + '超卖回调 → 顺势低吸';
     entryCue = '等 ' + (confirm.tf || '短周期') + ' ' + (confirm.isHook ? '金钩' : '金叉') + '确认 + 价格企稳';
     stop = p - 1.5 * atrP;
     target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02;
   } else if (up === false && mainRow.zone === 'overbought') {
-    dir = '做空'; base = 70; reason = '方向基准向下 + ' + mainTFUse + '超买反弹 → 顺势做空';
+    dir = '看空'; base = 70; reason = '方向基准向下 + ' + mainTFUse + '超买反弹 → 顺势看空';
     entryCue = '等 ' + (confirm.tf || '短周期') + ' ' + (confirm.isHook ? '死钩' : '死叉') + '确认 + 价格滞涨';
     stop = p + 1.5 * atrP;
     target = trend.e20 != null && trend.e20 < p ? trend.e20 : p * 0.98;
   } else if (up === true) {
-    dir = '做多(观察)'; base = 45; reason = '方向基准向上, 但主周期未超卖, 等回调';
+    dir = '看多(观察)'; base = 45; reason = '方向基准向上, 但主周期未超卖, 等回调';
     entryCue = '回踩 ' + mainTFUse + ' 支撑或 EMA20 再考虑';
     stop = p - 1.0 * atrP;
     target = trend.e20 != null && trend.e20 > p ? trend.e20 : p * 1.02;
   } else if (up === false) {
-    dir = '做空(观察)'; base = 45; reason = '方向基准向下, 但主周期未超买, 等反弹';
+    dir = '看空(观察)'; base = 45; reason = '方向基准向下, 但主周期未超买, 等反弹';
     entryCue = '反弹至 ' + mainTFUse + ' 压力或 EMA20 再考虑';
     stop = p + 1.0 * atrP;
     target = trend.e20 != null && trend.e20 < p ? trend.e20 : p * 0.98;
@@ -1142,22 +1204,22 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   // 置信度修正
   let conf = base;
   const confParts = [];
-  if (verdict === '一致偏多' && dir.startsWith('做多')) { conf += 10; confParts.push('多周期一致+10'); }
-  else if (verdict === '一致偏空' && dir.startsWith('做空')) { conf += 10; confParts.push('多周期一致+10'); }
+  if (verdict === '一致偏多' && dir.startsWith('看多')) { conf += 10; confParts.push('多周期一致+10'); }
+  else if (verdict === '一致偏空' && dir.startsWith('看空')) { conf += 10; confParts.push('多周期一致+10'); }
   else if (verdict === '分歧') { conf -= 15; confParts.push('周期分歧-15'); }
   if (gateWait) {
     // 反向确认已成立 → 观望: 不加分、不当「未确认」, 理由行已说明
   } else if (confirmed) { conf += confirm.isHook ? 15 : 10; confParts.push(confirm.isHook ? '钩确认+15' : '入场已确认+10'); }
   else if (confirm.dir && !confirm.reversed) { conf -= 5; confParts.push('未确认-5'); }
-  if (dir.startsWith('做多') && dailyRow.zone === 'overbought') { conf -= 10; confParts.push('日线超买-10'); }
-  if (dir.startsWith('做空') && dailyRow.zone === 'oversold') { conf -= 10; confParts.push('日线超卖-10'); }
+  if (dir.startsWith('看多') && dailyRow.zone === 'overbought') { conf -= 10; confParts.push('日线超买-10'); }
+  if (dir.startsWith('看空') && dailyRow.zone === 'oversold') { conf -= 10; confParts.push('日线超卖-10'); }
   // 宏观冲突扣分（方向 vs 宏观 7d/30d 反向）
   const macroPen = conflictPenalty(mt, dir);
   if (macroPen) { conf -= macroPen; confParts.push('宏观反向-' + macroPen); }
   // 能量领跑修正：领跑方向与操作方向一致 → 按能量加分；相反 → 短周期反向动能减分；全线能量枯竭 → 减分
   // （策略为 energy-leader 时 base 已含能量分, 不再重复加分）
-  if (strategy !== 'energy-leader' && leader && (dir.startsWith('做多') || dir.startsWith('做空'))) {
-    const leadAligned = (dir.startsWith('做多') && leader.dir === 'buy') || (dir.startsWith('做空') && leader.dir === 'sell');
+  if (strategy !== 'energy-leader' && leader && (dir.startsWith('看多') || dir.startsWith('看空'))) {
+    const leadAligned = (dir.startsWith('看多') && leader.dir === 'buy') || (dir.startsWith('看空') && leader.dir === 'sell');
     if (leadAligned) { const add = Math.min(leader.score / 10, 10); conf += add; confParts.push('领跑' + leader.tf + '+' + add); }
     else { conf -= 5; confParts.push('领跑反向-5'); }
   } else if (strategy !== 'energy-leader' && !leader && rows.length && rows.every(r => !r.energy || r.energy.score < 30)) {
@@ -1175,12 +1237,29 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   conf = Math.max(10, Math.min(90, Math.round(conf)));
   const confLabel = conf >= 70 ? '高' : conf >= 45 ? '中' : '低';
 
+  // ---- TSEV 数据门控投票：用数据训练的因子权重覆盖硬 if/else 方向 ----
+  // 仅在权重可用（dev 下 /data/discipline-factors.jsonl 经 loadTsevWeights 训练）时启用；
+  // 否则保持经典逻辑（其方向精度已证实低于随机，dev 下会用 TSEV 修正）。
+  const factors = extractDisciplineFactors({ trend, mt, confirm, leading: leader, reversalAdd, zones, verdict, periodKAdd, gapAdd });
+  let tsev = null;
+  const _w = (weights !== undefined) ? weights : getTsevWeights();
+  if (_w && Object.keys(_w).length) {
+    tsev = voteTsev(factors, _w);
+    if (tsev.dir !== 0) {
+      dir = tsev.dirText;
+      conf = Math.round(tsev.conf * 100);
+      confLabel = tsev.confLabel;
+    } else {
+      dir = '观察';
+    }
+  }
+
   // 宏观冲突文本（用于额外横幅）
   let macroConflict = null;
-  if (mt && mt.up != null && dir.startsWith('做多') && mt.up === false)
-    macroConflict = '⚠ 宏观(' + mt.tf + ') EMA 向下与做多方向冲突, 整体观点';
-  else if (mt && mt.up != null && dir.startsWith('做空') && mt.up === true)
-    macroConflict = '⚠ 宏观(' + mt.tf + ') EMA 向上与做空方向冲突, 整体观点';
+  if (mt && mt.up != null && dir.startsWith('看多') && mt.up === false)
+    macroConflict = '⚠ 宏观(' + mt.tf + ') EMA 向下与看多方向冲突, 整体观点';
+  else if (mt && mt.up != null && dir.startsWith('看空') && mt.up === true)
+    macroConflict = '⚠ 宏观(' + mt.tf + ') EMA 向上与看空方向冲突, 整体观点';
 
   // 信号生命周期/强度（仅呈现层, 统一追加到所有档位 reason 尾部 + 单独 field 供 DOM）
   const life = signalLifecycle(confirm, leader, energyRows);
@@ -1201,8 +1280,10 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     signalLife: life,
     entry: {
       dir, conf, confLabel, confParts, reason, entryCue, stop, target,
-      risk: periodRisk || ((dir.startsWith('做多') && dailyRow.zone === 'overbought') || (dir.startsWith('做空') && dailyRow.zone === 'oversold') ? '中(长周期极端反向)' : '低')
+      risk: periodRisk || ((dir.startsWith('看多') && dailyRow.zone === 'overbought') || (dir.startsWith('看空') && dailyRow.zone === 'oversold') ? '中(长周期极端反向)' : '低')
     },
+    factors,
+    tsev,
     rules
   };
 }
@@ -1233,6 +1314,7 @@ function syncCanvasSize() {
 export function renderKChart() {
   syncCanvasSize();
   renderQuickTrade();
+  loadTsevWeights(); // 后台拉取并训练 TSEV 权重（dev 可用；失败则回落经典逻辑）
   if (!_ctx) return;
   const S = window.S;
   const sym = cfg.symbol;

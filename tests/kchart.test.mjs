@@ -449,6 +449,21 @@ console.log('\n[kchart: 反转/全周期K/D/间距动能 进入纪律分析]');
   ok('纪律清单含「信号反转识别」规则', s.rules.some(r => r.name === '信号反转识别'));
 }
 
+console.log('\n[kchart: 反转对称性 · 上涨后反转下跌(rise→fall)]');
+{
+  // 上涨后反转下跌：金叉被反转(K<D) + 趋势向下 → 空头韧性 +8（验证与「下跌后反转上涨」路径对称）
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const fallTrend = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(200 - i * 0.1 + Math.sin(i / 9) * 14); return a; };
+  const pm = { '5m': fallTrend(500), '15m': fallTrend(500), '1h': fallTrend(500), '4h': fallTrend(500) };
+  const s = analyzeTradeDiscipline(pm, srsi, { bars: 150, mainTF: '1h' });
+  ok('rise→fall: 趋势向下(up=false)', s.trend.up === false);
+  ok('rise→fall: 金叉信号被反转(rev=true)', s.confirm.dir === 'buy' && s.confirm.reversed === true);
+  ok('rise→fall: 空头韧性+8(镜像上涨反转的+8)', s.entry.confParts.some(p => p.includes('金信号反转+8(空头韧性)')));
+  ok('rise→fall: D>K 全周期强势-10(与 K>D +10 对称)', s.entry.confParts.some(p => p.includes('全周期K<D 强势-10')));
+  ok('置信度整数(无浮点小数 13.8999…)', Number.isInteger(s.entry.conf));
+  ok('反转文案错别字已修(金钩/金叉)', s.entry.reason.includes('金钩/金叉已反转(K<D)'));
+}
+
 console.log('\n[kchart: 钩信号 dirName / pickConfirm]');
 {
   ok('dirName buy 普通→金叉', dirName('buy', false) === '金叉');
@@ -495,13 +510,13 @@ console.log('\n[kchart: 钩信号 dirName / pickConfirm]');
 
   // 方向感知（expectDir）：同向才算确认；反向已确认 → contrarian, confirmed=false
   const d1 = pickConfirm([{ tf: '5m', crossing: 'sell', fresh: 0, hook: null, hookFresh: null }], 'buy');
-  ok('pickConfirm 期望做多+最近死叉→contrarian 未确认', d1.contrarian === true && d1.confirmed === false && d1.dir === 'sell');
+  ok('pickConfirm 期望看多+最近死叉→contrarian 未确认', d1.contrarian === true && d1.confirmed === false && d1.dir === 'sell');
   const d2 = pickConfirm([{ tf: '5m', crossing: 'buy', fresh: 1, hook: null, hookFresh: null }], 'buy');
-  ok('pickConfirm 期望做多+最近金叉→同向确认', d2.contrarian === false && d2.confirmed === true && d2.dir === 'buy');
+  ok('pickConfirm 期望看多+最近金叉→同向确认', d2.contrarian === false && d2.confirmed === true && d2.dir === 'buy');
   const d3 = pickConfirm([{ tf: '5m', crossing: 'buy', fresh: 2, hook: null, hookFresh: null }], 'sell');
-  ok('pickConfirm 期望做空+最近金叉→contrarian', d3.contrarian === true && d3.confirmed === false);
+  ok('pickConfirm 期望看空+最近金叉→contrarian', d3.contrarian === true && d3.confirmed === false);
   const d4 = pickConfirm([{ tf: '5m', crossing: 'sell', fresh: 2, hook: null, hookFresh: null }], 'sell');
-  ok('pickConfirm 期望做空+最近死叉→同向确认', d4.contrarian === false && d4.confirmed === true);
+  ok('pickConfirm 期望看空+最近死叉→同向确认', d4.contrarian === false && d4.confirmed === true);
   const d5 = pickConfirm([{ tf: '5m', crossing: 'buy', fresh: 1, hook: null, hookFresh: null }]);
   ok('pickConfirm 无期望方向→保持原行为(不标contrarian)', d5.contrarian === false && d5.confirmed === true);
   const d6 = pickConfirm([], 'buy');
@@ -613,22 +628,22 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   const bull = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + (i % 25) * 0.8 - (i % 7) * 0.1); return a; };
   const bear = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(300 - (i % 25) * 0.8 + (i % 7) * 0.1); return a; };
 
-  // S1 顺势做多: 4h 上升 + 15m 超卖回调 → 做多, 中置信, 回调≠反转规则通过
+  // S1 顺势看多: 4h 上升 + 15m 超卖回调 → 看多, 中置信, 回调≠反转规则通过
   const s1 = analyzeTradeDiscipline({ '5m': riseThenDip(500), '15m': riseThenDip(500), '1h': rising(500), '4h': rising(500) }, srsi, { bars: 150, mainTF: '15m' });
   ok('S1 趋势识别为上升', s1.trend.up === true);
   ok('S1 主周期(15m)超卖', s1.zones.main === 'oversold');
-  ok('S1 建议做多', s1.entry.dir === '做多');
+  ok('S1 建议看多', s1.entry.dir === '看多');
   ok('S1 置信度中等(≥45)', s1.entry.conf >= 45);
   ok('S1 7条纪律规则(含短周期锚定+反转识别)', s1.rules.length === 7);
   ok('S1 顺势交易规则通过', s1.rules[0].ok === true);
   ok('S1 回调≠反转规则通过(上涨趋势回调=低吸)', s1.rules.find(r => r.name === '回调≠反转').ok === true);
   ok('S1 signalLife 存在并写入 reason', !!s1.signalLife && s1.entry.reason.includes('信号: ') && s1.signalLife.txt.length > 0);
 
-  // S2 顺势做空: 4h 下降 + 15m 超买反弹 → 做空
+  // S2 顺势看空: 4h 下降 + 15m 超买反弹 → 看空
   const s2 = analyzeTradeDiscipline({ '5m': fallThenRally(500), '15m': fallThenRally(500), '1h': falling(500), '4h': falling(500) }, srsi, { bars: 150, mainTF: '15m' });
   ok('S2 趋势识别为下降', s2.trend.up === false);
   ok('S2 主周期超买', s2.zones.main === 'overbought');
-  ok('S2 建议做空', s2.entry.dir === '做空');
+  ok('S2 建议看空', s2.entry.dir === '看空');
   ok('S2 置信度中等(≥45)', s2.entry.conf >= 45);
 
   // S3 分歧惩罚: 5m超买 15m超卖 ↗ → verdict=分歧, 置信扣15
@@ -672,11 +687,11 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S8b 横盘 reason 含死区', (s8b.entry.reason || '').includes('死区'));
   ok('S8b 横盘规则1说明横盘', (s8b.rules.find(r => r.name === '顺势交易').note || '').includes('横盘观望'));
 
-  // S9 回归: 做空目标必须低于现价（防止 te20 高于现价导致目标无意义）
-  // 构造: 1d下降, 主周期超买 → 做空; 且 trendTF(1d) 的 te20 高于现价
+  // S9 回归: 看空目标必须低于现价（防止 te20 高于现价导致目标无意义）
+  // 构造: 1d下降, 主周期超买 → 看空; 且 trendTF(1d) 的 te20 高于现价
   const s9 = analyzeTradeDiscipline({ '5m': fallThenRally(500), '15m': fallThenRally(500), '1h': falling(500), '4h': falling(500), '1d': falling(500) }, srsi, { bars: 150, mainTF: '15m' });
-  ok('S9 做空场景 target < 现价', s9.entry.dir.startsWith('做空') && s9.entry.target != null && s9.entry.target < s9.entry.stop);
-  ok('S9 做空场景 stop > 现价(在target上方)', s9.entry.stop > s9.entry.target);
+  ok('S9 看空场景 target < 现价', s9.entry.dir.startsWith('看空') && s9.entry.target != null && s9.entry.target < s9.entry.stop);
+  ok('S9 看空场景 stop > 现价(在target上方)', s9.entry.stop > s9.entry.target);
 
   // S10 回归: 观察态也有止损（不再显示 --）
   const s10 = analyzeTradeDiscipline({ '5m': riseThenDip(500), '15m': rising(500), '1h': rising(500), '4h': rising(500) }, srsi, { bars: 150, mainTF: '1h' });
@@ -704,7 +719,7 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S12 规则5 note 含"反向"', s12.rules[4].note.includes('反向'));
   ok('S12 无入场确认加分', !s12.entry.confParts.some(p => p.includes('确认') || p.includes('未确认')));
 
-  // S13 回归: stale contrarian (fresh>3) → 不触发门控, 仍做多(观察)
+  // S13 回归: stale contrarian (fresh>3) → 不触发门控, 仍看多(观察)
   const staleFixture = () => {
     const a = uptrend(600, 0.15); const last = a[a.length - 1];
     for (let i = 1; i <= 50; i++) a.push(last - i * 1);
@@ -717,7 +732,7 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   const s13 = analyzeTradeDiscipline({
     '5m': staleFixture(), '15m': uptrend(600, 0.15), '1h': uptrend(600, 0.15), '4h': uptrend(600, 0.15)
   }, srsi, { bars: 150, mainTF: '1h' });
-  ok('S13 stale contrarian(>3) 不观望', s13.entry.dir.startsWith('做多') && s13.entry.dir !== '观望');
+  ok('S13 stale contrarian(>3) 不观望', s13.entry.dir.startsWith('看多') && s13.entry.dir !== '观望');
   ok('S13 stale contrarian 有止损', s13.entry.stop != null && s13.entry.stop > 0);
 
   // S11 日线槽位 = 真实 1d（不受 klineSel/预设影响）：1d 超卖, 勾选只含短周期 → zones.daily 仍为 oversold
@@ -739,12 +754,12 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S14 上升趋势→策略=能量领跑', s1b.strategy === 'energy-leader');
   ok('S14 下降趋势→策略=动量跟随', s2b.strategy === 'freshest-signal');
   ok('S14 横盘→策略=趋势跟随', sfb.strategy === 'trend-baseline');
-  ok('S14 上升+能量领跑方向→做多', s1b.entry.dir === '做多');
-  ok('S14 下降+动量跟随方向→做空', s2b.entry.dir === '做空');
+  ok('S14 上升+能量领跑方向→看多', s1b.entry.dir === '看多');
+  ok('S14 下降+动量跟随方向→看空', s2b.entry.dir === '看空');
   ok('S14 横盘+趋势跟随→观望', sfb.entry.dir === '观望');
   ok('S14 energy-leader 不重复加领跑分', !s1b.entry.confParts.some(p => p.includes('领跑')));
   ok('S14 regime 字段存在', s1b.regime && typeof s1b.regime.type === 'string');
-  ok('S14 弱逆势领跑(55<70)不翻转→仍做多观察', s13b.entry.dir.startsWith('做多') && s13b.entry.dir !== '观望');
+  ok('S14 弱逆势领跑(55<70)不翻转→仍看多观察', s13b.entry.dir.startsWith('看多') && s13b.entry.dir !== '观望');
   ok('S14 弱逆势不翻转时理由含能量', s13b.entry.reason.includes('能量'));
 }
 
@@ -801,16 +816,16 @@ console.log('\n[kchart: 方向基准视野化 (horizonTrend / macroTrend / deadZ
   // conflictPenalty: 宏观冲突扣分
   const mtUp = { tf: '30d', up: true, spreadPct: 10 };
   const mtDown = { tf: '30d', up: false, spreadPct: 12 };
-  ok('CP 宏观向下+做多=扣分>0', conflictPenalty(mtDown, '做多') > 0);
-  ok('CP 宏观向上+做空=扣分>0', conflictPenalty(mtUp, '做空') > 0);
-  ok('CP 同向=0', conflictPenalty(mtUp, '做多') === 0);
+  ok('CP 宏观向下+看多=扣分>0', conflictPenalty(mtDown, '看多') > 0);
+  ok('CP 宏观向上+看空=扣分>0', conflictPenalty(mtUp, '看空') > 0);
+  ok('CP 同向=0', conflictPenalty(mtUp, '看多') === 0);
   ok('CP 观望=0', conflictPenalty(mtDown, '观望') === 0);
-  ok('CP 无宏观=0', conflictPenalty(null, '做多') === 0);
-  ok('CP 扣分范围[10,20]', (() => { const p = conflictPenalty(mtDown, '做多'); return p >= 10 && p <= 20; })());
+  ok('CP 无宏观=0', conflictPenalty(null, '看多') === 0);
+  ok('CP 扣分范围[10,20]', (() => { const p = conflictPenalty(mtDown, '看多'); return p >= 10 && p <= 20; })());
   ok('CP 扣分按 spread 缩放', (() => {
     const smallMT = { tf: '30d', up: false, spreadPct: 5 };
     const largeMT = { tf: '30d', up: false, spreadPct: 40 };
-    return conflictPenalty(smallMT, '做多') < conflictPenalty(largeMT, '做多');
+    return conflictPenalty(smallMT, '看多') < conflictPenalty(largeMT, '看多');
   })());
 
   // trendConflictNote: 双向对称, 仅明确相反才提示
@@ -831,7 +846,7 @@ console.log('\n[kchart: 方向基准视野化 (horizonTrend / macroTrend / deadZ
   const rB = analyzeTradeDiscipline(pmB, srsi, { bars: 150, mainTF: '1h' });
   ok('CN 接线(上升): 与纯函数一致', rB.conflictNote === trendConflictNote(rB.trend.up, rB.multiTf.verdict, rB.trend.tf));
 
-  // 宏观冲突接线: 4h V反弹(方向基准向上) 但 30d 宏观向下 → 做多方向被宏观扣分
+  // 宏观冲突接线: 4h V反弹(方向基准向上) 但 30d 宏观向下 → 看多方向被宏观扣分
   const vShape = (n) => { const a = falling(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] + (i + 1) * 1.2); return a; };
   const pmC = { '5m': vShape(500), '15m': vShape(500), '4h': vShape(500), '30d': falling(500) };
   const selNo30d = { '5m': true, '15m': true, '4h': true, '30d': false };
@@ -846,8 +861,8 @@ console.log('\n[kchart: 实时价 discLiveInfo]');
   // 模拟 window.S.prices
   globalThis.window = { S: { prices: { BTCUSDT: { last: 686.41, chg: -1.2 } } } };
 
-  // 做多: 目标700.1 止损673.6, 现价686.41(未达目标未破止损)
-  const a1 = discLiveInfo('BTCUSDT', { entry: { dir: '做多', target: 700.1, stop: 673.6 } });
+  // 看多: 目标700.1 止损673.6, 现价686.41(未达目标未破止损)
+  const a1 = discLiveInfo('BTCUSDT', { entry: { dir: '看多', target: 700.1, stop: 673.6 } });
   ok('D1 价格取自 window.S', a1.price === 686.41);
   ok('D1 价格涨跌着色(chg<0→down)', a1.priceCls === 'disc-down');
   ok('D1 距目标% 正确', close(a1.toTarget, (700.1 - 686.41) / 686.41 * 100));
@@ -855,27 +870,27 @@ console.log('\n[kchart: 实时价 discLiveInfo]');
   ok('D1 未达目标→targetCls空', a1.targetCls === '');
   ok('D1 未破止损→stopCls空', a1.stopCls === '');
 
-  // 现价突破目标(做多, 现价>目标) → targetCls=disc-pos, 涨→up
+  // 现价突破目标(看多, 现价>目标) → targetCls=disc-pos, 涨→up
   globalThis.window = { S: { prices: { BTCUSDT: { last: 710, chg: 2.5 } } } };
-  const a2 = discLiveInfo('BTCUSDT', { entry: { dir: '做多', target: 700.1, stop: 673.6 } });
+  const a2 = discLiveInfo('BTCUSDT', { entry: { dir: '看多', target: 700.1, stop: 673.6 } });
   ok('D2 现价>目标→targetCls=disc-pos', a2.targetCls === 'disc-pos');
   ok('D2 价格涨→priceCls=disc-up', a2.priceCls === 'disc-up');
 
-  // 现价跌破止损(做多, 现价<止损) → stopCls=disc-neg
+  // 现价跌破止损(看多, 现价<止损) → stopCls=disc-neg
   globalThis.window = { S: { prices: { BTCUSDT: { last: 670, chg: -3 } } } };
-  const a3 = discLiveInfo('BTCUSDT', { entry: { dir: '做多', target: 700.1, stop: 673.6 } });
+  const a3 = discLiveInfo('BTCUSDT', { entry: { dir: '看多', target: 700.1, stop: 673.6 } });
   ok('D3 现价<止损→stopCls=disc-neg', a3.stopCls === 'disc-neg');
 
-  // 做空: 目标673.6(低于现价), 止损700.1(高于现价); 现价670<目标→已到目标→targetCls=disc-pos
+  // 看空: 目标673.6(低于现价), 止损700.1(高于现价); 现价670<目标→已到目标→targetCls=disc-pos
   globalThis.window = { S: { prices: { BTCUSDT: { last: 670, chg: 1 } } } };
-  const a4 = discLiveInfo('BTCUSDT', { entry: { dir: '做空', target: 673.6, stop: 700.1 } });
-  ok('D4 做空 距目标% 正确', close(a4.toTarget, (673.6 - 670) / 670 * 100));
-  ok('D4 做空 现价<目标→已到目标 targetCls=disc-pos', a4.targetCls === 'disc-pos');
-  ok('D4 做空 现价<止损→stopCls空', a4.stopCls === '');
+  const a4 = discLiveInfo('BTCUSDT', { entry: { dir: '看空', target: 673.6, stop: 700.1 } });
+  ok('D4 看空 距目标% 正确', close(a4.toTarget, (673.6 - 670) / 670 * 100));
+  ok('D4 看空 现价<目标→已到目标 targetCls=disc-pos', a4.targetCls === 'disc-pos');
+  ok('D4 看空 现价<止损→stopCls空', a4.stopCls === '');
 
   // 无价格数据 → null
   globalThis.window = { S: { prices: {} } };
-  ok('D5 无价格→null', discLiveInfo('BTCUSDT', { entry: { dir: '做多', target: 700, stop: 673 } }) === null);
+  ok('D5 无价格→null', discLiveInfo('BTCUSDT', { entry: { dir: '看多', target: 700, stop: 673 } }) === null);
 
   // 清理, 避免影响后续(若有)
   delete globalThis.window;

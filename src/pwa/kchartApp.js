@@ -3,6 +3,7 @@
 import { kchartApi } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
+import * as localLoop from './localLoop.js';
 
 // 开发模式下自动注销残留 Service Worker（dev SW 缓存会导致浏览器长期跑旧代码，Ctrl+Shift+R 不清 SW 缓存）。
 // 生产构建不执行，不影响已安装 PWA。
@@ -267,9 +268,22 @@ function init() {
   setupInstallPrompt();
   renderSymList();
   initPwaTrade();
+  initLocalLoop();
   loadSymbol(symList[symList.length - 1] || 'BTCUSDT');   // 回到上次使用的币对
   setInterval(tickPrice, PRICE_REFRESH_MS);
   setInterval(tickKlines, KLINE_REFRESH_MS);
+}
+
+// ---- 本机 TSEV 训练 loop（PWA 打开期间每 60min 累积样本并本地训练，权重本机优先合并）----
+function initLocalLoop() {
+  localLoop.register();                       // 注册到 globalThis.__localTsev，供 kchart.js 读取本机权重
+  localLoop.setSymbolProvider(() => curSym);  // 用当前交易对采样
+  localLoop.onTrained(() => { try { api.render(); } catch (e) {} }); // 训练完触发面板重绘（显示新权重源/样本数）
+  localLoop.init().then(() => {
+    localLoop.setEnabled(true);               // 默认开启；用户可在设置关闭以省流量
+    localLoop.start();
+  }).catch(() => {});
+  globalThis.setKLocalLoop = (v) => localLoop.setEnabled(!!v);  // 供 UI 开关调用
 }
 
 // ===================== PWA 本地纸面交易引擎（模拟真实交易）=====================
