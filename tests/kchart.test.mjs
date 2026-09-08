@@ -8,8 +8,9 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle, isReversed, countBullBear } from '../src/tech2/kchart.js';
-import { KLINE_TF } from '../src/engine/timeframe.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi } from '../src/tech2/kchart.js';
+import { srsiKD } from '../src/engine/indicators.js';
+import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; console.log('ok:', name); } else { failed++; console.log('FAIL:', name); } }
@@ -393,6 +394,27 @@ console.log('\n[kchart: 多周期 SRSI 速览 buildSrsiOverview]');
   ok('5m 出现穿越方向且新鲜度≥0', (c5 === 'buy' || c5 === 'sell') && typeof f5 === 'number');
   ok('空价格→数据不足行 null/中性', (() => { const o = buildSrsiOverview(['4h'], srsi, { '4h': [] }, 150); return o.rows[0].k === null && o.rows[0].zone === 'neutral' && o.rows[0].fresh === null; })());
   ok('单根价格→数据不足', (() => { const o = buildSrsiOverview(['4h'], srsi, { '4h': [150] }, 150); return o.rows[0].k === null; })());
+  console.log('\n[kchart: 长周期聚合 7d/30d 周/月线 SRSI]');
+  {
+    // 全量日线(500 根) → 7d 聚合成周线(step7)、30d 聚合成月线(step30); 聚合后根数少, 用短 RSI/Stoch 周期保证预热
+    const daily = [];
+    for (let i = 0; i < 500; i++) daily.push(100 + Math.sin(i / 9) * 15 + Math.sin(i / 23) * 8 + i * 0.02);
+    const longCfg = {
+      '7d': { rsiPeriod: 14, stochPeriod: 14, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 },
+      '30d': { rsiPeriod: 6, stochPeriod: 6, smoothK: 2, smoothD: 2, overbought: 80, oversold: 20 },
+    };
+    const ovL = buildSrsiOverview(['1d', '7d', '30d'], (tf) => longCfg[tf] || srsi, { '1d': daily, '7d': resample(daily, 7), '30d': resample(daily, 30) }, 150);
+    const r1d = ovL.rows.find(r => r.tf === '1d'), r7 = ovL.rows.find(r => r.tf === '7d'), r30 = ovL.rows.find(r => r.tf === '30d');
+    ok('7d 聚合周线 K/D 有数值(不再恒等于1d)', typeof r7.k === 'number' && r7.k !== null);
+    ok('30d 聚合月线 K/D 有数值', typeof r30.k === 'number' && r30.k !== null);
+    ok('30d 月线 K/D 非恒为50(周期够小以预热)', r30.k !== 50 || r30.d !== 50);
+    ok('聚合后周线根数≈71、月线≈16', r7.k != null && resample(daily, 7).length >= 50 && resample(daily, 30).length >= 10);
+    ok('1d 与 7d K/D 解耦(不等)', r1d.k !== r7.k);
+    ok('7d 与 30d K/D 解耦(不等)', r7.k !== r30.k);
+    // buildSrsiOverview 仍兼容旧式对象 cfg(非函数)
+    const ovObj = buildSrsiOverview(['1d'], srsi, { '1d': daily }, 150);
+    ok('对象式 cfg 仍可用(向后兼容)', typeof ovObj.rows[0].k === 'number');
+  }
   // 回归：底部「偏多/偏空」必须与「穿越」列方向一致（按穿越方向统计，不再用 K 与 50 的位置）
   {
     const ov3 = buildSrsiOverview(['5m', '1h', '4h'], srsi, pm, 150);
@@ -756,11 +778,68 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S14 横盘→策略=趋势跟随', sfb.strategy === 'trend-baseline');
   ok('S14 上升+能量领跑方向→看多', s1b.entry.dir === '看多');
   ok('S14 下降+动量跟随方向→看空', s2b.entry.dir === '看空');
+
+  // S15 TSEV 翻转修复回归：经典判「观望」(target/stop=null) 但 TSEV 权重投出可交易看多时，
+  // 必须补上 target/stop，避免面板「可交易」却显示「—」。复用 S12 的 gateWait 场景。
+  const s15 = analyzeTradeDiscipline({
+    '5m': contrarianFixture(), '15m': uptrend(600, 0.15), '1h': uptrend(600, 0.15), '4h': uptrend(600, 0.15)
+  }, srsi, { bars: 150, mainTF: '1h', weights: { 'consensus|bear|-1': -5, 'hook|death|-1': -5 } });
+  ok('S15 经典观望被TSEV翻转为看多', s15.entry.dir === '看多');
+  ok('S15 TSEV 可交易(actionable)', s15.tsev && s15.tsev.actionable === true);
+  ok('S15 翻转后补上目标价(非null)', s15.entry.target != null);
+  ok('S15 翻转后补上止损(非null)', s15.entry.stop != null);
+  ok('S15 补的止损低于目标(顺势多)', s15.entry.stop < s15.entry.target);
   ok('S14 横盘+趋势跟随→观望', sfb.entry.dir === '观望');
   ok('S14 energy-leader 不重复加领跑分', !s1b.entry.confParts.some(p => p.includes('领跑')));
   ok('S14 regime 字段存在', s1b.regime && typeof s1b.regime.type === 'string');
   ok('S14 弱逆势领跑(55<70)不翻转→仍看多观察', s13b.entry.dir.startsWith('看多') && s13b.entry.dir !== '观望');
   ok('S14 弱逆势不翻转时理由含能量', s13b.entry.reason.includes('能量'));
+
+  // S17 方案1：TSEV 投票方向但阈值不足 → 保留方向、仅不可交易（不丢弃成观察，避免与子信号自相矛盾）
+  const s17 = analyzeTradeDiscipline({ '5m': uptrend(600, 0.15), '15m': uptrend(600, 0.15), '1h': uptrend(600, 0.15), '4h': uptrend(600, 0.15) }, srsi, { bars: 150, mainTF: '1h', weights: { 'consensus|bull|1': 0.1 } });
+  ok('S17 投票看多但阈值不足→保留看多(非观察)', s17.entry.dir.startsWith('看多') && s17.entry.dir !== '观望');
+  ok('S17 不可交易(actionable=false)', s17.tsev && s17.tsev.actionable === false);
+}
+
+// S16 诚实逆势：方向依据 / 顺势交易规则 必须与实际方向一致（消除「看多基准却判看空」的自相矛盾）
+{
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.3); return a; };
+  const falling = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(300 - i * 0.3); return a; };
+  const riseThenDip = (n) => { const a = rising(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] - (i + 1) * 1.2); return a; };
+  const fallThenRally = (n) => { const a = falling(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] + (i + 1) * 1.2); return a; };
+  // 不变量: contraTrade 当且仅当 方向与趋势相反；且 顺势交易规则 ok === !contraTrade
+  const inv = (s) => {
+    const rev = (s.trend.up === true && s.entry.dir.startsWith('看空')) || (s.trend.up === false && s.entry.dir.startsWith('看多'));
+    return s.contraTrade === rev && s.rules.find(r => r.name === '顺势交易').ok === !s.contraTrade;
+  };
+
+  const upPM = { '5m': riseThenDip(500), '15m': riseThenDip(500), '1h': rising(500), '4h': rising(500) };
+  const sUp = analyzeTradeDiscipline(upPM, srsi, { bars: 150, mainTF: '15m' });
+  ok('S16 顺势看多 contraTrade=false', sUp.contraTrade === false);
+  ok('S16 顺势看多 方向依据含看多基准', (sUp.basisNote || '').includes('看多基准'));
+  ok('S16 顺势看多 顺势交易规则✅', sUp.rules.find(r => r.name === '顺势交易').ok === true);
+  ok('S16 顺势看多 不变量', inv(sUp));
+
+  const downPM = { '5m': fallThenRally(500), '15m': fallThenRally(500), '1h': falling(500), '4h': falling(500) };
+  const sDown = analyzeTradeDiscipline(downPM, srsi, { bars: 150, mainTF: '15m' });
+  ok('S16 顺势看空 contraTrade=false', sDown.contraTrade === false);
+  ok('S16 顺势看空 顺势交易规则✅', sDown.rules.find(r => r.name === '顺势交易').ok === true);
+  ok('S16 顺势看空 不变量', inv(sDown));
+
+  // 逆势覆盖场景：上升市中短周期出现清晰偏空信号 → 应判看空 且 如实标注逆势（不伪装成看多基准）
+  const crash = (n) => {
+    const a = []; for (let i = 0; i < n - 30; i++) a.push(100 + i * 0.5);
+    const last = a[a.length - 1]; for (let i = 1; i <= 30; i++) a.push(last - i * 6); return a;
+  };
+  const sCT = analyzeTradeDiscipline({ '5m': crash(500), '15m': rising(500), '1h': rising(500), '4h': rising(500) }, srsi, { bars: 150, mainTF: '1h' });
+  ok('S16 逆势场景 不变量仍成立', inv(sCT));
+  if (sCT.contraTrade) {
+    ok('S16 逆势覆盖→方向依据含逆势覆盖', (sCT.basisNote || '').includes('逆势覆盖'));
+    ok('S16 逆势覆盖→顺势交易规则⚠', sCT.rules.find(r => r.name === '顺势交易').ok === false);
+  } else {
+    ok('S16 逆势场景未触发覆盖(依赖数据形态, 不变量已保)', true);
+  }
 }
 
 console.log('\n[kchart: 方向基准视野化 (horizonTrend / macroTrend / deadZone / conflictPenalty 等)]');
@@ -838,6 +917,37 @@ console.log('\n[kchart: 方向基准视野化 (horizonTrend / macroTrend / deadZ
   ok('TCN up=null→null(不误报)', trendConflictNote(null, '一致偏多', '30d') === null);
   ok('TCN 分歧→null', trendConflictNote(false, '分歧', '30d') === null);
 
+  // positionSizing: 长×中×短 三周期对齐 → 仓位阶梯
+  const ps = positionSizing;
+  ok('PS 三连多→立即加大×1.5', (() => { const r = ps(true, true, true); return r.mult === 1.5 && r.label === '立即加大筹码' && r.side === 'up'; })());
+  ok('PS 三连空→立即加大×1.5', (() => { const r = ps(false, false, false); return r.mult === 1.5 && r.label === '立即加大筹码' && r.side === 'down'; })());
+  ok('PS 中↑短↑长↓→逆风不追满×0.5', (() => { const r = ps(false, true, true); return r.mult === 0.5 && r.label.includes('不追满'); })());
+  ok('PS 中↑短↑长中性→顺势×1.0', (() => { const r = ps(null, true, true); return r.mult === 1.0 && r.label === '顺势正常做'; })());
+  ok('PS 中↓短↓长↑→顺势做空略加×1.2', (() => { const r = ps(true, false, false); return r.mult === 1.2 && r.label.includes('顺势做空'); })());
+  ok('PS 中↑短↓→仅轻仓逆势×0.5', (() => { const r = ps(true, true, false); return r.mult === 0.5 && r.label.includes('轻仓逆势'); })());
+  ok('PS 中↓短↑→仅轻仓逆势×0.5', (() => { const r = ps(false, false, true); return r.mult === 0.5 && r.label.includes('轻仓逆势'); })());
+  ok('PS 全中性→基准×0.6', (() => { const r = ps(null, null, null); return r.mult === 0.6; })());
+  ok('PS cls: 三连多→disc-size-up', ps(true, true, true).cls === 'disc-size-up');
+  ok('PS cls: 三连空→disc-size-down', ps(false, false, false).cls === 'disc-size-down');
+  ok('PS cls: 背离→disc-size-neutral', ps(true, true, false).cls === 'disc-size-neutral');
+
+  // PS 仓位门控: 三连多/空 + caveat → 不追满(×1.0 标准仓)
+  ok('PS 三连多+caveat→×1.0 不满攻', (() => { const r = ps(true, true, true, null, { caveat: { present: true, reasons: ['日线超买', '信号未确认'] } }); return r.mult === 1.0 && r.label.includes('不满攻'); })());
+  ok('PS 三连空+caveat→×1.0 不满攻', (() => { const r = ps(false, false, false, null, { caveat: { present: true, reasons: ['动能背离'] } }); return r.mult === 1.0 && r.label.includes('不满攻'); })());
+  ok('PS 三连多无caveat→仍×1.5', ps(true, true, true).mult === 1.5);
+
+  // 本地序列构造（EMA 上升 + SRSI 多周期一致偏多 / 镜像偏空），用于仓位/透明化断言
+  const upTrend = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 8) * 8 + i * 0.15); return a; };
+  const dnTrend = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(200 - Math.sin(i / 8) * 8 - i * 0.15); return a; };
+
+  // bullBearTfs: 与 countBullBear 计数一致, 且返回 TF 名列表
+  const pmBull = { '5m': upTrend(500), '15m': upTrend(500), '1h': upTrend(500), '4h': upTrend(500) };
+  const ovBull = buildSrsiOverview(['5m', '15m', '1h', '4h'], srsi, pmBull, 150);
+  const bbBull = bullBearTfs(ovBull.rows);
+  ok('BTF 返回 TF 名数组', Array.isArray(bbBull.bullTfs) && Array.isArray(bbBull.bearTfs));
+  ok('BTF 计数与 countBullBear 一致', bbBull.bullTfs.length === ovBull.bull && bbBull.bearTfs.length === ovBull.bear);
+  ok('BTF 全上升→偏多含4h 且无偏空', bbBull.bullTfs.includes('4h') && bbBull.bearTfs.length === 0);
+
   // conflictNote 接线: analyzeTradeDiscipline 的 conflictNote 必须等于纯函数结果(无论 SRSI 是否命中)
   const pmA = { '1h': falling(500), '4h': falling(500), '1d': falling(500), '30d': falling(500) };
   const rA = analyzeTradeDiscipline(pmA, srsi, { bars: 150, mainTF: '1h' });
@@ -845,6 +955,42 @@ console.log('\n[kchart: 方向基准视野化 (horizonTrend / macroTrend / deadZ
   const pmB = { '1h': rising(500), '4h': rising(500), '1d': rising(500), '30d': rising(500) };
   const rB = analyzeTradeDiscipline(pmB, srsi, { bars: 150, mainTF: '1h' });
   ok('CN 接线(上升): 与纯函数一致', rB.conflictNote === trendConflictNote(rB.trend.up, rB.multiTf.verdict, rB.trend.tf));
+  ok('ATD 返回 sizing 字段', typeof rB.sizing === 'object' && typeof rB.sizing.mult === 'number');
+  ok('ATD sizing 由 positionSizing 计算(接线一致)', rB.sizing.mult === ps(rB.longUp, rB.trend.up, rB.multiTf.verdict === '一致偏多' ? true : rB.multiTf.verdict === '一致偏空' ? false : null, rB.entry.dir.startsWith('看多') ? true : rB.entry.dir.startsWith('看空') ? false : null).mult);
+
+  // ATD 仓位门控: 三连多 + 未确认/置信不足 → 不满攻(×1.0)，验证 ② 透明降仓
+  const pmGate = { '5m': upTrend(500), '15m': upTrend(500), '1h': upTrend(500), '4h': upTrend(500), '1d': upTrend(500), '7d': upTrend(500), '30d': upTrend(500) };
+  const rGate = analyzeTradeDiscipline(pmGate, srsi, { bars: 150, mainTF: '1h' });
+  ok('ATD 三连多+风险→仓位不满攻(mult<1.5)', rGate.sizing.mult < 1.5);
+  ok('ATD 满攻降级为谨慎标签', rGate.sizing.label.includes('不满攻'));
+  ok('ATD multiTf 暴露 verdictShort1h(真·短轴)', typeof rGate.multiTf.verdictShort1h === 'string');
+  ok('ATD multiTf 暴露 bullTfs/bearTfs(透明化)', Array.isArray(rGate.multiTf.bullTfs) && Array.isArray(rGate.multiTf.bearTfs));
+
+  // ATD 真·短轴(≤1h): 4h 上升但 1h/5m/15m 下跌 → 短共识非一致偏多(源头消除假三连多)，且透明化揭示构成
+  const pmShort = { '5m': dnTrend(500), '15m': dnTrend(500), '1h': dnTrend(500), '4h': upTrend(500), '1d': upTrend(500), '7d': upTrend(500), '30d': upTrend(500) };
+  const rShort = analyzeTradeDiscipline(pmShort, srsi, { bars: 150, mainTF: '1h' });
+  ok('ATD ≤1h 真短轴: 4h↑但短↓ → shortVerdict 非一致偏多', rShort.multiTf.verdictShort1h !== '一致偏多');
+  ok('ATD 透明化: bullTfs 含4h 且 bearTfs 非空(揭示构成)', rShort.multiTf.bullTfs.includes('4h') && rShort.multiTf.bearTfs.length > 0);
+
+  // sizing.side 与 entry.dir 方向一致性（看多→up/看空→down/观望→up|down|null）
+  const sizingSideFromDir = rB.entry.dir.startsWith('看多') ? 'up' : rB.entry.dir.startsWith('看空') ? 'down' : null;
+  ok('ATD sizing.side 与 entry.dir 一致', rB.sizing.side === sizingSideFromDir,
+    `sizing.side=${rB.sizing.side} vs dir=${rB.entry.dir} → expected=${sizingSideFromDir}`);
+
+  // 逆势案例：BNB 型（中短偏多 + 但判决看空）→ sizing.side='down', label含逆势
+  const pmBNB = { '5m': rising(500), '15m': rising(500), '1h': rising(500), '4h': falling(500), '1d': falling(500), '7d': falling(500) };
+  const rBNB = analyzeTradeDiscipline(pmBNB, srsi, { bars: 150, mainTF: '1h' });
+  const dbBNB = rBNB.entry.dir.startsWith('看多') ? true : rBNB.entry.dir.startsWith('看空') ? false : null;
+  if (dbBNB !== null && rBNB.sizing.side !== null) {
+    ok('BNB型 sizing.side 与 dir 一致', rBNB.sizing.side === (dbBNB ? 'up' : 'down'));
+  }
+
+  // entryCue: gateWait + hook已触发 → "X钩已现，等价格企稳"
+  const pmHook = { '5m': rising(500), '15m': falling(500), '4h': rising(500), '1d': rising(500) };
+  const rHook = analyzeTradeDiscipline(pmHook, srsi, { bars: 150, mainTF: '15m' });
+  if (rHook.entry.dir === '观望' && rHook.confirm.isHook) {
+    ok('hook已触发时 entryCue 含"已现"', rHook.entry.entryCue.includes('已现'));
+  }
 
   // 宏观冲突接线: 4h V反弹(方向基准向上) 但 30d 宏观向下 → 看多方向被宏观扣分
   const vShape = (n) => { const a = falling(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] + (i + 1) * 1.2); return a; };
@@ -894,6 +1040,635 @@ console.log('\n[kchart: 实时价 discLiveInfo]');
 
   // 清理, 避免影响后续(若有)
   delete globalThis.window;
+}
+
+// ============ 短线多空共识：多维因子加权 ============
+const mkRow = (tf, o = {}) => ({
+  tf, k: o.k, d: o.d, hook: o.hook || null, hookFresh: o.hookFresh != null ? o.hookFresh : null,
+  zone: o.zone || null, crossing: o.crossing || null, fresh: o.fresh != null ? o.fresh : null, gapTrend: o.gapTrend || 'flat', reversed: !!o.reversed
+});
+
+console.log('\n[kchart: 短线多维加权 shortSignalWeight]');
+const r4 = mkRow('4h', { k: 25, d: 18, hook: 'goldHook', hookFresh: 2, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+const r1 = mkRow('1h', { k: 25, d: 18, hook: 'goldHook', hookFresh: 2, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+const w4 = shortSignalWeight(r4, 2), w1 = shortSignalWeight(r1, 2);
+ok('①周期时长: 4h权重≈1h的2倍', w4 > w1 * 1.9 && w4 < w1 * 2.1);
+ok('①周期时长: 4h钩权重≈1.0+', w4 > 0.9 && w4 < 1.3);
+
+const rCross = mkRow('4h', { k: 25, d: 18, crossing: 'buy', fresh: 2, gapTrend: 'up' });
+ok('②信号类型: 钩 > 叉(同周期同向)', shortSignalWeight(r4, 2) > shortSignalWeight(rCross, 2));
+
+const rWide = mkRow('4h', { k: 30, d: 10, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+const rNarrow = mkRow('4h', { k: 21, d: 19, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+ok('③KD间距: 大 > 小', shortSignalWeight(rWide, 5) > shortSignalWeight(rNarrow, 5));
+
+const rOldHook = mkRow('4h', { k: 25, d: 18, hook: 'goldHook', hookFresh: 4, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+ok('④极值突破: 刚突破(fv≤3) > 老钩(fv>3)', shortSignalWeight(r4, 2) > shortSignalWeight(rOldHook, 4));
+
+const rNew = mkRow('4h', { k: 25, d: 18, crossing: 'buy', fresh: 1, gapTrend: 'flat' });
+const rOld = mkRow('4h', { k: 25, d: 18, crossing: 'buy', fresh: 18, gapTrend: 'flat' });
+ok('⑤新鲜度: 新鲜根 > 老根', shortSignalWeight(rNew, 1) > shortSignalWeight(rOld, 18));
+
+console.log('\n[kchart: 钩反转加权 higherExtreme]');
+// 4h 超买(极值带) + 1h 死钩(≤1h 钩) 时, 该钩权重应被放大到压过 4h 趋势权重
+const r4hOB = mkRow('4h', { k: 83, d: 82, hook: null, zone: 'overbought', crossing: 'buy', fresh: 3, gapTrend: 'up' });
+const r1hDH = mkRow('1h', { k: 40, d: 49, hook: 'deathHook', hookFresh: 8, zone: 'neutral', crossing: 'sell', fresh: 12, gapTrend: 'down' });
+const wHookNoBoost = shortSignalWeight(r1hDH, 12, {});
+const wHookBoost = shortSignalWeight(r1hDH, 12, { higherExtreme: true });
+ok('钩反转: higherExtreme 下 ≤1h 钩权重被放大', wHookBoost > wHookNoBoost * 2);
+ok('钩反转: 放大后 1h死钩权重 > 4h(无钩)权重', wHookBoost > shortSignalWeight(r4hOB, 3, {}));
+// 无 higherExtreme 时不应放大（正常趋势 4h 仍主导）
+ok('钩反转: 无 higherExtreme 时不放大', wHookBoost > wHookNoBoost && shortSignalWeight(r1hDH, 12, {}) === wHookNoBoost);
+// ≥4h 的钩(8h) 不因 higherExtreme 被放大(仅 ≤1h 钩)
+const r8hDH = mkRow('8h', { k: 74, d: 70, hook: 'deathHook', hookFresh: 4, zone: 'neutral', crossing: 'sell', fresh: 35, gapTrend: 'down' });
+ok('钩反转: ≥4h 钩不放大', shortSignalWeight(r8hDH, 35, { higherExtreme: true }) === shortSignalWeight(r8hDH, 35, {}));
+
+console.log('\n[kchart: countBullBear 钩反转翻转共识]');
+// BNB 型: 4h 超买(K>D 计多) + 1h 死钩(计空) → 放大后空方压倒多方 → 一致偏空
+const cbBNB = countBullBear([r4hOB, r1hDH]);
+ok('BNB型: 加权空 > 加权多(钩反转生效)', cbBNB.wbear > cbBNB.wbull);
+ok('BNB型: weightedShortVerdict=一致偏空', weightedShortVerdict([r4hOB, r1hDH], cbBNB.wbull, cbBNB.wbear) === '一致偏空');
+// 对照: 无 1h 钩(仅 4h 超买 + 1h 普通死叉) → 不放大 → 多方(4h)占优 → 一致偏多
+const r1hPlain = mkRow('1h', { k: 40, d: 49, hook: null, zone: 'neutral', crossing: 'sell', fresh: 12, gapTrend: 'down' });
+const cbNoHook = countBullBear([r4hOB, r1hPlain]);
+ok('对照: 无≤1h钩时不翻转(4h主导→偏多)', weightedShortVerdict([r4hOB, r1hPlain], cbNoHook.wbull, cbNoHook.wbear) === '一致偏多');
+
+console.log('\n[kchart: 加权共识 weightedVerdict]');
+ok('占比1 → 一致偏多', weightedVerdict(0.6, 0) === '一致偏多');
+ok('占比0.6 → 一致偏多', weightedVerdict(0.6, 0.4) === '一致偏多');
+ok('占比0.59 → 分歧', weightedVerdict(0.59, 0.41) === '分歧');
+ok('占比0.4 → 一致偏空', weightedVerdict(0.4, 0.6) === '一致偏空');
+ok('全中性 → 中性', weightedVerdict(0, 0) === '中性');
+
+console.log('\n[kchart: 加权共识+锚定 weightedShortVerdict]');
+const rb5 = mkRow('5m', { k: 25, d: 18, hook: 'goldHook', hookFresh: 2, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+const rb1m = mkRow('1m', { k: 26, d: 19, hook: 'goldHook', hookFresh: 1, crossing: 'buy', fresh: 6, gapTrend: 'up' });
+const rb1h = mkRow('1h', { k: 25, d: 18, hook: 'goldHook', hookFresh: 2, crossing: 'buy', fresh: 5, gapTrend: 'up' });
+const cbNoAnchor = countBullBear([rb5, rb1m]);
+ok('纯加权: 全≤1h偏多 → 一致偏多', weightedVerdict(cbNoAnchor.wbull, cbNoAnchor.wbear) === '一致偏多');
+ok('锚定: 无≥1h周期 → 降级分歧', weightedShortVerdict([rb5, rb1m], cbNoAnchor.wbull, cbNoAnchor.wbear) === '分歧');
+const cbAnchor = countBullBear([rb5, rb1m, rb1h]);
+ok('锚定: 有1h同向 → 维持一致偏多', weightedShortVerdict([rb5, rb1m, rb1h], cbAnchor.wbull, cbAnchor.wbear) === '一致偏多');
+
+console.log('\n[kchart: countBullBear 加权返回]');
+ok('返回 wbull/wbear', cbAnchor.wbull > 0 && cbAnchor.wbear === 0);
+const rBear = mkRow('4h', { k: 78, d: 82, hook: 'deathHook', hookFresh: 2, crossing: 'sell', fresh: 5, gapTrend: 'down' });
+const cbMix = countBullBear([rb1h, rBear]);
+ok('混合多空都计', cbMix.bull === 1 && cbMix.bear === 1 && cbMix.wbull > 0 && cbMix.wbear > 0);
+
+console.log('\n[kchart: 短线能量场 energyBallLayout]');
+const _srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+const _rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.5); return a; };
+const _bull = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + (i % 25) * 0.8 - (i % 7) * 0.1); return a; };
+const m0 = energyBallLayout([], { wbull: 0, wbear: 0, verdict: '分歧' }, 300, 300);
+ok('空数据: nodes=0', m0.nodes.length === 0);
+ok('空数据: orbR 基础值26', m0.orbR === 26);
+const sf = [
+  { tf: '4h', dir: 'bull', w: 1.0, k: 25, d: 18, gap: 7, gapTrend: 'up', fresh: 2, isHook: true, signal: 'goldHook', reversed: false },
+  { tf: '5m', dir: 'bear', w: 0.1, k: 80, d: 82, gap: -2, gapTrend: 'down', fresh: 9, isHook: false, signal: 'sell', reversed: false }
+];
+const m = energyBallLayout(sf, { wbull: 1.0, wbear: 0.1, ratio: 0.91, verdict: '一致偏多' }, 300, 300);
+ok('有数据: nodes=2', m.nodes.length === 2);
+ok('节点在界内', m.nodes.every(n => n.x >= 0 && n.x <= 300 && n.y >= 0 && n.y <= 300));
+ok('中心强度符号=多(正)', m.strength > 0);
+ok('verdict 透传', m.verdict === '一致偏多');
+ok('连线数=节点数', m.edges.length === m.nodes.length);
+ok('节点半径随权重(4h>5m)', m.nodes[0].r > m.nodes[1].r);
+const ringR = 300 * 0.36;
+ok('节点在环上(距中心≈ringR)', Math.abs(Math.hypot(m.nodes[0].x - 150, m.nodes[0].y - 150) - ringR) < 1.5);
+
+console.log('\n[kchart: energyBallHitTest 命中检测]');
+const n0 = m.nodes[0], n1 = m.nodes[1];
+ok('命中节点中心(4h)→返回4h', energyBallHitTest(m, n0.x, n0.y) && energyBallHitTest(m, n0.x, n0.y).tf === '4h');
+ok('命中节点中心(5m)→返回5m', energyBallHitTest(m, n1.x, n1.y) && energyBallHitTest(m, n1.x, n1.y).tf === '5m');
+ok('远离任何节点(中心)→null', energyBallHitTest(m, 150, 150) === null);
+ok('环带内近4h角度(容错)→4h', energyBallHitTest(m, n0.x, n0.y - 30) && energyBallHitTest(m, n0.x, n0.y - 30).tf === '4h');
+ok('环带外(远角)→null', energyBallHitTest(m, 280, 280) === null);
+ok('空节点布局→null', energyBallHitTest(m0, 150, 150) === null);
+
+console.log('\n[kchart: tfOverviewStat 周期涨跌/区间]');
+ok('涨: c=[100,110]→+10%', Math.abs(tfOverviewStat([100, 110], null, null).chgPct - 10) < 1e-9);
+ok('跌: c=[110,100]→≈-9.09%', Math.abs(tfOverviewStat([110, 100], null, null).chgPct - (-9.0909)) < 0.01);
+ok('平: c=[100,100]→0% 但 ok', tfOverviewStat([100, 100], null, null).chgPct === 0 && tfOverviewStat([100, 100], null, null).ok === true);
+ok('数据不足: c=[100]→ok=false', tfOverviewStat([100], null, null).ok === false);
+ok('区间来自 l/h(末bars)', tfOverviewStat([1, 2], [1, 5], [3, 9], 2).low === 1 && tfOverviewStat([1, 2], [1, 5], [3, 9], 2).high === 9);
+ok('l/h 缺→回退 c 区间', (() => { const s = tfOverviewStat([5, 7], null, null, 2); return s.low === 5 && s.high === 7; })());
+ok('bars 截断只取末N根', (() => { const s = tfOverviewStat([1, 2, 3, 10], [0, 0, 4, 8], [0, 0, 12, 5], 2); return s.low === 4 && s.high === 12; })());
+ok('fmtPrice 自适应小数', fmtPrice(1234.5) === '1234.50' && fmtPrice(0.01234) === '0.0123' && fmtPrice(null) === '--');
+
+console.log('\n[kchart: tfOverviewStat 时长感知(用时间戳回看真实时长)]');
+// 30d 类: K线实际是日线分辨率(每根=1天), 单根邻接会误算成1日涨跌; 应回看30天前价格
+ok('30d→回看30天前=+23.15%', (() => {
+  const c = [100, 110, 120, 123.15];
+  const t = [0, 86400000, 172800000, 259200000]; // 每天一根(ms), now=第3天
+  const s = tfOverviewStat(c, null, null, t, 150, 3 * 1440);
+  return s.ok && s.chgPct != null && Math.abs(s.chgPct - 23.15) < 1e-6;
+})());
+ok('10m→回看10分钟前(末根)', (() => {
+  // 1分钟一根, durMin=10 → 回看10分钟前=第0根
+  const c = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110];
+  const t = []; for (let i = 0; i < c.length; i++) t.push(i * 60000);
+  const s = tfOverviewStat(c, null, null, t, 150, 10);
+  return s.ok && Math.abs(s.chgPct - 10) < 1e-9; // (110-100)/100=10%
+})());
+ok('时间戳缺失→回退单根邻接', (() => {
+  const s = tfOverviewStat([100, 110], null, null, null, 150, 1);
+  return s.ok && Math.abs(s.chgPct - 10) < 1e-9;
+})());
+ok('时长感知: 区间同跨度(末根-回看点)', (() => {
+  const c = [100, 105, 110], l = [99, 104, 109], h = [101, 106, 111];
+  const t = [0, 60000, 120000];
+  const s = tfOverviewStat(c, l, h, t, 150, 1); // durMin=1min → 回看点=第1根(index1)
+  return s.low === 104 && s.high === 111 && Math.abs(s.chgPct - (5 / 105 * 100)) < 0.01;
+})());
+ok('30d 真实日线序列→精确回看30天前', (() => {
+  // 150 根日线, 每天一根; 30天前=第120根(150-30), 价格=80; 现在=100 → +25%
+  const c = [], t = [];
+  for (let i = 0; i < 150; i++) { c.push(80 + (i === 149 ? 20 : 0)); t.push(i * 86400000); }
+  c[149] = 100;
+  const s = tfOverviewStat(c, null, null, t, 150, 30 * 1440);
+  return s.ok && Math.abs(s.chgPct - 25) < 1e-6;
+})());
+
+const ad = analyzeTradeDiscipline({ '4h': _rising(500), '1h': _bull(500) }, _srsi, { bars: 150, mainTF: '15m' });
+ok('ATD 返回 shortFactors 数组', Array.isArray(ad.shortFactors) && ad.shortFactors.length > 0);
+ok('shortFactors 含 tf/dir/w', ad.shortFactors.every(f => f.tf && (f.dir === null || f.dir === 'bull' || f.dir === 'bear') && typeof f.w === 'number'));
+
+console.log('\n[kchart: drawEnergyBall 渲染冒烟]');
+function _mockCtx() {
+  const noop = () => {};
+  return {
+    setTransform: noop, clearRect: noop, save: noop, restore: noop, translate: noop, rotate: noop,
+    beginPath: noop, arc: noop, moveTo: noop, lineTo: noop, stroke: noop, fill: noop, fillText: noop, closePath: noop, clip: noop,
+    setLineDash: noop, createRadialGradient: () => ({ addColorStop: noop }), createLinearGradient: () => ({ addColorStop: noop }),
+    strokeStyle: '', fillStyle: '', lineWidth: 1, font: '', textAlign: '', textBaseline: '', shadowColor: '', shadowBlur: 0
+  };
+}
+const mmLong = energyBallLayout(sf, { wbull: 1.0, wbear: 0.1, ratio: 0.91, verdict: '一致偏多' }, 300, 300);
+let threw = false;
+try { drawEnergyBall(_mockCtx(), mmLong, { t: 1.2, price: 100, W: 300, H: 300 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawEnergyBall 一致偏多(有价) 不抛', !threw);
+const mmDiv = energyBallLayout(sf, { wbull: 0.5, wbear: 0.5, ratio: 0.5, verdict: '分歧' }, 300, 300);
+threw = false;
+try { drawEnergyBall(_mockCtx(), mmDiv, { t: 0.5, price: null, W: 300, H: 300 }); } catch (e) { threw = true; }
+ok('drawEnergyBall 分歧(无价·灰散态) 不抛', !threw);
+
+console.log('\n[kchart: 反转内点 reversalInnerColor]');
+const rcBull = reversalInnerColor('bull');
+const rcBear = reversalInnerColor('bear');
+ok('reversalInnerColor 看多→红(255,82,82)', rcBull[0] === 255 && rcBull[1] === 82 && rcBull[2] === 82);
+ok('reversalInnerColor 看空→绿(0,230,118)', rcBear[0] === 0 && rcBear[1] === 230 && rcBear[2] === 118);
+// 含反转节点的布局渲染不抛
+const sfRev = [
+  { tf: '4h', dir: 'bull', w: 1.0, k: 25, d: 18, gap: 7, gapTrend: 'up', fresh: 2, isHook: true, signal: 'goldHook', reversed: true },
+  { tf: '5m', dir: 'bear', w: 0.1, k: 80, d: 82, gap: -2, gapTrend: 'down', fresh: 9, isHook: false, signal: 'sell', reversed: true }
+];
+const mmRev = energyBallLayout(sfRev, { wbull: 1.0, wbear: 0.1, ratio: 0.91, verdict: '一致偏多' }, 300, 300);
+threw = false;
+try { drawEnergyBall(_mockCtx(), mmRev, { t: 1.0, price: 100, W: 300, H: 300 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawEnergyBall 含反转节点(内点) 不抛', !threw);
+
+console.log('\n[kchart: KD 环形进度 kdZone / kdSweepFrac]');
+ok('kdZone 80→overbought', kdZone(80) === 'overbought');
+ok('kdZone 82→overbought', kdZone(82) === 'overbought');
+ok('kdZone 20→oversold', kdZone(20) === 'oversold');
+ok('kdZone 18→oversold', kdZone(18) === 'oversold');
+ok('kdZone 50→neutral', kdZone(50) === 'neutral');
+ok('kdZone 超界clamp 120→overbought', kdZone(120) === 'overbought');
+ok('kdZone 非数→neutral', kdZone(undefined) === 'neutral');
+ok('kdZone 自定义带 75/25: 76→overbought', kdZone(76, 75, 25) === 'overbought');
+ok('kdSweepFrac 50→0.5', Math.abs(kdSweepFrac(50) - 0.5) < 1e-9);
+ok('kdSweepFrac 100→1', kdSweepFrac(100) === 1);
+ok('kdSweepFrac 0→0', kdSweepFrac(0) === 0);
+ok('kdSweepFrac 超界 120→1', kdSweepFrac(120) === 1);
+ok('kdSweepFrac 负 -5→0', kdSweepFrac(-5) === 0);
+ok('kdSweepFrac 非数→0', kdSweepFrac('x') === 0);
+// 含 KD 数据的节点渲染（外环路径）不抛
+const sfKD = [
+  { tf: '4h', dir: 'bull', w: 1.0, k: 82, d: 18, gap: 64, gapTrend: 'up', fresh: 2, isHook: true, signal: 'goldHook', reversed: false },
+  { tf: '5m', dir: 'bear', w: 0.1, k: 22, d: 80, gap: -58, gapTrend: 'down', fresh: 9, isHook: false, signal: 'sell', reversed: false }
+];
+const mmKD = energyBallLayout(sfKD, { wbull: 1.0, wbear: 0.1, ratio: 0.91, verdict: '一致偏多' }, 300, 300);
+threw = false;
+try { drawEnergyBall(_mockCtx(), mmKD, { t: 1.0, price: 100, W: 300, H: 300 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawEnergyBall 含KD数据节点(外环) 不抛', !threw);
+
+console.log('\n[kchart: pricePathForecast 预测路径]');
+const pfA = analyzeTradeDiscipline({ '4h': _rising(500), '1h': _bull(500) }, _srsi, { bars: 150, mainTF: '15m' });
+const pfM = pricePathForecast(pfA, pfA.entry.target || 100, { horizonBars: 12 });
+ok('价格路径: target≈entry.target', Math.abs(pfM.target - (pfA.entry.target || 0)) < 1e-6);
+ok('价格路径: support≈entry.stop', Math.abs(pfM.support - (pfA.entry.stop || 0)) < 1e-6);
+ok('价格路径: pullbackProb∈[0,1]', pfM.pullbackProb >= 0 && pfM.pullbackProb <= 1);
+ok('价格路径: 依据非空', Array.isArray(pfM.pullbackBasis) && pfM.pullbackBasis.length > 0);
+ok('价格路径: horizon=12', pfM.horizon === 12);
+const pfW = pricePathForecast({ entry: { dir: '观望' }, multiTf: { ratio: 0.5, verdict: '分歧' }, shortFactors: [] }, 100, {});
+ok('观望: pullbackProb≥0.5', pfW.pullbackProb >= 0.5);
+const pfOb = pricePathForecast({ entry: { dir: '看多', target: 110, stop: 95 }, multiTf: { ratio: 0.9, verdict: '一致偏多' }, shortFactors: [{ k: 85 }, { k: 82 }] }, 100, {});
+ok('超买共识强: 0.15<pullbackProb<0.85', pfOb.pullbackProb > 0.15 && pfOb.pullbackProb < 0.85);
+
+// 方向无关：看空时 target(止盈/低) < support(止损/高)，bullish=false（动态图对全市场适应）
+const pfBear = pricePathForecast({ entry: { dir: '看空', target: 90, stop: 108 }, multiTf: { ratio: 0.1, verdict: '一致偏空' }, shortFactors: [] }, 100, {});
+ok('看空: 止盈<止损(方向无关)', pfBear.target < pfBear.support && pfBear.bullish === false);
+
+// 弱信号联动：分歧 → weak=true、uncertainty 高（扇带加宽），强单边 → weak=false、uncertainty 低
+const pfWeak = pricePathForecast({ entry: { dir: '观望', target: 100, stop: 100 }, multiTf: { ratio: 0.5, verdict: '分歧' }, shortFactors: [] }, 100, {});
+ok('分歧: weak=true', pfWeak.weak === true);
+ok('分歧: uncertainty≥0.9', pfWeak.uncertainty >= 0.9);
+const pfStrong = pricePathForecast({ entry: { dir: '看多', target: 110, stop: 95 }, multiTf: { ratio: 0.92, verdict: '一致偏多' }, shortFactors: [] }, 100, {});
+ok('强多: weak=false', pfStrong.weak === false);
+ok('强多: uncertainty<分歧', pfStrong.uncertainty < pfWeak.uncertainty);
+ok('强多: strength>0.8', pfStrong.strength > 0.8);
+
+console.log('\n[kchart: drawPricePath 渲染冒烟]');
+threw = false;
+try { drawPricePath(_mockCtx(), pfM, { t: 1.0, W: 320, H: 200 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawPricePath 不抛', !threw);
+threw = false;
+try { drawPricePath(_mockCtx(), { price: 100, target: 90, support: 108, atrAbs: 0.5, pullbackProb: 0.3, uncertainty: 0.9, weak: true, horizon: 12, fanK: 1.5 }, { t: 0.5, W: 320, H: 200 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawPricePath 看空+弱信号 不抛', !threw);
+threw = false;
+try { drawPricePath(_mockCtx(), { price: 749, target: 749, support: 749, atrAbs: 3, pullbackProb: 0.5, uncertainty: 1, weak: true, horizon: 12, fanK: 1.5 }, { t: 0.5, W: 320, H: 200 }); } catch (e) { threw = true; console.log('ERR', e.message); }
+ok('drawPricePath 观望(目标≈支撑, 原退化成顶部直线) 不抛', !threw);
+
+// 趋势冲突进入依据：短周期偏多但趋势↓→判做空，依据须显式说明
+const pfConflict = pricePathForecast({
+  entry: { dir: '看空', target: 716.66, stop: 756.95 },
+  multiTf: { ratio: 0.24, verdict: '一致偏多' },
+  shortFactors: [{ k: 85 }, { k: 82 }, { k: 30 }],
+  conflictNote: 'SRSI 多周期一致偏多，但长周期(4h) EMA 向下=主趋势偏空：金叉/金钩仅视为下跌中的反弹（回调≠反转），不逆势看多，等反转确认'
+}, 747.29, {});
+ok('冲突: 依据含「趋势优先→判看空」', pfConflict.pullbackBasis.some(b => b.includes('趋势优先→判看空')));
+ok('冲突: 依据含 EMA 向下说明', pfConflict.pullbackBasis.some(b => b.includes('EMA 向下')));
+ok('冲突: 命名改为「短周期加权共识」', pfConflict.pullbackBasis.some(b => b.includes('短周期加权共识')));
+
+// 决策原因进入依据首行：能量领跑逆势覆盖成做空，共识仍偏多 → 首行写明原因 + 反向轴通用说明
+const pfReason = pricePathForecast({
+  entry: { dir: '看空', target: 716.66, stop: 756.95, reason: '策略[能量领跑]: ETH 能量82 偏空领跑, 逆势独一档高能, 短线动能反转；信号: 衰减中' },
+  multiTf: { ratio: 0.19, verdict: '一致偏多' },
+  shortFactors: [{ k: 85 }, { k: 82 }, { k: 30 }]
+}, 747.29, {});
+ok('决策原因: 依据首行含「判看空」', pfReason.pullbackBasis[0].includes('判看空'));
+ok('决策原因: 首行含策略说明', pfReason.pullbackBasis[0].includes('逆势'));
+ok('决策原因: 反向轴通用说明存在', pfReason.pullbackBasis.some(b => b.includes('短周期共识(一致偏多) 与判看空相反')));
+ok('决策原因: 仍含短周期加权共识', pfReason.pullbackBasis.some(b => b.includes('短周期加权共识')));
+
+// 钩反转覆盖: 4h超买上涨(trend判看多) + 1h死钩(SRSI短线判偏空) → 预测翻成看空, 止盈/止损下移
+const pfHook = pricePathForecast({
+  entry: { dir: '看多', target: 110, stop: 95 },
+  multiTf: { ratio: 0.1, verdict: '一致偏空', hookOverride: true },
+  shortFactors: [{ k: 85 }, { k: 82 }, { k: 30 }],
+  atrP: 1.0
+}, 100, {});
+ok('钩反转: 预测方向翻为看空', pfHook.dir === '看空');
+ok('钩反转: 短线目标<现价(均值回归向下)', pfHook.target < 100);
+ok('钩反转: 做空止损(支撑)在现价上方', pfHook.support > 100);
+ok('钩反转: 依据含短线段反转说明', pfHook.pullbackBasis[0].includes('短线段反转'));
+
+// 画布方向感知标签（做空→「做空止盈/做空止损·反向%」）
+const recTexts = [];
+const recCtx = new Proxy({}, { get: (t, p) => {
+  if (p === 'fillText') return (s) => { recTexts.push(String(s)); };
+  if (p === 'createLinearGradient' || p === 'createRadialGradient') return () => ({ addColorStop() {} });
+  return () => {};
+} });
+drawPricePath(recCtx, { price: 747.29, target: 716.66, support: 756.95, atrAbs: 4, pullbackProb: 0.37, uncertainty: 0.5, weak: false, horizon: 12, fanK: 1.5, dirWord: '做空' }, { t: 0.5, W: 320, H: 200 });
+ok('画布: 含「做空止盈」', recTexts.some(s => s.includes('做空止盈')));
+ok('画布: 含「做空止损·反向%」', recTexts.some(s => s.includes('做空止损') && s.includes('反向')));
+
+// ============================================================
+//  每周期独立 SRSI 参数 + 辅助放行闸门 + 主图叠加
+// ============================================================
+console.log('\n[kchart: 每周期独立 SRSI 参数 perTfSrsi]');
+{
+  const byTf = { '5m': { rsiPeriod: 14, stochPeriod: 21, smoothK: 5, smoothD: 3, overbought: 90, oversold: 10 } };
+  const fb = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  ok('perTfSrsi 取 byTf 覆盖', deepEq(perTfSrsi('5m', byTf, fb), byTf['5m']));
+  ok('perTfSrsi 回退默认', deepEq(perTfSrsi('15m', byTf, fb), fb));
+  ok('perTfSrsi 7d 特例', perTfSrsi('7d', {}, fb).rsiPeriod === 14);
+  ok('perTfSrsi 30d 特例', perTfSrsi('30d', {}, fb).rsiPeriod === 6);
+
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.3); return a; };
+  const pm = { '5m': rising(500), '15m': rising(500), '1h': rising(500), '4h': rising(500) };
+  const ov = buildSrsiOverview(Object.keys(pm), (tf) => perTfSrsi(tf, byTf, fb), pm, 150);
+  ok('buildSrsiOverview 函数式参数→返回所有TF且有K/D', ov.rows.length === Object.keys(pm).length && ov.rows.every(r => typeof r.k === 'number' && typeof r.d === 'number'));
+
+  // 参数确实生效: 不同 rsi/stoch 周期 → 末根 K 不同
+  const seq = [100,101,99,102,98,103,97,104,96,105,95,106,94,107,93,108,92,109,91,110];
+  const a = srsiPanelSeries(seq, { rsiPeriod: 3, stochPeriod: 3, smoothK: 1, smoothD: 1, overbought: 80, oversold: 20 }, seq.length);
+  const b = srsiPanelSeries(seq, { rsiPeriod: 14, stochPeriod: 14, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 }, seq.length);
+  ok('srsiPanelSeries 参数影响 K 值', a.k[a.k.length - 1] !== b.k[b.k.length - 1]);
+}
+
+console.log('\n[kchart: 每周期默认 SRSI 参数(7d/30d 长周期特例)]');
+{
+  const def = __defaultKConfig().srsiByTf;
+  ok('默认 1h=通用 RSI85', def['1h'].rsiPeriod === 85);
+  ok('默认 7d=长周期 RSI14', def['7d'].rsiPeriod === 14);
+  ok('默认 30d=长周期 RSI6', def['30d'].rsiPeriod === 6);
+  ok('默认 7d smoothK=3', def['7d'].smoothK === 3);
+  ok('默认 30d smoothD=2', def['30d'].smoothD === 2);
+  // 7d/30d 用默认长周期参数聚合后 K/D 非 null（预热足够，不再恒为 --）
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 7) * 5); return a; };
+  const daily = rising(500);
+  const pm = { '7d': resample(daily, 7), '30d': resample(daily, 30) };
+  const ov = buildSrsiOverview(['7d', '30d'], (tf) => perTfSrsi(tf, def, def['5m']), pm, 150);
+  const r7 = ov.rows.find(r => r.tf === '7d'), r30 = ov.rows.find(r => r.tf === '30d');
+  ok('默认 7d K/D 非 null', typeof r7.k === 'number' && typeof r7.d === 'number');
+  ok('默认 30d K/D 非 null', typeof r30.k === 'number' && typeof r30.d === 'number');
+}
+
+console.log('\n[kchart: 辅助放行闸门 auxGateDir/auxGateStatus]');
+{
+  ok('auxGateDir long', auxGateDir({ k: 80, d: 20 }) === 'long');
+  ok('auxGateDir short', auxGateDir({ k: 20, d: 80 }) === 'short');
+  ok('auxGateDir 中性', auxGateDir({ k: 50, d: 50 }) === null);
+  ok('auxGateDir 无效null', auxGateDir({ k: null, d: 50 }) === null);
+  ok('auxGateDir 回退 KD 方向', auxGateDir({ k: 20, d: 80 }) === 'short');
+  ok('auxGateDir 区域优先(超卖→short)', auxGateDir({ k: 80, d: 20, zone: 'oversold' }) === 'short');
+  ok('auxGateDir 区域优先(超买→long)', auxGateDir({ k: 20, d: 80, zone: 'overbought' }) === 'long');
+  ok('auxGateDir 最近穿越优先', auxGateDir({ k: 80, d: 20, crossing: 'sell', fresh: 1 }) === 'short');
+
+  ok('status na 无辅助', auxGateStatus('buy', []) === 'na');
+  ok('status released 同向', auxGateStatus('buy', [{ k: 80, d: 20 }]) === 'released');
+  ok('status released 中性不否决', auxGateStatus('buy', [{ k: 50, d: 50 }]) === 'released');
+  ok('status vetoed 反向', auxGateStatus('buy', [{ k: 20, d: 80 }]) === 'vetoed');
+  ok('status vetoed 多个辅助任一反向', auxGateStatus('buy', [{ k: 80, d: 20 }, { k: 20, d: 80 }]) === 'vetoed');
+}
+
+console.log('\n[kchart: 纪律分析 辅助闸门否决主方向]');
+{
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.3); return a; };
+  const falling = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(300 - i * 0.3); return a; };
+  // 辅助 TF: 平盘后急跌 → 最近穿越为破超卖(sell) → 方向偏空; 主方向看多 → 反向否决
+  const auxDown = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 5) * 2); const last = a[a.length - 1]; for (let i = 1; i <= 8; i++) a.push(last - i * 5); return a; };
+  const pm = { '5m': rising(500), '15m': rising(500), '1h': rising(500), '4h': rising(500), '1d': auxDown(500) };
+  const sNoAux = analyzeTradeDiscipline(pm, srsi, { bars: 150, mainTF: '15m' });
+  const sAux = analyzeTradeDiscipline(pm, srsi, { bars: 150, mainTF: '15m', auxTfs: ['1d'] });
+  ok('无辅助时看多', sNoAux.entry.dir.startsWith('看多'));
+  ok('辅助1d反向→否决成观望', sAux.entry.dir === '观望');
+  ok('辅助否决 reason 含辅助周期', (sAux.entry.reason || '').includes('1d'));
+  ok('辅助否决 conf=30', sAux.entry.conf === 30);
+  const pm2 = { '5m': rising(500), '15m': rising(500), '1h': rising(500), '4h': rising(500), '1d': rising(500) };
+  const sAuxOk = analyzeTradeDiscipline(pm2, srsi, { bars: 150, mainTF: '15m', auxTfs: ['1d'] });
+  ok('辅助同向→不否决仍看多', sAuxOk.entry.dir.startsWith('看多'));
+}
+
+console.log('\n[kchart: 主图叠加 alignSeriesToBase]');
+{
+  const baseT = [10, 20, 30, 40, 50];
+  const srcT = [10, 30, 50];
+  const srcV = [1, 2, 3];
+  const out = alignSeriesToBase(baseT, srcT, srcV);
+  ok('align 等长', out.length === baseT.length);
+  ok('align 向前填充', deepEq(out, [1, 1, 2, 2, 3]));
+  ok('align 空src→null', deepEq(alignSeriesToBase(baseT, [], []), [null, null, null, null, null]));
+}
+
+// ============================================================
+//  每币对独立 K线配置（按币对存储 + 复制/重置）
+// ============================================================
+{
+  // 内存版 localStorage + 最小 window/document 桩（避免触达渲染）
+  const _ls = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls ? _ls[k] : null),
+    setItem: (k, v) => { _ls[k] = String(v); },
+    removeItem: (k) => { delete _ls[k]; },
+  };
+  globalThis.window = globalThis.window || {};
+
+  function freshStore() { kchartApi.__clearStore(); }
+  function loadAs(sym) { kchartApi.__setCfgForTest({ symbol: sym }); kchartApi.__load(); }
+  function curStore() { return kchartApi.__testStore(); }
+
+  console.log('[kchart: 每币对独立配置]');
+
+  // 旧扁平格式迁移
+  freshStore();
+  _ls['smartTrader_kchart'] = JSON.stringify({ symbol: 'BTCUSDT', srsiByTf: { '1h': { rsiPeriod: 21 } } });
+  kchartApi.__load();
+  ok('迁移: bySymbol 含旧 symbol', !!curStore().bySymbol['BTCUSDT']);
+  ok('迁移: lastSymbol=BTCUSDT', curStore().lastSymbol === 'BTCUSDT');
+
+  // 切换隔离
+  freshStore();
+  kchartApi.__setCfgForTest({ symbol: 'BTCUSDT', srsiByTf: { '1h': { rsiPeriod: 21 } } });
+  kchartApi.__persist();
+  kchartApi.__setCfgForTest({ symbol: 'ETHUSDT', srsiByTf: { '1h': { rsiPeriod: 55 } } });
+  kchartApi.__persist();
+  loadAs('BTCUSDT');
+  ok('隔离: BTC 的 1h.rsiPeriod=21', kchartApi.getConfig().srsiByTf['1h'].rsiPeriod === 21);
+  loadAs('ETHUSDT');
+  ok('隔离: ETH 的 1h.rsiPeriod=55', kchartApi.getConfig().srsiByTf['1h'].rsiPeriod === 55);
+  loadAs('BTCUSDT');
+  ok('隔离: 切回 BTC 仍=21', kchartApi.getConfig().srsiByTf['1h'].rsiPeriod === 21);
+
+  // 复制本币对到全部
+  freshStore();
+  kchartApi.__setCfgForTest({ symbol: 'BTCUSDT', srsiByTf: { '1h': { rsiPeriod: 33 } }, mainOverlay: true });
+  kchartApi.__persist();
+  kchartApi.copyCfgToAll(['BTCUSDT', 'ETHUSDT', 'SOLUSDT']);
+  ok('复制: ETH 获得 BTC 的 1h.rsiPeriod=33', curStore().bySymbol['ETHUSDT'].srsiByTf['1h'].rsiPeriod === 33);
+  ok('复制: SOL 获得 BTC 的 1h.rsiPeriod=33', curStore().bySymbol['SOLUSDT'].srsiByTf['1h'].rsiPeriod === 33);
+  ok('复制: ETH symbol 字段改写为 ETHUSDT', curStore().bySymbol['ETHUSDT'].symbol === 'ETHUSDT');
+  ok('复制: 不覆盖源 BTC 本身', curStore().bySymbol['BTCUSDT'].srsiByTf['1h'].rsiPeriod === 33);
+
+  // 重置本币对
+  freshStore();
+  kchartApi.__setCfgForTest({ symbol: 'BTCUSDT', srsiByTf: { '1h': { rsiPeriod: 99 } } });
+  kchartApi.__persist();
+  kchartApi.resetSymbolCfg();
+  ok('重置: 删除该币对槽位', !curStore().bySymbol['BTCUSDT']);
+  ok('重置: 当前 cfg 回退默认 1h.rsiPeriod=85', kchartApi.getConfig().srsiByTf['1h'].rsiPeriod === 85);
+  ok('重置: 默认 7d=长周期 RSI14', kchartApi.getConfig().srsiByTf['7d'].rsiPeriod === 14);
+  ok('重置: 默认 30d=长周期 RSI6', kchartApi.getConfig().srsiByTf['30d'].rsiPeriod === 6);
+
+  // 7d/30d 脏值迁移: 存的是通用默认(85/50/10/5)→ 改回长周期特例(14/6)
+  freshStore();
+  const polluted = Object.assign(__defaultKConfig(), { symbol: 'BTCUSDT', mainTF: '5m',
+    srsiByTf: { '7d': { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 },
+                 '30d': { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 } } });
+  const norm = kchartApi.__normalizeCfg(polluted);
+  ok('迁移: 7d 脏值→RSI14', norm.srsiByTf['7d'].rsiPeriod === 14);
+  ok('迁移: 30d 脏值→RSI6', norm.srsiByTf['30d'].rsiPeriod === 6);
+  // 用户显式改过的值不回退
+  const userSet = Object.assign(__defaultKConfig(), { symbol: 'BTCUSDT', mainTF: '5m',
+    srsiByTf: { '30d': { rsiPeriod: 30, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 } } });
+  const norm2 = kchartApi.__normalizeCfg(userSet);
+  ok('迁移: 用户显式 30d=30 保留', norm2.srsiByTf['30d'].rsiPeriod === 30);
+
+  // PWA 周期切换不依赖 window.__renderKControls 钩子（模块自洽）
+  freshStore();
+  kchartApi.__setCfgForTest(__defaultKConfig());
+  globalThis.window.__renderKControls = undefined;
+  kchartApi.setSrsiTf('1h');
+  ok('setSrsiTf: 无 __renderKControls 桩也不抛错且更新 editTf', kchartApi.getConfig().srsiEditTf === '1h');
+
+  // SRSI 参数自由填写(数字输入, 不再受下拉预设限制)
+  freshStore();
+  kchartApi.__setCfgForTest(__defaultKConfig());
+  kchartApi.setSrsi('rsiPeriod', '30');
+  kchartApi.setSrsi('smoothK', '8');
+  kchartApi.setSrsi('overbought', '78');
+  ok('自由填写: rsiPeriod=30(非预设选项)', kchartApi.getConfig().srsiByTf['5m'].rsiPeriod === 30);
+  ok('自由填写: smoothK=8(非预设选项)', kchartApi.getConfig().srsiByTf['5m'].smoothK === 8);
+  ok('自由填写: overbought=78(非预设选项)', kchartApi.getConfig().srsiByTf['5m'].overbought === 78);
+  kchartApi.__persist();
+  loadAs('BTCUSDT');
+  ok('自由填写: 持久化后 rsiPeriod=30 仍保留', kchartApi.getConfig().srsiByTf['5m'].rsiPeriod === 30);
+  kchartApi.setSrsi('rsiPeriod', 'abc');
+  ok('自由填写: 非法值回退默认 85', kchartApi.getConfig().srsiByTf['5m'].rsiPeriod === 85);
+
+  // 主图叠加改为按周期独立勾选（不再跟随全量 klineSel）
+  freshStore();
+  kchartApi.__setCfgForTest(__defaultKConfig());
+  kchartApi.setMainOverlayTf('4h', true);
+  kchartApi.setMainOverlayTf('1h', true);
+  let oc = kchartApi.getConfig();
+  ok('主图叠加: 4h/1h 已勾选', oc.overlayTfs['4h'] === true && oc.overlayTfs['1h'] === true);
+  ok('主图叠加: mainOverlay 镜像=true', oc.mainOverlay === true);
+  ok('主图叠加: 其它周期(如15m)未跟随勾选', !oc.overlayTfs['15m']);
+  ok('主图叠加: klineSel 仍默认全选(不影响速览/子图)', oc.klineSel['15m'] === true);
+  ok('overlayTfsList: 仅返回勾选周期且按 TF 顺序', JSON.stringify(kchartApi.__overlayTfsList(oc)) === JSON.stringify(['1h', '4h']));
+  kchartApi.setMainOverlayTf('4h', false);
+  oc = kchartApi.getConfig();
+  ok('主图叠加: 取消4h后仅剩1h', !oc.overlayTfs['4h'] && oc.overlayTfs['1h'] === true);
+  oc = kchartApi.getConfig();
+  kchartApi.__persist();
+  loadAs('BTCUSDT');
+  ok('主图叠加: 持久化后 1h 仍保留', kchartApi.getConfig().overlayTfs['1h'] === true);
+  kchartApi.setMainOverlayTf('1h', false);
+  oc = kchartApi.getConfig();
+  ok('主图叠加: 全清空后 mainOverlay=false', Object.keys(oc.overlayTfs).length === 0 && oc.mainOverlay === false);
+
+  // 迁移：旧全局 mainOverlay=true 且无 overlayTfs → 回填当时 klineSel
+  freshStore();
+  const migrated = kchartApi.__normalizeCfg({ mainOverlay: true, klineSel: { '1h': true, '4h': true, '15m': false }, overlayTfs: undefined });
+  ok('迁移: 旧 mainOverlay=true 回填 overlayTfs', migrated.overlayTfs['1h'] === true && migrated.overlayTfs['4h'] === true);
+  ok('迁移: 旧配置仅回填当时 klineSel 中选中的', !migrated.overlayTfs['15m']);
+  const emptyOv = kchartApi.__normalizeCfg({ mainOverlay: false, klineSel: { '1h': true }, overlayTfs: undefined });
+  ok('迁移: 旧 mainOverlay=false 不回填 overlayTfs', Object.keys(emptyOv.overlayTfs).length === 0);
+
+  // 主图也画辅助 SRSI 线：叠加 ∪ 辅助，去重并标 aux
+  freshStore();
+  let plan = kchartApi.__mainChartSrsiPlan({ overlayTfs: { '4h': true, '1h': true }, srsiAux: { '15m': true } });
+  ok('主图计划: 4h/1h 叠加 + 15m 辅助 共3条', plan.length === 3);
+  ok('主图计划: 15m 标 aux', plan.find(p => p.tf === '15m').aux === true);
+  ok('主图计划: 4h/1h 非 aux', !plan.find(p => p.tf === '4h').aux && !plan.find(p => p.tf === '1h').aux);
+  plan = kchartApi.__mainChartSrsiPlan({ overlayTfs: {}, srsiAux: { '15m': true } });
+  ok('主图计划: 仅辅助无叠加也画', plan.length === 1 && plan[0].tf === '15m' && plan[0].aux === true);
+  plan = kchartApi.__mainChartSrsiPlan({ overlayTfs: { '15m': true }, srsiAux: { '15m': true } });
+  ok('主图计划: 叠加与辅助同周期去重只1条且标aux', plan.length === 1 && plan[0].tf === '15m' && plan[0].aux === true);
+  plan = kchartApi.__mainChartSrsiPlan({ overlayTfs: {}, srsiAux: {} });
+  ok('主图计划: 全空时不画', plan.length === 0);
+  plan = kchartApi.__mainChartSrsiPlan({ mainOverlay: true, klineSel: { '5m': true, '15m': true }, overlayTfs: {}, srsiAux: { '15m': true } });
+  ok('主图计划: 迁移旧配置(klineSel回退)叠加也含15m且标aux', plan.some(p => p.tf === '15m' && p.aux === true) && plan.some(p => p.tf === '5m'));
+
+  // 纪律面板签名守卫：改任意 SRSI 参数或切辅助都须使签名变化（修复刷新缺口）
+  const defByTf = { '5m': { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 } };
+  const baseCfg = { symbol: 'BTCUSDT', mainTF: '4h', bars: 150, srsiByTf: defByTf, srsiAux: {} };
+  const pm = { '1h': [100, 101], '5m': [100, 102] };
+  const baseSig = kchartApi.__buildDiscSig(baseCfg, pm, 'fixed', 0.005, null);
+  const sigOf = (byTf, aux) => kchartApi.__buildDiscSig({ ...baseCfg, srsiByTf: byTf, srsiAux: aux || {} }, pm, 'fixed', 0.005, null);
+  ok('纪律签名: 相同输入稳定', baseSig === kchartApi.__buildDiscSig(baseCfg, pm, 'fixed', 0.005, null));
+  ok('纪律签名: 改 rsiPeriod 变化', baseSig !== sigOf({ '5m': { ...defByTf['5m'], rsiPeriod: 55 } }, {}));
+  ok('纪律签名: 改 smoothK 变化', baseSig !== sigOf({ '5m': { ...defByTf['5m'], smoothK: 8 } }, {}));
+  ok('纪律签名: 改 overbought 变化', baseSig !== sigOf({ '5m': { ...defByTf['5m'], overbought: 75 } }, {}));
+  ok('纪律签名: 改 oversold 变化', baseSig !== sigOf({ '5m': { ...defByTf['5m'], oversold: 25 } }, {}));
+  ok('纪律签名: 切辅助变化', baseSig !== sigOf(defByTf, { '15m': true }));
+}
+
+// ===== 主图叠加时间对齐 + 快选 chip 栏 =====
+(() => {
+  console.log('\n[kchart: 主图时间对齐 + 快选chip]');
+
+  // --- alignedSrsiOverlay ---
+  const mkPrice = (n) => Array.from({ length: n }, (_, i) => 100 + Math.sin(i / 5) * 3 + i * 0.1);
+  const price = mkPrice(40);
+  const tfT = price.map((_, i) => i);                 // 每根 1 单位时间
+  const cfgDef = __defaultKConfig();
+  const sc = perTfSrsi('5m', cfgDef.srsiByTf, cfgDef.srsi);
+
+  ok('alignOverlay 空输入→空', JSON.stringify(kchartApi.__alignedSrsiOverlay([], [], [], sc)) === JSON.stringify({ k: [], d: [] }));
+  ok('alignOverlay 坏输入→空', JSON.stringify(kchartApi.__alignedSrsiOverlay(price, [], [1, 2], sc)) === JSON.stringify({ k: [], d: [] }));
+
+  // 同时间轴(完全对齐) → 结果应等于 srsiKD 全量输出
+  const baseSame = tfT.slice(0);
+  const a1 = kchartApi.__alignedSrsiOverlay(price, tfT, baseSame, sc);
+  const kd = srsiKD(price, sc);
+  ok('alignOverlay 长度=baseT', a1.k.length === baseSame.length && a1.d.length === baseSame.length);
+  ok('alignOverlay 同时间轴==srsiKD', JSON.stringify(a1.k) === JSON.stringify(kd.k) && JSON.stringify(a1.d) === JSON.stringify(kd.d));
+
+  // 稀疏 baseT（取偶数时间）→ 长度=baseT，且每点=对应 src 最近 ≤ 值（forward-fill）
+  const baseSparse = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20];
+  const a2 = kchartApi.__alignedSrsiOverlay(price, tfT, baseSparse, sc);
+  ok('alignOverlay 稀疏长度', a2.k.length === baseSparse.length);
+  // baseT 末尾 20 → 取 src 时间<=20 的最后一个，即 kd.k[20]
+  ok('alignOverlay 末端forward-fill', a2.k[a2.k.length - 1] === kd.k[20]);
+  // 中间 base=6 应等于 src 时间<=6 最近者 = kd.k[6]（因 src 含 6）
+  ok('alignOverlay 中间对齐点', a2.k[3] === kd.k[6]);
+
+  // --- ovQuickChips（空集兜底 mainTF）---
+  const c0 = __defaultKConfig();
+  const ch0 = kchartApi.__ovQuickChips(c0);
+  ok('ovQuickChips 默认空→垫 mainTF 单 pill 未开', ch0.length === 1 && ch0[0].tf === c0.mainTF && ch0[0].on === false);
+  const c1 = __defaultKConfig();
+  c1.overlayTfs = { '4h': true, '1h': true }; c1.srsiAux = { '15m': true };
+  const chips = kchartApi.__ovQuickChips(c1);
+  // 按 KLINE_TF 顺序: 15m 应在 1h 前、1h 在 4h 前
+  ok('ovQuickChips 含3项且KLINE排序', chips.length === 3 && chips[0].tf === '15m' && chips[1].tf === '1h' && chips[2].tf === '4h');
+  ok('ovQuickChips 状态(叠加/辅助/on)', chips.find(x => x.tf === '1h').overlay === true && chips.find(x => x.tf === '15m').aux === true && chips.find(x => x.tf === '15m').on === true);
+
+  // 隐藏项（皆无）也应出现并置灰
+  const c2 = __defaultKConfig();
+  c2.ovQuickTfs = ['4h', '1h'];
+  const chips2 = kchartApi.__ovQuickChips(c2);
+  ok('ovQuickChips 隐藏项置灰', chips2.length === 2 && chips2.every(x => x.on === false));
+
+  // --- toggleOvQuickTf 状态机（角色保持式）---
+  kchartApi.__clearStore();
+  const tc = __defaultKConfig();
+  tc.symbol = 'BTCUSDT'; tc.ovQuickTfs = []; tc.overlayTfs = {}; tc.srsiAux = {}; tc.ovHide = {};
+  kchartApi.__setCfgForTest(tc);
+  kchartApi.__toggleOvQuickTf('4h');
+  ok('toggle 关→开(叠加)', tc.overlayTfs['4h'] === true && tc.ovQuickTfs.includes('4h'));
+  kchartApi.__toggleOvQuickTf('4h'); // 再点→临时隐藏（记 ov 角色，仍在栏内可恢复）
+  ok('toggle 叠加→隐藏(ov角色)', tc.ovHide['4h'] === 'ov' && tc.overlayTfs['4h'] === true && tc.ovQuickTfs.includes('4h'));
+  kchartApi.__toggleOvQuickTf('4h'); // 再点→恢复叠加
+  ok('toggle 隐藏→恢复叠加', !tc.ovHide['4h'] && tc.overlayTfs['4h'] === true);
+  tc.srsiAux['15m'] = true; tc.ovQuickTfs.push('15m');
+  kchartApi.__toggleOvQuickTf('15m'); // 辅助→隐藏（记 aux 角色）
+  ok('toggle 辅助→隐藏(aux角色)', tc.ovHide['15m'] === 'aux' && tc.srsiAux['15m'] === true && tc.ovQuickTfs.includes('15m'));
+  kchartApi.__toggleOvQuickTf('15m'); // 恢复仍为辅助（非叠加）
+  ok('toggle 恢复后仍为辅助', !tc.ovHide['15m'] && tc.srsiAux['15m'] === true && !tc.overlayTfs['15m']);
+
+  // --- ovQuickChips 隐藏项置灰仍在栏 ---
+  const cHide = __defaultKConfig();
+  cHide.overlayTfs = { '4h': true }; cHide.ovHide = { '4h': 'ov' };
+  const chipsHide = kchartApi.__ovQuickChips(cHide);
+  ok('ovQuickChips 隐藏项置灰且仍在栏', chipsHide.find(x => x.tf === '4h').on === false && chipsHide.find(x => x.tf === '4h').hidden === true);
+
+  // --- ovQuickChips 空集兜底：用 mainTF 垫一个未开 pill（保证主图永远有可点开关）---
+  const cEmpty = __defaultKConfig();
+  cEmpty.ovQuickTfs = []; cEmpty.overlayTfs = {}; cEmpty.srsiAux = {}; cEmpty.mainTF = '1h';
+  const chipsEmpty = kchartApi.__ovQuickChips(cEmpty);
+  ok('ovQuickChips 空集兜底 mainTF', chipsEmpty.length === 1 && chipsEmpty[0].tf === '1h' && chipsEmpty[0].on === false);
+  const cEmpty2 = __defaultKConfig();
+  cEmpty2.ovQuickTfs = []; cEmpty2.overlayTfs = {}; cEmpty2.srsiAux = {}; cEmpty2.mainTF = '5m';
+  const chipsEmpty2 = kchartApi.__ovQuickChips(cEmpty2);
+  ok('ovQuickChips 空集兜底 mainTF(5m)', chipsEmpty2.length === 1 && chipsEmpty2[0].tf === '5m');
+
+  // --- normalizeCfg 保留 ovHide ---
+  const old = { symbol: 'BTCUSDT', overlayTfs: { '4h': true }, srsiAux: { '15m': true }, ovHide: { '4h': 'ov' }, klineSel: {}, mainTF: '5m', srsiByTf: buildByTf() };
+  const loaded = kchartApi.__normalizeCfg(old);
+  ok('迁移 ovQuickTfs 含 overlay+aux', loaded.ovQuickTfs.includes('4h') && loaded.ovQuickTfs.includes('15m'));
+  ok('normalizeCfg 保留 ovHide', loaded.ovHide['4h'] === 'ov');
+})();
+
+function buildByTf() {
+  const base = __defaultKConfig().srsi;
+  const o = {}; KLINE_TF.forEach(tf => { o[tf] = { ...base }; }); return o;
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);

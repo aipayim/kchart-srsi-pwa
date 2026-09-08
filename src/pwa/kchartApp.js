@@ -1,6 +1,7 @@
 // 独立迷你 PWA 的入口：挂载 kchart.js 渲染、轮询行情、暴露 window 钩子
 // 不依赖 legacy.js / main.js，仅复用共享的 kchart.js（与主系统同一份 K线分析代码）
-import { kchartApi } from '../tech2/kchart.js';
+import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈希化并注入 kchart.html 的 <head>
+import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import * as localLoop from './localLoop.js';
@@ -102,6 +103,18 @@ globalThis.setKBars = (v) => api.setBars(v);
 globalThis.setKShow = (k, on) => api.setShow(k, on);
 globalThis.setKSrsi = (name, v) => api.setSrsi(name, v);
 globalThis.kResetSrsi = () => api.resetSrsi();
+globalThis.kSetSrsiTf = (tf) => api.setSrsiTf(tf);
+globalThis.kSetSrsiAux = (tf, on) => api.setSrsiAux(tf, on);
+globalThis.kSetGateTarget = (tf) => api.setGateTarget(tf);
+globalThis.kSetMainOverlay = (on) => api.setMainOverlay(on);
+globalThis.kSetMainOverlayTf = (tf, on) => api.setMainOverlayTf(tf, on);
+globalThis.kCopyCfgToAll = () => api.copyCfgToAll();
+globalThis.kResetSymbolCfg = () => api.resetSymbolCfg();
+globalThis.kOptimizeSrsi = (tf, role) => api.optimizeSrsiForTf(tf, role);
+globalThis.kApplySrsiOpt = (tf) => api.applySrsiOpt(tf);
+globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
+globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
+globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
 globalThis.kToggleOverview = () => api.toggleOverview();
 globalThis.kToggleDisc = () => api.toggleKDisc();
 globalThis.setDiscEvidence = (v) => api.setDiscEvidence(v);
@@ -145,7 +158,10 @@ async function clearCacheAndReload() {
       for (const k of keys) { try { await caches.delete(k); } catch (e) {} }
     }
   } catch (e) { /* 忽略 */ }
-  window.location.reload(true);
+  // 强制绕过 SW 与浏览器 HTTP 磁盘缓存：用带时间戳的新 URL 重新加载（SPA fallback 仍返回 kchart.html）
+  const url = new URL(window.location.href);
+  url.searchParams.set('_swclear', String(Date.now()));
+  window.location.replace(url.toString());
 }
 
 // ---- 页面缩放（＝/－，持久化）----
@@ -226,6 +242,7 @@ async function loadSymbol(sym) {
   }
   try { await refreshPrice(sym); } catch (e) { /* 价格可选 */ }
   api.render();                       // 用实际数据重绘（含纪律面板实时价）
+  localLoop.kick();                   // K线就绪后立刻触发一次本机采样（无需等 60min 周期）
   touchSym(sym);
   renderSymList();
   setFresh('已更新 ' + new Date().toLocaleTimeString());
@@ -278,10 +295,15 @@ function init() {
 function initLocalLoop() {
   localLoop.register();                       // 注册到 globalThis.__localTsev，供 kchart.js 读取本机权重
   localLoop.setSymbolProvider(() => curSym);  // 用当前交易对采样
-  localLoop.onTrained(() => { try { api.render(); } catch (e) {} }); // 训练完触发面板重绘（显示新权重源/样本数）
+  localLoop.setSymbolListProvider(() => symList); // 首次回补覆盖全部可选币
+  localLoop.onTrained(() => { try { refreshLocalTsev().finally(() => api.render()); } catch (e) { try { api.render(); } catch {} } }); // 训练完刷新本机权重并触发面板重绘（实时显示新样本/权重源，不重新拉取全局权重）
+  localLoop.onProgress(() => { try { api.render(); } catch (e) {} }); // 回补进度实时刷新面板
   localLoop.init().then(() => {
     localLoop.setEnabled(true);               // 默认开启；用户可在设置关闭以省流量
     localLoop.start();
+    try { refreshLocalTsev().finally(() => api.render()); } catch (e) {}
+    // 首次回补：对全部可选币拉取最近 4 年历史(4h粒度)，离线训练本机权重（分块异步，不冻屏）
+    if ((symList || []).length) localLoop.backfillAll(symList.slice(), 4).catch(() => {});
   }).catch(() => {});
   globalThis.setKLocalLoop = (v) => localLoop.setEnabled(!!v);  // 供 UI 开关调用
 }

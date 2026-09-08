@@ -18,6 +18,21 @@ export function ema(data, period) {
   return out;
 }
 
+// EMA（pandas ewm(span, adjust=False) 语义）：y0 = x0，y[i] = x[i]*a + y[i-1]*(1-a)，a = 2/(span+1)。
+// 与 ema()（用前 period 个 SMA 起步）不同：此处从首根起即递推、不做 warm-up 截断（前 span-1 根未收敛但照用，符合手册口径）。
+export function ewma(data, span) {
+  const out = new Array(data.length).fill(null);
+  if (!data.length) return out;
+  const a = 2 / (span + 1);
+  let prev = data[0];
+  out[0] = prev;
+  for (let i = 1; i < data.length; i++) {
+    prev = data[i] * a + prev * (1 - a);
+    out[i] = prev;
+  }
+  return out;
+}
+
 // 简单移动平均（供 MACD/SRSI 使用）
 export function sma(data, period) {
   const out = new Array(data.length).fill(null);

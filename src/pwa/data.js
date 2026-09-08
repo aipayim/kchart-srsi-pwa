@@ -193,6 +193,36 @@ export async function refreshKlines(sym) {
   return ok;
 }
 
+// 分页拉取某币种某周期的历史 K 线（用于本机 TSEV 回补），自动端点切换 + 轻量限流。
+// 返回与 parseKlines 一致的结构 { opens,highs,lows,closes,vols,times }。
+// 注意：Binance 在同时传 startTime+endTime 时会从 startTime 升序返回，故分页只用 endTime 驱动
+// （每次取 endTime 之前的最近 limit 根），用 firstTs<=startTime 作为停止条件。
+export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, maxBars = 12000) {
+  const interval = KLINE_INTERVAL[tf] || tf;
+  let all = [];
+  let end = endTime;
+  let guard = 0;
+  while (guard++ < 200) {
+    const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval
+      + '&endTime=' + end + '&limit=1000';
+    let raw;
+    try { raw = await fetchApiData(path, 15000); }
+    catch (e) { break; }
+    if (!raw || !raw.length) break;
+    all = raw.concat(all);             // raw 为本批较早数据，拼到队首
+    if (onProgress) onProgress(all.length);
+    if (all.length >= maxBars) break;  // 达到最大根数即停，避免短周期拉几十万根卡死
+    const firstTs = raw[0][0];
+    if (firstTs <= startTime) break;   // 已到目标起点
+    end = firstTs - 1;
+    // 注意：不要因 raw.length<1000 提前 break —— Binance 历史中间偶发缺口会让某页
+    // 不足 1000 根，此时应继续向更早翻页补足，否则拉到的窗口会比目标天数短，
+    // 导致不同周期/不同次拉取的数据窗口不一致（如 1h 只拉到 15000/625天 而非 17520/730天）。
+    await new Promise(r => setTimeout(r, 30));
+  }
+  return parseKlines(tf, all);
+}
+
 // 拉取最新价/24h 涨跌（Binance /ticker/24hr），写回 globalThis.S.prices[sym]
 export async function refreshPrice(sym) {
   const S = globalThis.S;

@@ -4,23 +4,31 @@
 //   - 主图：真 OHLC 蜡烛（数据取自 S.klinesO/H/L 与 S.klines（close））
 //   - 子图：RSI / SRSI / MACD（顺序可拖拽），SRSI 对每个勾选 K 线周期渲染短→长堆叠
 import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState } from '../engine/indicators.js';
-import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL } from '../engine/timeframe.js';
+import { optimizeSrsi, srsiNeighborhoodGrid, srsiParamGrid, optimizeSrsiBand, optimizeGateBand, rollingGateOos, bandNeighborTPos, MANUAL_SWING_PARAMS, manualSwingParams, DEFAULT_SRSI_BAND, GATE_PARAMS_GRID } from '../engine/srsiOptimizer.js';
+import { fetchKlinesRange } from '../pwa/data.js';
+import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
 import { regimeStrategy } from '../engine/regimeParams.js';
 import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights } from '../engine/disciplineAnalysis.js';
 
 // ---- TSEV 权重（全局：dev 下 /data 训练 或 生产 /tsev-weights.json 快照；本机：IndexedDB 由 localLoop 训练）----
-let _tsevWeights = null;     // { 'name|cond|side': logitWeight }
+let _tsevWeights = {};     // { [sym]: { 'name|cond|side': logitWeight } }（按币种分别训练）
 let _tsevLoading = false;
-let _tsevInfo = { globalN: 0, localN: 0, source: 'classic' };
-export function getTsevWeights() { return _tsevWeights || {}; }
+let _tsevInfo = { globalN: 0, localN: 0, source: 'classic', perSym: {} };
+let _tsevEnabled = true;   // 主程序设置页可开关；关闭后纪律分析回退纯经典逻辑、本机 loop 停止
+export function setTsevEnabled(v) {
+  _tsevEnabled = !!v;
+  if (!_tsevEnabled) { _tsevWeights = {}; _tsevInfo = { globalN: 0, localN: 0, source: 'disabled', perSym: {} }; }
+}
+export function isTsevEnabled() { return _tsevEnabled; }
+export function getTsevWeights(sym) { return _tsevEnabled ? ((sym && _tsevWeights[sym]) || {}) : {}; }
 export function getTsevInfo() { return _tsevInfo; }
 
 // 读取本机权重（由 src/pwa/localLoop.js 注册到 globalThis.__localTsev）。浏览器才有，Node 环境返回 null。
 async function loadLocalTsevWeights() {
   try {
     const api = (typeof globalThis !== 'undefined') && globalThis.__localTsev;
-    if (api && typeof api.getWeights === 'function') return await api.getWeights();
+    if (api && typeof api.getWeights === 'function') return await api.getWeights(); // {perSym, n}
   } catch { /* 忽略 */ }
   return null;
 }
@@ -41,22 +49,52 @@ async function loadGlobalTsevWeights() {
 }
 
 // 合并：本机优先（本机样本≥阈值用本机，否则全局，否则经典兜底）。
+let _globalWeights = { weights: {}, n: 0 };
 export async function loadTsevWeights(force) {
   if (_tsevWeights && !force) return _tsevWeights;
   if (_tsevLoading) return _tsevWeights;
   _tsevLoading = true;
   try {
     const g = await loadGlobalTsevWeights();
-    const l = await loadLocalTsevWeights();
-    const merged = combineWeights(g.weights, l && l.weights, { globalN: g.n, localN: (l && l.n) || 0 });
-    _tsevWeights = merged.weights;
-    _tsevInfo = { globalN: g.n, localN: (l && l.n) || 0, source: merged.source };
+    _globalWeights = g;
+    await refreshLocalTsev();
   } catch {
     _tsevWeights = {};
     _tsevInfo = { globalN: 0, localN: 0, source: 'classic' };
   } finally {
     _tsevLoading = false;
   }
+  return _tsevWeights;
+}
+
+// 仅重新读取本机样本并合并（不再拉取全局权重，避免每帧网络开销）。本机 loop 训练后调用以即时反映样本量/权重源。
+// 权重按币种分别合并：本机某币样本达标 → 用本机该币权重；否则回退全局池化权重。
+export async function refreshLocalTsev() {
+  const l = await loadLocalTsevWeights().catch(() => null);
+  const localPerSym = (l && l.perSym) || {};
+  const localN = (l && l.n) || 0;
+  const merged = {};
+  const perSymInfo = {};
+  const gw = _globalWeights.weights || {};
+  const gwCount = gw ? Object.keys(gw).filter(k => !k.startsWith('__')).length : 0;
+  for (const sym in localPerSym) {
+    const lw = localPerSym[sym];
+    if (lw && Object.keys(lw).filter(k => !k.startsWith('__')).length && localN >= TSEV_CFG.LOCAL_MIN_SAMPLE) {
+      merged[sym] = lw;
+      perSymInfo[sym] = { source: 'local', n: localN, factorCount: Object.keys(lw).filter(k => !k.startsWith('__')).length };
+    } else {
+      merged[sym] = gw;
+      perSymInfo[sym] = { source: gwCount ? 'global' : 'classic', n: _globalWeights.n, factorCount: gwCount };
+    }
+  }
+  _tsevWeights = merged;
+  const anyLocal = Object.keys(localPerSym).length > 0;
+  _tsevInfo = {
+    globalN: _globalWeights.n,
+    localN,
+    source: anyLocal ? 'local' : (gwCount ? 'global' : 'classic'),
+    perSym: perSymInfo
+  };
   return _tsevWeights;
 }
 
@@ -72,6 +110,100 @@ const BASE_H = MAIN_H + PAD_T + PAD_B;
 const STATE_KEY = 'smartTrader_kchart';
 
 const DEFAULT_SRSI = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+
+// 7d/30d 为「日线聚合」特例：7d=每7根日线合1根(≈71点)、30d=每30根合1根(≈16点)，
+// 点太少无法支撑大 RSI/Stoch 预热；故长周期默认用短参数，保证 K/D 能铺满。
+// 这是 7d/30d 的"出厂默认"，用户可在设置卡自由改（但改太大仍会因预热不足显示 --）。
+const LONG_TF_SRSI = {
+  '7d': { rsiPeriod: 14, stochPeriod: 14, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 },
+  '30d': { rsiPeriod: 6, stochPeriod: 6, smoothK: 2, smoothD: 2, overbought: 80, oversold: 20 },
+};
+
+// 每周期独立 SRSI 参数默认值：7d/30d 用长周期特例，其余沿用 DEFAULT_SRSI。
+function buildSrsiByTf() {
+  const m = {};
+  KLINE_TF.forEach(tf => { m[tf] = LONG_TF_SRSI[tf] ? { ...LONG_TF_SRSI[tf] } : { ...DEFAULT_SRSI }; });
+  return m;
+}
+
+// 判断某 SRSI 参数对象是否等于通用默认（用于识别 7d/30d 被错误填充的脏值）
+function isDefaultSrsi(x) {
+  return !!x && x.rsiPeriod === DEFAULT_SRSI.rsiPeriod && x.stochPeriod === DEFAULT_SRSI.stochPeriod &&
+    x.smoothK === DEFAULT_SRSI.smoothK && x.smoothD === DEFAULT_SRSI.smoothD &&
+    x.overbought === DEFAULT_SRSI.overbought && x.oversold === DEFAULT_SRSI.oversold;
+}
+
+// 取某 TF 的 SRSI 参数（考虑 7d/30d 聚合特例与旧全局默认）
+export function perTfSrsi(tf, byTf, fallback) {
+  if (byTf && byTf[tf]) return byTf[tf];
+  if (LONG_TF_SRSI[tf]) return LONG_TF_SRSI[tf];
+  return fallback || DEFAULT_SRSI;
+}
+
+// 辅助周期闸门方向：取该周期 SRSI 行的「指向」。优先用区域姿态(超买=多压/超卖=空压)，
+// 其次最近穿越/钩方向，最后 KD 瞬时方向。返回 'long'/'short'/null(中性=不否决)。
+export function auxGateDir(row) {
+  if (!row) return null;
+  if (row.zone === 'oversold') return 'short';
+  if (row.zone === 'overbought') return 'long';
+  const lc = (typeof latestCross === 'function') ? latestCross(row) : null;
+  const cv = lc && lc.cv;
+  if (cv === 'buy' || cv === 'goldHook') return 'long';
+  if (cv === 'sell' || cv === 'deathHook') return 'short';
+  if (row.k != null && row.d != null && isFinite(row.k) && isFinite(row.d)) {
+    if (row.k - row.d > 0.5) return 'long';
+    if (row.d - row.k > 0.5) return 'short';
+  }
+  return null;
+}
+
+// 辅助放行闸门：给定主信号方向 dir('buy'/'sell') 与一组辅助行，
+// 任一辅助行方向相反 → 'vetoed'(否决)；全部同向或中性 → 'released'(放行)；无辅助 → 'na'。
+export function auxGateStatus(dir, auxRows) {
+  if (!dir || !auxRows || !auxRows.length) return 'na';
+  const want = dir === 'buy' ? 'long' : 'short';
+  for (const r of auxRows) {
+    const g = auxGateDir(r);
+    if (!g) continue;
+    if (g !== want) return 'vetoed';
+  }
+  return 'released';
+}
+
+// 把 higher-TF 的序列按开盘时间对齐到 base 时间轴：srcTimes[i] 对应 srcVals[i]，
+// 每个 base bar 取「≤该 base 时间的最近 src 值」向前填充（forward-fill）。返回与 baseTimes 等长的数组。
+export function alignSeriesToBase(baseTimes, srcTimes, srcVals) {
+  const n = baseTimes ? baseTimes.length : 0;
+  const out = new Array(n).fill(null);
+  if (!n || !srcTimes || !srcTimes.length) return out;
+  let j = 0;
+  let last = null;
+  for (let i = 0; i < n; i++) {
+    const bt = baseTimes[i];
+    while (j < srcTimes.length && srcTimes[j] <= bt) { last = srcVals ? srcVals[j] : null; j++; }
+    out[i] = last;
+  }
+  return out;
+}
+
+// 把某周期全量 SRSI 的 K/D 按主图时间轴对齐到主图可见窗口：返回与 baseT 等长的 {k,d}。
+// srcT 为该周期开柱时间、baseT 为主图可见窗开柱时间；缺失/非法输入返回空数组（调用方回退切片法）。
+export function alignedSrsiOverlay(price, srcT, baseT, srsiCfg) {
+  if (!Array.isArray(price) || price.length < 2 || !Array.isArray(srcT) || srcT.length < 2 || !Array.isArray(baseT) || !baseT.length) {
+    return { k: [], d: [] };
+  }
+  const kd = srsiKD(price, srsiCfg);
+  const k = alignSeriesToBase(baseT, srcT, kd.k);
+  const d = alignSeriesToBase(baseT, srcT, kd.d);
+  return { k, d };
+}
+
+// 叠加/速览用的每 TF 配色（13 个周期各有稳定色）
+const TF_PALETTE = ['#ff6b6b', '#ffa94d', '#ffd43b', '#a9e34b', '#69db7c', '#38d9a9', '#3bc9db', '#4dabf7', '#748ffc', '#9775fa', '#da77f2', '#f783ac', '#e599f7'];
+export function tfColor(tf) {
+  const idx = KLINE_TF.indexOf(tf);
+  return TF_PALETTE[(idx >= 0 ? idx : 0) % TF_PALETTE.length];
+}
 
 export function defaultKConfig() {
   // SRSI 参数默认沿用当前技术分析 techConfig（若无则以内置默认）
@@ -96,6 +228,18 @@ export function defaultKConfig() {
     discOpen: true,
     discEvidenceOpen: false,   // 纪律面板「证据」折叠区：首次默认收起，点亮后记住
     srsi,
+    srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
+    srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
+    overlayTfs: {},              // 主图叠加按周期独立勾选：{ '4h': true, '1h': true }；非全局
+    srsiEditTf: '5m',           // 速览参数编辑器当前编辑的周期
+    gateTargetTf: '1h',        // 15m 闸门放行对象（可配，默认 1h；用户可在 SRSI 卡切换 30m/1h/4h/8h/1d）
+    ovHide: {},             // 主图 chip 栏临时隐藏的周期及其原角色：{ '4h': 'ov'|'aux' }
+    srsiOptPreview: {},        // 参数优选预览：{ [tf]: optimizeSrsi 结果 }（持久化，便于刷新后查看）
+    srsiOptDeep: false,        // 参数优选：是否用 1440 全网格（默认邻近网格 ~360）
+    srsiOptSource: {},         // 已采用优化参数的周期标记：{ [tf]: 'optimized' }
+    optPreviewOn: false,       // 主图叠加「优化预览」（虚线 K/D + 上下带，不写入配置）
+    mainOverlay: false,         // 主图 SRSI 多周期叠加开关
+    ovQuickTfs: [],             // 主图顶部 chip 栏：参与显隐快选的周期集合（overlay/aux 之外的持久记忆）
     subOrder: ['rsi', 'srsi', 'macd']   // 子图顺序（拖拽换序）
   };
 }
@@ -108,25 +252,98 @@ let _hover = null;
 let _resizeObs = null;
 let _drag = null;            // 子图拖拽 {startY, curY, moved, fromIdx}
 let _suppressClick = false;
+let _legendBoxes = [];       // 主图顶部 chip 栏热区 [{tf,x0,x1,y0,y1}]，供点击切换显隐
+let _press = null;           // 最近 mousedown 的逻辑坐标，区分点击与拖动
+let _pressMoved = false;     // mousedown→mouseup 间是否发生位移（拖动不误判为点击）
 let _subRegions = [];        // [{key, tf, y0, y1}]
 const _posHits = [];
 
-// ---- 存取 ----
-function loadCfg() {
+// ---- 存取（按币对独立存储） ----
+// 容器结构: { __v:2, lastSymbol, bySymbol:{ [sym]: cfg } }
+// 旧扁平 cfg（无 bySymbol）首次读取时自动迁移为 bySymbol[oldSym]。
+let _store = null;
+function readStore() {
   try {
     const raw = localStorage.getItem(STATE_KEY);
-    if (raw) {
-      const o = JSON.parse(raw);
-      cfg = { ...defaultKConfig(), ...o, show: { ...defaultKConfig().show, ...(o.show || {}) }, srsi: { ...DEFAULT_SRSI, ...(o.srsi || {}) } };
-    }
-  } catch (e) { cfg = defaultKConfig(); }
-  // 主图/勾选只保留合法 K 线周期
-  if (!KLINE_TF.includes(cfg.mainTF)) cfg.mainTF = '5m';
-  const sel = {};
-  KLINE_TF.forEach(tf => { sel[tf] = !!cfg.klineSel[tf]; });
-  cfg.klineSel = sel;
+    if (!raw) return { __v: 2, lastSymbol: null, bySymbol: {} };
+    const o = JSON.parse(raw);
+    if (o && o.bySymbol) return Object.assign({ __v: 2 }, o);
+    const sym = (o && o.symbol) || 'BTCUSDT';
+    return { __v: 2, lastSymbol: sym, bySymbol: { [sym]: o || {} } };
+  } catch (e) { return { __v: 2, lastSymbol: null, bySymbol: {} }; }
 }
-function persist() { try { localStorage.setItem(STATE_KEY, JSON.stringify(cfg)); } catch (e) {} }
+function normalizeCfg(c) {
+  if (!c) c = defaultKConfig();
+  if (!KLINE_TF.includes(c.mainTF)) c.mainTF = '5m';
+  const sel = {}; KLINE_TF.forEach(tf => { sel[tf] = !!c.klineSel[tf]; }); c.klineSel = sel;
+  if (!c.srsiByTf) c.srsiByTf = buildSrsiByTf();
+  else {
+    const base = buildSrsiByTf();
+    KLINE_TF.forEach(tf => {
+      const stored = c.srsiByTf[tf];
+      // 7d/30d 聚合特例：若该 TF 存的是通用默认(85/50/10/5)，说明是每币对重构时期被错误填充的脏值，
+      // 需改回长周期专用默认(14/6)，否则 RSI 预热不足 → 7d/30d 永远无 K/D 数据。用户显式改过的值不受影响。
+      if (LONG_TF_SRSI[tf] && isDefaultSrsi(stored)) c.srsiByTf[tf] = { ...LONG_TF_SRSI[tf] };
+      else c.srsiByTf[tf] = { ...base[tf], ...(stored || {}) };
+    });
+  }
+  if (!c.srsiAux || Object.keys(c.srsiAux).length === 0) c.srsiAux = { '15m': true };
+  if (!c.overlayTfs || typeof c.overlayTfs !== 'object') c.overlayTfs = {};
+  if (!c.ovHide || typeof c.ovHide !== 'object') c.ovHide = {};
+  else { const oh = {}; KLINE_TF.forEach(tf => { if (c.ovHide[tf] === 'ov' || c.ovHide[tf] === 'aux') oh[tf] = c.ovHide[tf]; }); c.ovHide = oh; }
+  if (!c.srsiEditTf || !KLINE_TF.includes(c.srsiEditTf)) c.srsiEditTf = '5m';
+  if (!c.gateTargetTf || !KLINE_TF.includes(c.gateTargetTf) || c.gateTargetTf === '15m') c.gateTargetTf = '1h';
+  if (!c.srsiOptPreview || typeof c.srsiOptPreview !== 'object') c.srsiOptPreview = {};
+  // 清理结构不兼容的旧优选预览（避免刷新后崩溃）：swing 需 full、gate 需 stats；
+  // 旧 ATR 模式预览(无 full/stats)在此被丢弃，刷新后需重新运行优选。
+  Object.keys(c.srsiOptPreview).forEach(tf => {
+    const pr = c.srsiOptPreview[tf];
+    if (!pr || !pr.role) { delete c.srsiOptPreview[tf]; return; }
+    if (pr.role === 'gate' ? !pr.stats : !pr.full) delete c.srsiOptPreview[tf];
+    // v6 及更早：swing 预览里的 best 被手册参数强制覆盖（硬编码）；v7 起含 bestSelection 字段，旧结构一律丢弃重算。
+    if (pr.role === 'swing' && !('bestSelection' in pr)) delete c.srsiOptPreview[tf];
+  });
+  if (!c.srsiOptSource || typeof c.srsiOptSource !== 'object') c.srsiOptSource = {};
+  if (typeof c.optPreviewOn !== 'boolean') c.optPreviewOn = false;
+  if (typeof c.srsiOptDeep !== 'boolean') c.srsiOptDeep = false;
+  // 主图快选 chip 栏集合：迁移期用 overlayTfs ∪ srsiAux 回填，并统一按 KLINE_TF 顺序去重
+  let quick = Array.isArray(c.ovQuickTfs) ? c.ovQuickTfs.slice() : [];
+  Object.keys(c.overlayTfs || {}).forEach(tf => { if (!quick.includes(tf)) quick.push(tf); });
+  Object.keys(c.srsiAux || {}).forEach(tf => { if (!quick.includes(tf)) quick.push(tf); });
+  c.ovQuickTfs = KLINE_TF.filter(tf => quick.includes(tf));
+  if (typeof c.mainOverlay !== 'boolean') c.mainOverlay = false;
+  // 迁移：旧全局 mainOverlay=true 且尚无按周期 overlayTfs 时，用当时 klineSel 回填，保持旧观感（用户再手动取消）
+  if (c.mainOverlay && c.overlayTfs && Object.keys(c.overlayTfs).length === 0) {
+    KLINE_TF.forEach(tf => { if (c.klineSel[tf]) c.overlayTfs[tf] = true; });
+  }
+  return c;
+}
+function loadCfg() {
+  _store = readStore();
+  const sym = (cfg.symbol) || _store.lastSymbol || 'BTCUSDT';
+  const base = defaultKConfig();
+  const saved = _store.bySymbol[sym];
+  cfg = saved
+    ? { ...base, ...saved, show: { ...base.show, ...(saved.show || {}) }, srsi: { ...DEFAULT_SRSI, ...(saved.srsi || {}) } }
+    : base;
+  cfg.symbol = sym;
+  normalizeCfg(cfg);
+  _store.lastSymbol = sym;
+}
+function persist() {
+  if (!_store) _store = readStore();
+  _store.bySymbol[cfg.symbol] = cfg;
+  _store.lastSymbol = cfg.symbol;
+  try { localStorage.setItem(STATE_KEY, JSON.stringify(_store)); } catch (e) {}
+}
+function toast(msg) {
+  try {
+    let t = document.getElementById('kchartToast');
+    if (!t) { t = document.createElement('div'); t.id = 'kchartToast'; t.className = 'kchart-toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t.__t); t.__t = setTimeout(() => t.classList.remove('show'), 2000);
+  } catch (e) {}
+}
 
 // ---- 周期排序辅助 ----
 const minutesOf = (tf) => KLINE_MINUTES[tf] || 1;
@@ -218,20 +435,46 @@ function renderControls() {
     ).join('');
   }
 
-  // SRSI 参数
-  const srsiBox = document.getElementById('kchartSrsi');
+  // SRSI 参数（每周期独立设置）——渲染到独立的「SRSI 各币对各周期参数」设置卡片
+  const srsiBox = document.getElementById('kchartSrsiCard');
   if (srsiBox) {
-    const mkSel = (name, arr, val) =>
-      `<select onchange="window.setKSrsi('${name}',this.value)" class="kchart-sel">` +
-      arr.map(v => `<option value="${v}" ${val === v ? 'selected' : ''}>${v}</option>`).join('') + '</select>';
+    const mkNum = (name, min, max, val) =>
+      `<input type="number" min="${min}" max="${max}" step="1" value="${val}" onchange="window.setKSrsi('${name}',this.value)" class="kchart-num">`;
+    const ep = cfg.srsiByTf[cfg.srsiEditTf] || cfg.srsi;
+    const tfTabs = KLINE_TF.map(tf => {
+      const optd = cfg.srsiOptSource && cfg.srsiOptSource[tf] === 'optimized';
+      return `<button class="kchart-tfbtn ${tf === cfg.srsiEditTf ? 'main' : ''}" onclick="window.kSetSrsiTf('${tf}')">${tf}${optd ? ' ◆' : ''}</button>`;
+    }).join('');
+    const isAux = !!cfg.srsiAux[cfg.srsiEditTf];
+    const isOv = !!cfg.overlayTfs[cfg.srsiEditTf];
     srsiBox.innerHTML =
-      `<span>RSI周期</span>${mkSel('rsiPeriod', [14, 21, 55, 85, 120], cfg.srsi.rsiPeriod)}` +
-      `<span>Stoch</span>${mkSel('stochPeriod', [14, 30, 50, 70, 100], cfg.srsi.stochPeriod)}` +
-      `<span>%K</span>${mkSel('smoothK', [1, 3, 5, 10, 15, 20, 30], cfg.srsi.smoothK)}` +
-      `<span>%D</span>${mkSel('smoothD', [1, 3, 5, 10, 15, 20, 30], cfg.srsi.smoothD)}` +
-      `<span>超买</span>${mkSel('overbought', [70, 75, 80, 85, 90], cfg.srsi.overbought)}` +
-      `<span>超卖</span>${mkSel('oversold', [10, 15, 20, 25, 30], cfg.srsi.oversold)}` +
-      `<button class="kchart-srsi-btn" onclick="window.kResetSrsi()">默认</button>`;
+      `<div class="kchart-srsi-sym">当前币对：<b>${cfg.symbol}</b> · 编辑周期：<b>${cfg.srsiEditTf}</b></div>` +
+      `<div class="kchart-srsi-tfs">${tfTabs}</div>` +
+      `<div class="kchart-srsi-row">` +
+        `<span>RSI周期</span>${mkNum('rsiPeriod', 1, 500, ep.rsiPeriod)}` +
+        `<span>Stoch</span>${mkNum('stochPeriod', 1, 500, ep.stochPeriod)}` +
+      `</div>` +
+      `<div class="kchart-srsi-row">` +
+        `<span>%K</span>${mkNum('smoothK', 1, 100, ep.smoothK)}` +
+        `<span>%D</span>${mkNum('smoothD', 1, 100, ep.smoothD)}` +
+      `</div>` +
+      `<div class="kchart-srsi-row">` +
+        `<span>超买</span>${mkNum('overbought', 1, 100, ep.overbought)}` +
+        `<span>超卖</span>${mkNum('oversold', 0, 99, ep.oversold)}` +
+        `<label class="kchart-aux ${isAux ? 'on' : ''}"><input type="checkbox" ${isAux ? 'checked' : ''} onchange="window.kSetSrsiAux('${cfg.srsiEditTf}',this.checked)">辅助(只做放行闸门)</label>` +
+        `<label class="kchart-aux ${isOv ? 'on' : ''}"><input type="checkbox" ${isOv ? 'checked' : ''} onchange="window.kSetMainOverlayTf('${cfg.srsiEditTf}',this.checked)">主图叠加(本周期)</label>` +
+        (roleForTf(cfg.srsiEditTf) === 'gate'
+          ? `<label class="kchart-aux">放行对象<select class="kchart-aux-select" onchange="window.kSetGateTarget(this.value)">${GATE_TARGET_OPTIONS.filter(t => tfMs(t) > tfMs(cfg.srsiEditTf)).map(t => `<option value="${t}" ${cfg.gateTargetTf === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>`
+          : '') +
+        `<button class="kchart-srsi-btn" onclick="window.kResetSrsi()">默认</button>` +
+      `</div>` +
+       `<div class="kchart-srsi-actions">` +
+        `<button class="kchart-srsi-btn kchart-srsi-optbtn" onclick="window.kOptimizeSrsi('${cfg.srsiEditTf}')">⚡ 优选</button>` +
+        `<label class="kchart-aux ${cfg.srsiOptDeep ? 'on' : ''}"><input type="checkbox" ${cfg.srsiOptDeep ? 'checked' : ''} onchange="window.kSetSrsiOptDeep(this.checked)">深度全网格</label>` +
+        `<button class="kchart-srsi-btn" onclick="window.kCopyCfgToAll()">复制本币对到全部</button>` +
+        `<button class="kchart-srsi-btn" onclick="window.kResetSymbolCfg()">重置本币对</button>` +
+      `</div>` +
+      optSectionHtml(cfg.srsiEditTf);
   }
 }
 
@@ -239,16 +482,24 @@ function renderControls() {
 // 用签名守卫：仅当 数据/勾选/SRSI参数/主图 变化时才重建 DOM（hover 触发 renderKChart 不重建）
 let _ovSig = '';
 let _discSig = '';
+let _ovFootTf = null; // 页脚参数行当前显示的 TF（点击速览行/⚙ 时设为该 TF，否则默认主图 TF）
 
 export function renderSrsiOverview(hz, capMin) {
   const box = document.getElementById('kchartOverview');
   if (!box) return;
   const sym = cfg.symbol;
+  const footTf = _ovFootTf || cfg.mainTF; // 页脚参数跟随所点击周期，否则跟随主图周期
   const selTfs = KLINE_TF.filter(tf => cfg.klineSel[tf]);
+  // 长周期聚合: 7d=周线(每7根日线合1根)、30d=月线(每30根日线合1根)。
+  // 用全量日线(S.klines 仍存 500 根日线, 供 macroTrend/tfOverviewStat)聚合出周/月收盘价后算 SRSI,
+  // 使 7d/30d 显示真正独立的周/月级 SRSI(不再恒等于 1d); 因聚合后根数少, 用较短 RSI/Stoch 周期保证预热
+  // (LONG_TF_SRSI 定义在文件顶部, 亦作为 7d/30d 的出厂默认参数)。
+  const LONG_TF_AGG = { '7d': 7, '30d': 30 };
   const priceMap = {};
-  let sig = sym + '|' + cfg.mainTF + '|' + cfg.bars + '|' + cfg.srsi.rsiPeriod + '/' + cfg.srsi.stochPeriod + '/' + cfg.srsi.smoothK + '/' + cfg.srsi.smoothD + '/' + cfg.srsi.overbought + '/' + cfg.srsi.oversold + '|';
+  let sig = sym + '|' + cfg.mainTF + '|' + cfg.bars + '|ft:' + footTf + '|byTf:' + JSON.stringify(cfg.srsiByTf) + '|aux:' + JSON.stringify(cfg.srsiAux) + '|';
   selTfs.forEach(tf => {
-    const c = getTFData(sym, tf).c;
+    let c = getTFData(sym, tf).c;
+    if (LONG_TF_AGG[tf] && c.length >= LONG_TF_AGG[tf]) c = resample(c, LONG_TF_AGG[tf]);
     priceMap[tf] = c;
     sig += tf + ':' + c.length + ':' + (c[c.length - 1] || 0) + ';';
   });
@@ -256,8 +507,12 @@ export function renderSrsiOverview(hz, capMin) {
   if (sig === _ovSig) return;
   _ovSig = sig;
 
-  const { rows, bull, bear } = buildSrsiOverview(selTfs, cfg.srsi, priceMap, cfg.bars);
-  const verdict = overviewVerdict(bull, bear);
+  const perTf = (tf) => perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const { rows } = buildSrsiOverview(selTfs, perTf, priceMap, cfg.bars);
+  const auxRows = rows.filter(r => cfg.srsiAux[r.tf]);
+  const primaryRows = rows.filter(r => !cfg.srsiAux[r.tf]);
+  const cb = countBullBear(primaryRows);
+  const verdict = overviewVerdict(cb.bull, cb.bear);
   // 方向基准用全部 KLINE_TF（不受当前勾选影响），与纪律面板共用同一 hz（同一 deadZone/同一基准周期）
   const tr = (hz && hz.trend) || horizonTrend(allPriceMapOf(sym), { capMin: capMin != null ? capMin : THRESH.HORIZON_CAP_MIN, deadZone: hz ? hz.deadZone : THRESH.HORIZON_DEAD_FIXED });
   const mt = macroTrend(allPriceMapOf(sym));
@@ -277,36 +532,99 @@ export function renderSrsiOverview(hz, capMin) {
     const cv = lc.cv, fv = lc.fv;
     const freshTxt = fv == null ? '—' : (fv === 0 ? '当下' : fv + '根前');
     const freshCls = fv != null && fv <= 3 ? (cv === 'buy' || cv === 'goldHook' ? 'ov-fresh-buy' : 'ov-fresh-sell') : '';
-    const crossTxt = cv === 'goldHook' ? '▲金钩' : cv === 'deathHook' ? '▼死钩' : cv === 'buy' ? '▲金叉' : cv === 'sell' ? '▼死叉' : '无';
+    const crossTxt = cv === 'goldHook' ? '▲金钩' : cv === 'deathHook' ? '▼死钩' : cv === 'buy' ? '▲破超卖' : cv === 'sell' ? '▼破超买' : '无';
     const crossCls = cv === 'goldHook' ? 'ov-hook-gold' : cv === 'deathHook' ? 'ov-hook-death' : cv === 'buy' ? 'ov-cross-buy' : cv === 'sell' ? 'ov-cross-sell' : '';
+    const crossTip = cv === 'sell' ? '破超买: K线 上破 80 超买带 → 反手看空信号（注意: 这是 K 破带, 非 K-D 死叉）'
+      : cv === 'buy' ? '破超卖: K线 下破 20 超卖带 → 反手看多信号（非 K-D 金叉）'
+      : cv === 'deathHook' ? '死钩: K 由 ≥超买 跌破超买带且近15根内 K 下穿 D → 高位死叉+跌破, 偏空'
+      : cv === 'goldHook' ? '金钩: K 由 ≤超卖 升破超卖带且近15根内 K 上穿 D → 低位金叉+突破, 偏多'
+      : '';
+    const cellTip = (crossTip + (r.reversed ? ' · ⚠ 已反转(信号意图与当前K/D相反)' : '')) || '无信号';
+    const rowDir = (() => { const lc = latestCross(r); const cv = lc.cv; if (cv === 'buy' || cv === 'goldHook') return 'buy'; if (cv === 'sell' || cv === 'deathHook') return 'sell'; return null; })();
+    const gate = cfg.srsiAux[r.tf] ? 'aux' : (auxRows.length ? auxGateStatus(rowDir, auxRows) : 'na');
+    const gateTxt = gate === 'released' ? '放行' : gate === 'vetoed' ? '否决' : gate === 'aux' ? '辅助' : '—';
+    const gateCls = gate === 'released' ? 'ov-gate-pass' : gate === 'vetoed' ? 'ov-gate-veto' : gate === 'aux' ? 'ov-gate-aux' : '';
     const eng = r.energy || { dir: null, score: 0 };
     const engCls = eng.score >= 60 ? 'ov-eng-hi' : eng.score >= 30 ? 'ov-eng-mid' : 'ov-eng-lo';
     const engTxt = eng.dir ? eng.score : '—';
+    const d = getTFData(sym, r.tf);
+    const stat = tfOverviewStat(d.c, d.l, d.h, d.t, cfg.bars, minutesOf(r.tf));
+    const tfCls = stat.chgPct != null ? (stat.chgPct > 0 ? 'up' : stat.chgPct < 0 ? 'down' : '') : '';
+    // 有数据(K线根数≥2)但 K/D 仍为 null：说明 SRSI 参数过大、预热不足（典型 7d/30d 被填了 RSI85）
+    const warnInsuf = (r.k == null && r.d == null && d.c.length >= 2);
     return `<div class="kchart-ov-row ${r.tf === cfg.mainTF ? 'ov-main' : ''}" data-tf="${r.tf}">
-      <span class="kchart-ov-tf">${r.tf}</span>
+      <span class="kchart-ov-tf ${tfCls}" data-tf="${r.tf}">${r.tf}</span>
       <span class="kchart-ov-k">${r.k != null ? r.k.toFixed(1) : '--'}</span>
       <span class="kchart-ov-d">${r.d != null ? r.d.toFixed(1) : '--'}</span>
-      <span class="kchart-ov-zone ${zoneCls[r.zone]}">${zoneLbl[r.zone]}</span>
-      <span class="kchart-ov-cross ${crossCls} ${r.reversed ? 'ov-reversed' : ''}">${crossTxt}${r.gapNow != null ? `<span class="kchart-ov-gap">${r.gapNow.toFixed(1)}${r.gapTrend === 'up' ? '↑' : r.gapTrend === 'down' ? '↓' : '–'}</span>` : ''}</span>
+      <span class="kchart-ov-zone ${zoneCls[r.zone]}">${zoneLbl[r.zone]}${warnInsuf ? `<span class="kchart-ov-warn" title="参数过大/样本不足，K/D 无法计算（可调小该周期的 RSI/Stoch 周期）">⚠</span>` : ''}</span>
+      <span class="kchart-ov-cross ${crossCls} ${r.reversed ? 'ov-reversed' : ''}" title="${cellTip}" data-tip="${cellTip}">${crossTxt}${r.gapNow != null ? `<span class="kchart-ov-gap">${r.gapNow.toFixed(1)}${r.gapTrend === 'up' ? '↑' : r.gapTrend === 'down' ? '↓' : '–'}</span>` : ''}</span>
       <span class="kchart-ov-eng ${engCls}" title="${r.energy ? r.energy.reason : ''}">${engTxt}</span>
       <span class="kchart-ov-fresh ${freshCls}">${freshTxt}</span>
+      <span class="kchart-ov-gate ${gateCls}">${gateTxt}</span>
+      <span class="kchart-ov-gear" data-tf="${r.tf}" title="查看/编辑该周期 SRSI 参数">⚙</span>
     </div>`;
   }).join('');
   box.innerHTML =
-    `<div class="kchart-ov-head-row"><span>周期</span><span>K</span><span>D</span><span>区域</span><span>穿越</span><span>能量</span><span>新鲜度</span></div>` +
+    `    <div class="kchart-ov-head-row"><span>周期</span><span>K</span><span>D</span><span>区域</span><span>破带/钩</span><span>能量</span><span>新鲜度</span><span>闸门</span><span>参数</span></div>` +
     rowHtml +
-    `<div class="kchart-ov-foot">偏多 ${bull} · 偏空 ${bear} · ${verdict}<span class="kchart-ov-trend">${trendTxt}</span></div>`;
+    `<div class="kchart-ov-foot">偏多 ${cb.bull} · 偏空 ${cb.bear} · ${verdict}${auxRows.length ? ` · 辅助放行(仅 ${auxRows.map(r => r.tf).join('/')} 同向放行/反向否决)` : ''}<span class="kchart-ov-trend">${trendTxt}</span></div>` +
+    (() => {
+      const ep = perTfSrsi(footTf, cfg.srsiByTf, cfg.srsi);
+      const auxTag = cfg.srsiAux[footTf] ? ' ·辅助' : '';
+      return `<div class="kchart-ov-footparams"><span class="kchart-ov-foottf">⚙${footTf}</span> SRSI参数: RSI${ep.rsiPeriod} / Stoch${ep.stochPeriod} / %K${ep.smoothK} / %D${ep.smoothD} / 超买${ep.overbought} · 超卖${ep.oversold}${auxTag}</div>`;
+    })();
 }
 
-// 速览表行点击 → 切换主图
+// 速览表行点击 → 切换主图；点「破带/钩」单元格 → 弹出释义（桌面悬停 title + 手机点按，与能量球一致）
 export function bindOverviewClick() {
   const box = document.getElementById('kchartOverview');
   if (!box || box.__bound) return;
   box.__bound = true;
   box.addEventListener('click', (e) => {
+    const gear = e.target.closest('.kchart-ov-gear');
+    if (gear && gear.dataset.tf) { _ovFootTf = gear.dataset.tf; openSrsiCardFor(gear.dataset.tf); return; }
+    const cell = e.target.closest('.kchart-ov-cross');
+    if (cell && cell.dataset.tip) { showOvCrossTip(cell.dataset.tip); return; }
+    const tfCell = e.target.closest('.kchart-ov-tf');
+    if (tfCell && tfCell.dataset.tf) showOvTfTip(tfCell.dataset.tf);
     const row = e.target.closest('.kchart-ov-row');
-    if (row && row.dataset.tf) setMainTF(row.dataset.tf);
+    if (row && row.dataset.tf) { _ovFootTf = row.dataset.tf; setMainTF(row.dataset.tf); }
   });
+}
+
+function showOvCrossTip(txt) {
+  let tip = document.getElementById('ovCrossTip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'ovCrossTip'; tip.className = 'ov-cross-tip'; document.body.appendChild(tip); }
+  if (tip.__txt === txt && tip.style.display === 'block') { tip.style.display = 'none'; tip.__txt = null; clearTimeout(tip.__t); return; }
+  tip.textContent = txt;
+  tip.__txt = txt;
+  tip.style.display = 'block';
+  clearTimeout(tip.__t); tip.__t = setTimeout(() => { tip.style.display = 'none'; tip.__txt = null; }, 4000);
+}
+
+// 速览周期列点击: 弹「单根回报% + 显示窗口最低/最高价」提示（参考能量球节点提示）
+function showOvTfTip(tf) {
+  let tip = document.getElementById('ovTfTip');
+  if (!tip) { tip = document.createElement('div'); tip.id = 'ovTfTip'; tip.className = 'ov-tf-tip'; document.body.appendChild(tip); }
+  const d = getTFData(cfg.symbol, tf);
+  const s = tfOverviewStat(d.c, d.l, d.h, d.t, cfg.bars, minutesOf(tf));
+  if (!s.ok) {
+    tip.innerHTML = `<div class="ov-tf-tip-head">${tf}</div><div>数据不足</div>`;
+  } else {
+    const up = s.chgPct > 0, down = s.chgPct < 0;
+    const cls = up ? 'up' : down ? 'down' : '';
+    const dirTxt = up ? '涨' : down ? '跌' : '平';
+    const pct = (s.chgPct >= 0 ? '+' : '') + s.chgPct.toFixed(2) + '%';
+    tip.innerHTML =
+      `<div class="ov-tf-tip-head">${tf} <span class="${cls}">${dirTxt}</span></div>` +
+      `<div>涨跌: <b class="${cls}">${pct}</b>（单根${tf}）</div>` +
+      `<div>区间 最低 <b>${fmtPrice(s.low)}</b> — 最高 <b>${fmtPrice(s.high)}</b></div>`;
+  }
+  const oc = document.getElementById('ovCrossTip'); if (oc) oc.style.display = 'none';
+  if (tip.__tf === tf && tip.style.display === 'block') { tip.style.display = 'none'; tip.__tf = null; clearTimeout(tip.__t); return; }
+  tip.__tf = tf;
+  tip.style.display = 'block';
+  clearTimeout(tip.__t); tip.__t = setTimeout(() => { tip.style.display = 'none'; tip.__tf = null; }, 5000);
 }
 
 // ---- 交易纪律分析面板（DOM 渲染，防 hover 重建）----
@@ -365,6 +683,10 @@ export function updateHorizonState(sym, priceMap, capMin) {
 }
 
 // 轻量实时价刷新：在 _discSig 守卫之前调用，每 800ms tick 都执行，实现真·实时
+// 价跳瞬时驱动能量球颜色（drawEnergyBall 每帧检测 + updateDiscLivePrice 写入；0.6s 内衰减）
+let _energyFlash = { t: -1e9, dir: 0 };
+let _lastFlashPrice = null;
+
 function updateDiscLivePrice(box) {
   const priceEl = box.querySelector('#kchartDiscPrice');
   if (!priceEl) return;
@@ -377,6 +699,14 @@ function updateDiscLivePrice(box) {
     const tTxt = info.toTarget != null ? ('目标 <b class="' + info.targetCls + '">' + (info.toTarget >= 0 ? '+' : '') + info.toTarget.toFixed(2) + '%</b>') : '';
     const sTxt = info.toStop != null ? ('止损 <b class="' + info.stopCls + '">' + (info.toStop >= 0 ? '+' : '') + info.toStop.toFixed(2) + '%</b>') : '';
     distEl.innerHTML = (tTxt + (tTxt && sTxt ? ' · ' : '') + sTxt) || '—';
+  }
+  // 价跳 → 驱动能量球颜色瞬时偏移（与 drawEnergyBall 每帧检测互补，确保实时）
+  if (info && isFinite(info.price)) {
+    if (_lastFlashPrice != null && info.price !== _lastFlashPrice) {
+      const now = (globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now();
+      _energyFlash = { t: now, dir: info.price > _lastFlashPrice ? 1 : -1 };
+    }
+    _lastFlashPrice = info.price;
   }
 }
 
@@ -391,24 +721,23 @@ export function renderTradeDiscipline(hz, capMin) {
   const selTfs = KLINE_TF.filter(tf => cfg.klineSel[tf]);
   if (!selTfs.length) return;
   const priceMap = {};
-  let sig = sym + '|' + cfg.mainTF + '|' + cfg.bars + '|' + cfg.srsi.rsiPeriod + '/' + cfg.srsi.stochPeriod + '|';
-  KLINE_TF.forEach(tf => {
-    const c = getTFData(sym, tf).c;
-    priceMap[tf] = c;
-    sig += tf + ':' + (c.length > 0 ? c[c.length - 1] : 0) + ';';
-  });
-  sig += '|dz:' + (hz ? hz.deadMode : 'fixed') + ':' + (hz ? hz.deadZone.toFixed(3) : '');
-  if (sig === _discSig) return;
-  _discSig = sig;
+  KLINE_TF.forEach(tf => { const c = getTFData(sym, tf).c; priceMap[tf] = c; });
 
   const deadZone = hz ? hz.deadZone : THRESH.HORIZON_DEAD_FIXED;
   const deadMode = hz ? hz.deadMode : 'fixed';
+  const _ls = (typeof globalThis !== 'undefined' && globalThis.__localTsev) ? globalThis.__localTsev.status() : null;
+  const sig = buildDiscSig(cfg, priceMap, deadMode, deadZone, _ls);
+  if (sig === _discSig) return;
+  _discSig = sig;
+
   const cap = capMin != null ? capMin : THRESH.HORIZON_CAP_MIN;
-  const analysis = analyzeTradeDiscipline(priceMap, cfg.srsi, { bars: cfg.bars, mainTF: cfg.mainTF, klineSel: cfg.klineSel, capMin: cap, deadZone, deadMode });
+  const perTf = (tf) => perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const auxTfs = Object.keys(cfg.srsiAux || {}).filter(tf => cfg.srsiAux[tf]);
+  const analysis = analyzeTradeDiscipline(priceMap, perTf, { bars: cfg.bars, mainTF: cfg.mainTF, klineSel: cfg.klineSel, capMin: cap, deadZone, deadMode, sym, auxTfs });
   if (!analysis) { box.innerHTML = '<div class="kchart-disc-empty">⏳ 数据不足</div>'; return; }
   _lastDiscAnalysis = analysis;
 
-  const { trend, multiTf, zones, confirm, entry, rules, leading, energyRows, strategy, signalLife } = analysis;
+  const { trend, multiTf, zones, confirm, entry, rules, leading, energyRows, strategy, signalLife, shortFactors } = analysis;
   const stratLabel = strategy === 'energy-leader' ? '能量领跑' : strategy === 'freshest-signal' ? '动量跟随' : '趋势跟随';
   const stratCls = strategy === 'energy-leader' ? 'strat-leader' : strategy === 'freshest-signal' ? 'strat-fresh' : 'strat-baseline';
   const dirColor = entry.dir.startsWith('看多') ? 'disc-bull' : entry.dir.startsWith('看空') ? 'disc-bear' : 'disc-neutral';
@@ -455,12 +784,123 @@ export function renderTradeDiscipline(hz, capMin) {
   }
   const evidenceOpen = cfg.discEvidenceOpen ? ' open' : '';
 
-  // ---- TSEV 数据源 / 样本量可视化（让用户直观看到权重来自全局还是本机、样本多少）----
+  // ---- TSEV 数据源 / 样本量 / 实时状态 / 前向准确度（按当前币）----
   const ti = getTsevInfo();
-  const srcLabel = ti.source === 'local' ? '本机(你的设备)' : ti.source === 'global' ? '全局(官方)' : '经典逻辑(未启用)';
-  const loopStat = (typeof globalThis !== 'undefined' && globalThis.__localTsev) ? globalThis.__localTsev.status() : null;
-  const loopTxt = loopStat ? (' · 本机loop ' + (loopStat.enabled ? '开' : '关') + ' · 本机样本 ' + (loopStat.sampleCount || 0)) : '';
-  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积；也可刷新后下载官方最新全局权重）</span></div>`;
+  const psInfo = (ti.perSym && ti.perSym[sym]) || null;
+  const srcLabel = (psInfo && psInfo.source === 'local') ? '本机(你的设备·' + sym + ')'
+    : (psInfo && psInfo.source === 'global') ? '全局(官方)'
+    : (ti.source === 'local' ? '本机(你的设备)' : ti.source === 'global' ? '全局(官方)' : '经典逻辑(未启用)');
+  let loopTxt = '';
+  let accTxt = '';
+  let dbgTxt = '';
+  try {
+    const loopStat = (typeof globalThis !== 'undefined' && globalThis.__localTsev) ? globalThis.__localTsev.status() : null;
+    if (loopStat) {
+      const fc = (psInfo && psInfo.factorCount) || loopStat.factorCount || 0;
+      const sc = loopStat.sampleCount || 0;
+      const active = loopStat.running || loopStat.backfilling;
+      const liveDot = loopStat.enabled ? '<span class="disc-tsev-live" title="本机loop 运行中（每60min采样 + 首次载入回补历史）"></span>' : '';
+      loopTxt = ` · 本机loop ${loopStat.enabled ? '开' : '关'}${liveDot}${active ? '<span class="disc-tsev-spin"></span>' : ''} · 本机样本 ${sc} · 已学因子(本币) ${fc}`;
+      if (loopStat.backfilling) {
+        const ps = loopStat.perSym || {};
+        const total = Object.keys(ps).length;
+        const done = Object.values(ps).filter(p => p && p.backfilled).length;
+        loopTxt += ` · 回补中(${done}/${total})`;
+        const cur = loopStat.progress && loopStat.progress.sym;
+        const pct = (loopStat.progress && typeof loopStat.progress.pct === 'number') ? loopStat.progress.pct : 0;
+        if (cur && ps[cur]) {
+          if (ps[cur].error) loopTxt += ` ${cur}:${ps[cur].error}`;
+          else if (ps[cur].total == null) loopTxt += ` ${cur} ${Math.round(pct * 100)}%`;
+          else loopTxt += ` ${cur} ${ps[cur].done || 0}/${ps[cur].total}`;
+        }
+      }
+      // 前向准确度（walk-forward 重放 TSEV 投票）：让用户判断是否可信
+      try {
+        const fa = globalThis.__localTsev.forwardAccuracy ? globalThis.__localTsev.forwardAccuracy(sym) : null;
+        if (fa && fa.n) {
+          const pct = Math.round(fa.acc * 100);
+          const cls = pct >= 55 ? 'disc-acc-hi' : pct >= 45 ? 'disc-acc-mid' : 'disc-acc-lo';
+          let ph = '';
+          if (fa.perHorizon) {
+            const parts = ['h4', 'd1', 'd3'].filter(h => fa.perHorizon[h] != null)
+              .map(h => `${h}:${Math.round(fa.perHorizon[h] * 100)}%`);
+            if (parts.length) ph = ` (${parts.join(' ')})`;
+          }
+          accTxt = ` · <span class="${cls}">本机前向命中率 ${pct}%(${fa.n}笔)${ph}</span>`;
+        }
+      } catch (e) {}
+      // 本机因子明细（诊断用 A）：列出已学因子态的有效样本/命中率/权重，便于肉眼看学到哪几个、质量几何
+      dbgTxt = '';
+      try {
+        const dbg = globalThis.__localTsev.debugTsev ? globalThis.__localTsev.debugTsev(sym) : null;
+        if (dbg && dbg.length) {
+          const learned = dbg.filter(d => d.passed).slice(0, 8)
+            .map(d => `${d.key.replace(/\|/g, '·')} p${d.p} n${d.n} w${d.w > 0 ? '+' : ''}${d.w}`);
+          if (learned.length) {
+            dbgTxt = `<br><span class="disc-tsev-debug">本机因子明细: ${learned.join(' | ')}</span>`;
+            if (!window.__tsevDbgT || Date.now() - window.__tsevDbgT > 15000) {
+              window.__tsevDbgT = Date.now();
+              console.log('[TSEV因子表]', sym, dbg.filter(d => d.passed).map(d => `${d.key} p=${d.p} n=${d.n} w=${d.w}`).join(' | '));
+            }
+          }
+        }
+      } catch (e) {}
+    } else {
+      const ps = loopStat.perSym || {};
+      const errs = Object.entries(ps).filter(([, p]) => p && p.error).map(([s, p]) => `${s}:${p.error}`);
+      if (errs.length) loopTxt += ` · 回补异常(${errs.join(',')})`;
+      else if (loopStat.running) loopTxt += ` · 采样中`;
+    }
+  } catch (e) { loopTxt = ''; }
+  // TSEV 是否真在发挥作用：与「无 TSEV 权重(经典)」判决对比
+  let tsevEffectTxt = 'TSEV 未启用（本机样本不足），当前即经典逻辑';
+  if (ti.source === 'local' || ti.source === 'global') {
+    try {
+      const classicA = analyzeTradeDiscipline(priceMap, perTf, { bars: cfg.bars, mainTF: cfg.mainTF, klineSel: cfg.klineSel, capMin: cap, deadZone, deadMode, weights: null, sym, auxTfs });
+      const cDir = classicA && classicA.entry ? classicA.entry.dir : '观察';
+      const cConf = classicA && classicA.entry ? classicA.entry.conf : 0;
+      const tDir = entry.dir, tConf = entry.conf;
+      const same = tDir.slice(0, 2) === cDir.slice(0, 2);
+      if (same) tsevEffectTxt = `TSEV 与经典同向，置信 ${cConf}→${tConf}（${tConf >= cConf ? '+' : ''}${tConf - cConf}）`;
+      else tsevEffectTxt = `⚡ TSEV 翻转判决：经典 ${cDir}(${cConf}) → TSEV ${tDir}(${tConf})`;
+    } catch (e) { tsevEffectTxt = 'TSEV 对比计算失败'; }
+  }
+  // 行情中立护栏提示：权重只学到单一方向(如仅上涨行情) → 已回退经典逻辑
+  let unbalTxt = '';
+  try {
+    const _curW = getTsevWeights(sym);
+    if (_curW && _curW.__unbalanced && Object.keys(_curW).filter(k => !k.startsWith('__')).length) {
+      const _posW = _curW.__pos || 0, _negW = _curW.__neg || 0;
+      if (_posW < 1e-9 && _negW < 1e-9) {
+        unbalTxt = `<br><span class="disc-tsev-unbal">⚠ TSEV 暂无有效方向样本，已回退经典逻辑</span>`;
+      } else {
+        const _side = (_posW > _negW) ? '涨' : '跌';
+        unbalTxt = `<br><span class="disc-tsev-unbal">⚠ TSEV 仅学到看${_side}方向(样本偏${_side}行情)，可给看${_side}、暂不给反向；跨涨跌累积后变完整</span>`;
+      }
+    }
+  } catch (e) {}
+  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}${accTxt}<br><span class="disc-tsev-effect">${tsevEffectTxt}</span>${unbalTxt}${dbgTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积 + 首次载入全部币种近4年历史回补；桌面重训后可导出 JSON 在手机导入共享）</span></div>`;
+
+  // ---- 信号指示：方向来自经典或 TSEV，避免「看多」头部与「信号不足」矛盾 ----
+  const _dirLong = entry.dir.startsWith('看多');
+  const _dirShort = entry.dir.startsWith('看空');
+  const _dirClear = _dirLong || _dirShort;
+  const _tsevAct = analysis.tsev ? analysis.tsev.actionable : null; // null = 未启用
+  let _sigCls, _sigTxt;
+  if (_dirClear) {
+    if (_tsevAct === true) { _sigCls = 'disc-signal-go'; _sigTxt = '✅ 可交易信号（TSEV 置信达标、方向明确）'; }
+    else if (_tsevAct === false) { _sigCls = 'disc-signal-wait'; _sigTxt = '⚠ 方向' + (_dirLong ? '偏多' : '偏空') + '（TSEV 置信不足，谨慎轻仓）'; }
+    else { _sigCls = 'disc-signal-wait'; _sigTxt = '⏳ 方向' + (_dirLong ? '偏多' : '偏空') + '（经典逻辑，TSEV 未启用）'; }
+  } else {
+    _sigCls = 'disc-signal-wait'; _sigTxt = '⏸ 观望 / 信号不足（样本少 · 置信低 · 方向分歧）';
+  }
+
+  const pathP0 = (function () { const li = discLiveInfo(cfg.symbol, analysis); return li ? li.price : (analysis.entry.target || 0); })();
+  const pathForecast = pricePathForecast(analysis, pathP0, { horizonBars: 12 });
+  const pathBasisHtml = pathForecast.pullbackBasis.join(' · ');
+  const pathDirWord = pathForecast.bullish ? '做多' : (pathForecast.dir.indexOf('看空') >= 0 ? '做空' : '观望');
+  const pathDirCls = pathForecast.bullish ? 'disc-pos' : (pathForecast.dir.indexOf('看空') >= 0 ? 'disc-neg' : 'disc-neutral');
+  const pathDirBadge = `<span class="disc-dir-badge ${pathDirCls}">方向: ${pathDirWord}</span>`;
 
   box.innerHTML = `
     <div class="kchart-disc-header">
@@ -475,9 +915,39 @@ export function renderTradeDiscipline(hz, capMin) {
           <span class="disc-conf ${confColor}">${entry.confLabel} · ${entry.conf}</span>
           <span class="disc-risk">${entry.risk}</span>
         </div>
+        <div class="disc-signal ${_sigCls}">${_sigTxt}</div>
         <div class="disc-reason">${esc(entry.reason)}</div>
         <div class="disc-nowprice">当前价: <span id="kchartDiscPrice">—</span> <span id="kchartDiscDist" class="disc-dist"></span></div>
-        <div class="disc-plan"><span class="disc-plan-item">入场: ${entry.entryCue}</span><span class="disc-plan-item">目标: ${entry.target != null ? entry.target.toFixed(2) : '—'}</span><span class="disc-plan-item">止损: ${entry.stop != null ? entry.stop.toFixed(2) : '—'}</span></div>
+        <div class="disc-plan"><span class="disc-plan-item">入场: ${entry.entryCue}</span><span class="disc-plan-item">目标: ${entry.target != null ? entry.target.toFixed(2) : '—'}</span><span class="disc-plan-item">止损: ${entry.stop != null ? entry.stop.toFixed(2) : '—'}</span><span class="disc-plan-item disc-plan-size">建议仓位: ×${analysis.sizing.mult}</span></div>
+      </div>
+
+      <!-- ①½ 仓位阶梯（长×中×短 三周期对齐） -->
+      <div class="disc-block disc-block-sizing ${analysis.sizing.cls}">
+        <div class="disc-blk-label">📐 趋势×短线 仓位建议</div>
+        <div class="disc-sizing-main">宏观 ${analysis.longUp === true ? '↑看多' : analysis.longUp === false ? '↓看空' : '—中性'} · 中(4h) ${trend.up === true ? '↑看多' : trend.up === false ? '↓看空' : '—横盘'} · 短(SRSI·≤4h含4h+钩反转) ${multiTf.verdict} → <b>${analysis.sizing.label}</b>（×${analysis.sizing.mult}）</div>
+        <div class="disc-sizing-hint">${esc(analysis.sizing.hint)}</div>
+      </div>
+
+      <!-- ①¾ 短线多空能量场（≤4h 多维加权可视化卡片） -->
+      <div class="disc-block disc-block-energyball">
+        <div class="disc-blk-label">短线多空能量场（≤4h 多维加权·含钩反转）</div>
+        <div class="disc-energy-wrap">
+          <canvas id="discEnergyBall" width="300" height="300"></canvas>
+          <div id="discEnergyTip" class="disc-energy-tip" style="display:none"></div>
+        </div>
+        <div class="disc-energy-verdict">${shortFactors && shortFactors.length ? ('短线共识: ' + multiTf.verdict + '（加权' + (multiTf.ratio * 100).toFixed(0) + '%多）' + (multiTf.hookOverride ? ' · ⚠ 低位带+1h钩反转动能' : '')) : '数据不足'}</div>
+        <div class="disc-energy-legend">环: 弧长=K位置(满圈100) · 绿涨(K&gt;D)红跌 · 线粗=差距|K−D|大 · ◆钩●钗 · 淡绿超卖带/淡红超买带 · 速览表「破带/钩」列非K-D交叉(破超买=K破80/破超卖=K破20)</div>
+        <div class="disc-energy-hint">桌面悬停 / 手机点节点看五因子明细</div>
+      </div>
+
+      <!-- ①¾⅛ 短线价格路径预测（主路径·止盈 + 反向·止损备选） -->
+      <div class="disc-block disc-block-path">
+        <div class="disc-blk-label">短线价格路径预测（主路径·止盈 + 反向·止损备选） ${pathDirBadge}</div>
+        <div class="disc-path-wrap">
+          <canvas id="discPricePath" width="320" height="200"></canvas>
+          <div id="discPathTip" class="disc-path-tip" style="display:none"></div>
+        </div>
+        <div class="disc-path-basis">${pathBasisHtml}</div>
       </div>
 
       <!-- ② 市场情境 -->
@@ -486,12 +956,13 @@ export function renderTradeDiscipline(hz, capMin) {
         <div class="disc-regime">${trendEmoji} ${regimeLabel} · EMA(${trend.tf}) ${trend.up === true ? '↑' : trend.up === false ? '↓' : '—'} ${trend.spreadPct.toFixed(2)}%${deadTxt}</div>
         <div class="disc-strategy ${stratCls}">策略: ${stratLabel}</div>
       </div>
+      ${analysis.contraTrade ? `<div class="disc-counter">⚠ 逆势操作：长周期趋势 ${trend.up === true ? '向上' : '向下'} 但短线动能反向，逆势单仅限轻仓/小仓位并严格止损</div>` : ''}
 
       <!-- ③ 依据 / ④ 时机 / ⑤ 风险（三带） -->
       <div class="disc-bandrow">
         <div class="disc-band disc-band-evidence">
           <div class="disc-blk-label">方向依据</div>
-          <div class="disc-band-txt">EMA(${trend.tf}) ${trend.up === true ? '↑ 看多基准' : trend.up === false ? '↓ 看空基准' : '横盘观望'} ${trend.spreadPct.toFixed(2)}%</div>
+          <div class="disc-band-txt">${analysis.basisNote}</div>
         </div>
         <div class="disc-band disc-band-timing">
           <div class="disc-blk-label">时机(动能)</div>
@@ -513,7 +984,7 @@ export function renderTradeDiscipline(hz, capMin) {
             ${analysis.conflictNote ? `<div class="disc-conflict">⚠ ${analysis.conflictNote}</div>` : ''}
             ${analysis.macroConflict ? `<div class="disc-conflict">${analysis.macroConflict} 已扣 ` + (entry.confParts.find(p => p.includes('宏观反向')) || '') + `</div>` : ''}
             <div class="disc-zone">${zones.dailyTf === '1d' ? '日线' : (zones.dailyTf || '日线')} ${zoneEmoji[zones.daily] || '—'} · 主周期 ${zoneEmoji[zones.main] || '—'}</div>
-            <div class="disc-consensus">多周期: 偏多${multiTf.bull} 偏空${multiTf.bear} → ${multiTf.verdict}</div>
+            <div class="disc-consensus">多周期(≤4h加权): 偏多${multiTf.bull} 偏空${multiTf.bear} · 加权${(multiTf.ratio * 100).toFixed(0)}%多 → ${multiTf.verdict} · 偏多[${multiTf.bullTfs.join('/')}] 偏空[${multiTf.bearTfs.join('/')}]</div>
             <div class="disc-confirm">入场确认: ${confirm.contrarian ? '⚠ 反向信号' : (confirm.confirmed ? '✅ 已确认' : '⏳ 等待')} ${confirm.tf ? '(' + confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' ' + confirm.fresh + '根前' + (confirm.isHook ? ' [钩]' : '') + ')' : ''}</div>
             ${signalLife ? `<div class="disc-life">信号生命周期: <b class="${signalLife.cls}">${signalLife.txt}</b> · 信号置信 <b>${signalLife.conf}</b> · 能量 ${signalLife.score}</div>` : ''}
             ${tradeBarHtml}
@@ -526,6 +997,482 @@ export function renderTradeDiscipline(hz, capMin) {
       ${tsevBar}
     </div>
   `;
+
+  initEnergyBall(box, shortFactors, multiTf, sym);
+  initPricePath(box, analysis, sym, pathP0);
+}
+
+// ============ 短线多空能量场（Canvas 粒子可视化卡片）============
+const fmt2 = v => (v == null || !isFinite(v)) ? '—' : (Math.round(v * 100) / 100).toString();
+
+// 布局（纯函数，可单测）：中心球 + 环绕节点 + 连线。返回坐标模型供绘制/单测。
+export function energyBallLayout(shortFactors, multiTf, W, H) {
+  W = W || 300; H = H || 300;
+  const cx = W / 2, cy = H / 2;
+  const wb = (multiTf && multiTf.wbull) || 0, we = (multiTf && multiTf.wbear) || 0;
+  const tot = wb + we;
+  const ratio = tot > 0 ? wb / tot : 0.5;
+  const s = tot > 0 ? (wb - we) / tot : 0;        // 净强度 ∈ [-1,1]
+  const verdict = (multiTf && multiTf.verdict) || '分歧';
+  const orbR = 26 + Math.abs(s) * 22;
+  const nodes = (shortFactors || []).filter(f => f.dir).map(f => Object.assign({}, f));
+  const n = nodes.length;
+  const ringR = Math.min(W, H) * 0.36;
+  const maxW = nodes.reduce((m, f) => Math.max(m, f.w), 0) || 1;
+  nodes.forEach((f, i) => {
+    const ang = -Math.PI / 2 + (n > 1 ? (i / n) * Math.PI * 2 : 0);
+    f.ang = ang;
+    f.x = cx + Math.cos(ang) * ringR;
+    f.y = cy + Math.sin(ang) * ringR;
+    f.r = 6 + (f.w / maxW) * 14;
+    f.color = f.dir === 'bull' ? '#00E676' : '#FF5252';
+  });
+  const edges = nodes.map(f => ({ tf: f.tf, x: f.x, y: f.y, w: f.w, maxW, dir: f.dir }));
+  return { cx, cy, orbR, strength: s, ratio, verdict, nodes, edges, W, H };
+}
+
+// 能量球节点命中检测（纯函数, 可单测）：模型坐标空间(0~W)内的命中判定。
+// 直距放大到 r+14 命中；未中则环带内按角度就近(触屏容错)。返回命中节点或 null。
+export function energyBallHitTest(model, mx, my) {
+  let best = null, bestD = Infinity;
+  for (const f of (model.nodes || [])) {
+    const d = Math.hypot(f.x - mx, f.y - my);
+    if (d <= f.r + 14 && d < bestD) { best = f; bestD = d; }
+  }
+  if (!best) {
+    const cx = model.cx, cy = model.cy, ringR = (model.W || 300) * 0.36;
+    const d = Math.hypot(mx - cx, my - cy);
+    if (d >= ringR - 40 && d <= ringR + 44) {
+      const ang = Math.atan2(my - cy, mx - cx);
+      let bestDA = Infinity;
+      for (const f of (model.nodes || [])) {
+        const fa = Math.atan2(f.y - cy, f.x - cx);
+        let da = Math.abs(ang - fa); if (da > Math.PI) da = 2 * Math.PI - da;
+        if (da < 0.5 && da < bestDA) { bestDA = da; best = f; }
+      }
+    }
+  }
+  return best;
+}
+
+// 反转内点颜色（与节点相反）：看多绿→红，看空红→绿（能量球内点渲染用，纯函数可测）
+export function reversalInnerColor(dir) {
+  return dir === 'bull' ? [255, 82, 82] : [0, 230, 118];
+}
+
+// KD 环形进度：位置占比(满圈=100) 与 带区判定（纯函数可测）
+export function kdSweepFrac(kd) {
+  const v = Number(kd);
+  if (!isFinite(v)) return 0;
+  return Math.max(0, Math.min(100, v)) / 100;
+}
+export function kdZone(kd, ob, os) {
+  const O = (ob != null) ? ob : DEFAULT_SRSI.overbought;
+  const S = (os != null) ? os : DEFAULT_SRSI.oversold;
+  const v = Number(kd);
+  if (!isFinite(v)) return 'neutral';
+  if (v >= O) return 'overbought';
+  if (v <= S) return 'oversold';
+  return 'neutral';
+}
+
+// 绘制一帧（ctx 已按 DPR scale）。粒子/脉冲由 t 驱动；price 用于价跳微调制。
+export function drawEnergyBall(ctx, model, opts) {
+  const o = opts || {};
+  const t = o.t || 0;
+  const price = (o.price != null) ? o.price : null;
+  const W = model.W || 300, H = model.H || 300;
+  const { cx, cy, orbR, strength, nodes, edges, verdict } = model;
+  ctx.clearRect(0, 0, W, H);
+
+  // 背景旋转虚线环
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(t * 0.3);
+  ctx.strokeStyle = 'rgba(255,107,53,0.18)'; ctx.lineWidth = 1; ctx.setLineDash([4, 8]);
+  ctx.beginPath(); ctx.arc(0, 0, Math.min(W, H) * 0.42, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+
+  // 连线（粗细 ∝ 权重）
+  edges.forEach(e => {
+    const a = e.w / (e.maxW || 1);
+    ctx.strokeStyle = e.dir === 'bull' ? `rgba(0,230,118,${0.15 + a * 0.5})` : `rgba(255,82,82,${0.15 + a * 0.5})`;
+    ctx.lineWidth = 1 + a * 4;
+    ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(e.x, e.y); ctx.stroke();
+  });
+
+  // 能量粒子（绕球漂移，颜色随 verdict；分歧=灰散态: 灰、更散、更暗）
+  const isDiv = verdict === '分歧';
+  const pc = isDiv ? '120,130,150' : verdict === '一致偏多' ? '0,230,118' : '255,82,82';
+  const NP = 60, base = Math.min(W, H);
+  for (let i = 0; i < NP; i++) {
+    const ph = i * 2.39996;
+    const rr = isDiv
+      ? base * (0.08 + ((i * 13) % Math.round(base * 0.42)) / base)
+      : base * 0.10 + ((i * 7) % (base * 0.30));
+    const ang = ph + t * (isDiv ? (0.1 + (i % 7) * 0.03) : (0.2 + (i % 5) * 0.05));
+    const px = cx + Math.cos(ang) * rr, py = cy + Math.sin(ang) * rr;
+    const alpha = (isDiv ? 0.12 : 0.25) + (isDiv ? 0.1 : 0.25) * Math.sin(t * 2 + i);
+    ctx.fillStyle = `rgba(${pc},${Math.max(0, alpha)})`;
+    ctx.beginPath(); ctx.arc(px, py, isDiv ? 1.0 : 1.2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  // 中心球（脉冲 + 价跳微调制 + 价跳瞬时颜色偏移）
+  const nowMs = (globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now();
+  if (price != null) {
+    if (model._lp != null && price !== model._lp) _energyFlash = { t: nowMs, dir: price > model._lp ? 1 : -1 };
+    model._lp = price;
+  }
+  const flashAge = (nowMs - _energyFlash.t) / 1000;
+  let baseCol = strength > 0.05 ? [0, 230, 118] : strength < -0.05 ? [255, 82, 82] : [150, 160, 180];
+  if (flashAge >= 0 && flashAge < 0.6) {
+    const k = 1 - flashAge / 0.6;
+    const tgt = _energyFlash.dir > 0 ? [0, 230, 118] : [255, 82, 82];
+    baseCol = baseCol.map((c, i) => Math.round(c + (tgt[i] - c) * 0.7 * k));
+  }
+  const col = baseCol.join(',');
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
+  const priceBoost = price != null ? 0.12 * Math.sin(t * 6) : 0;
+  const r = orbR * (1 + 0.06 * pulse + priceBoost);
+  const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r);
+  grad.addColorStop(0, `rgba(${col},0.95)`);
+  grad.addColorStop(0.6, `rgba(${col},0.5)`);
+  grad.addColorStop(1, `rgba(${col},0.05)`);
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = `rgba(${col},0.9)`; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // 中心净强度%
+  ctx.fillStyle = '#0A0E14';
+  ctx.font = 'bold 12px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText((strength * 100).toFixed(0), cx, cy);
+  ctx.textBaseline = 'alphabetic';
+
+  // 节点 + 标签
+  nodes.forEach(f => {
+    ctx.fillStyle = f.color; ctx.shadowColor = f.color; ctx.shadowBlur = 8;
+    ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    // 反转信号：球内显示相反颜色的脉冲小点（绿→红 / 红→绿），白圈描边保证对比
+    if (f.reversed) {
+      const ip = 0.85 + 0.15 * Math.sin(t * 4);
+      const ir = f.r * 0.42 * ip;
+      const [ir_r, ir_g, ir_b] = reversalInnerColor(f.dir);
+      ctx.save();
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r * 0.82, 0, Math.PI * 2); ctx.clip();
+      ctx.fillStyle = `rgba(${ir_r},${ir_g},${ir_b},0.95)`;
+      ctx.beginPath(); ctx.arc(f.x, f.y, ir, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(f.x, f.y, ir, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+    // 球外 KD 环形进度虚线（无文字）：弧长=K在0-100位置；颜色=K>D涨(绿)/K<D跌(红)/平(灰)；线宽∝|K-D|；端点◆钩/●钗；带区0-20%淡绿·80-100%淡红
+    if (f.k != null && f.d != null && isFinite(f.k) && isFinite(f.d)) {
+      const kd = Math.max(0, Math.min(100, f.k));
+      const ringR = f.r + 5;
+      const startA = Math.PI;                                  // 球左侧(9点)起
+      const endA = startA + kdSweepFrac(kd) * Math.PI * 2;
+      const kUp = f.k > f.d, kDn = f.k < f.d;
+      const ac = kUp ? '0,230,118' : (kDn ? '255,82,82' : '150,160,180');
+      const inBand = kdZone(kd) !== 'neutral';
+      const lw = 1.2 + Math.min(Math.abs(f.k - f.d) / 8, 3);
+      // 0-100 淡底轨道
+      ctx.strokeStyle = 'rgba(120,130,150,0.18)'; ctx.lineWidth = 1; ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(f.x, f.y, ringR, 0, Math.PI * 2); ctx.stroke();
+      // 带区底色：0-20% 超卖淡绿 / 80-100% 超买淡红
+      ctx.strokeStyle = 'rgba(0,230,118,0.22)';
+      ctx.beginPath(); ctx.arc(f.x, f.y, ringR, startA, startA + 0.2 * Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,82,82,0.22)';
+      ctx.beginPath(); ctx.arc(f.x, f.y, ringR, startA + 0.8 * Math.PI * 2, startA + Math.PI * 2); ctx.stroke();
+      // 20%/80% 刻度
+      ctx.strokeStyle = 'rgba(200,210,230,0.5)'; ctx.lineWidth = 1;
+      [0.2, 0.8].forEach(p => { const a = startA + p * Math.PI * 2; ctx.beginPath(); ctx.moveTo(f.x + Math.cos(a) * (ringR - 2), f.y + Math.sin(a) * (ringR - 2)); ctx.lineTo(f.x + Math.cos(a) * (ringR + 2), f.y + Math.sin(a) * (ringR + 2)); ctx.stroke(); });
+      // 进度弧（虚线）
+      ctx.strokeStyle = `rgba(${ac},${inBand ? 0.95 : 0.8})`; ctx.lineWidth = lw; ctx.setLineDash([3, 4]);
+      ctx.beginPath(); ctx.arc(f.x, f.y, ringR, startA, endA); ctx.stroke();
+      ctx.setLineDash([]);
+      // 端点：钩=◆菱形 / 钗=●圆点（带内脉冲）
+      const tp = inBand ? (0.85 + 0.15 * Math.sin(t * 4)) : 1;
+      const tx = f.x + Math.cos(endA) * ringR, ty = f.y + Math.sin(endA) * ringR;
+      ctx.fillStyle = `rgba(${ac},1)`;
+      if (f.isHook) {
+        const s = 3 * tp; ctx.beginPath(); ctx.moveTo(tx, ty - s); ctx.lineTo(tx + s, ty); ctx.lineTo(tx, ty + s); ctx.lineTo(tx - s, ty); ctx.closePath(); ctx.fill();
+      } else {
+        ctx.beginPath(); ctx.arc(tx, ty, 2.2 * tp, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.fillStyle = '#E8ECF0'; ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    ctx.fillText(f.tf, f.x, f.y - f.r - 6);
+    ctx.fillText((f.dir === 'bull' ? '▲' : '▼') + f.w.toFixed(1), f.x, f.y + f.r + 10);
+  });
+}
+
+let _energyRaf = 0;
+function initEnergyBall(box, shortFactors, multiTf, sym) {
+  if (_energyRaf) { globalThis.cancelAnimationFrame && globalThis.cancelAnimationFrame(_energyRaf); _energyRaf = 0; }
+  const cv = box.querySelector('#discEnergyBall');
+  if (!cv) return;
+  if (!shortFactors || !shortFactors.length) { cv.style.display = 'none'; return; }
+  cv.style.display = '';
+  const W = 300, H = 300;
+  const model = energyBallLayout(shortFactors, multiTf, W, H);
+  const dpr = Math.max(1, globalThis.devicePixelRatio || 1);
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const tip = box.querySelector('#discEnergyTip');
+  // 命中: 直距放大到 r+14; 未中则环带内按角度就近(触屏容错)。
+  // 坐标转换在每次事件时实时取 getBoundingClientRect, 避免首屏布局未稳定时 rect 失准导致点节点误判为整体共识。
+  const hitTest = (clientX, clientY) => {
+    const rc = cv.getBoundingClientRect();
+    const sc = (model.W || 300) / (rc.width || model.W || 300);
+    const mx = (clientX - rc.left) * sc, my = (clientY - rc.top) * sc;
+    const dx = clientX - rc.left, dy = clientY - rc.top;
+    return { hit: energyBallHitTest(model, mx, my), dx, dy };
+  };
+  const showTip = (hit, dx, dy, bottom) => {
+    if (!tip || !hit) return;
+    const gapTxt = hit.gapTrend === 'up' ? '拉大(增强)' : hit.gapTrend === 'down' ? '收窄(衰减)' : '持平';
+    tip.style.display = 'block';
+    if (bottom) {
+      // 移动端：固定在卡片底部居中，避免小屏浮层跟随手指超出可视区（即「下面文字提示」）
+      tip.style.left = '50%'; tip.style.transform = 'translateX(-50%)';
+      tip.style.top = 'auto'; tip.style.bottom = '4px';
+    } else {
+      tip.style.transform = ''; tip.style.bottom = 'auto';
+      tip.style.left = Math.min(dx + 10, rect.width - 140) + 'px';
+      tip.style.top = (dy + 8) + 'px';
+    }
+    tip.innerHTML = `<b>${hit.tf}</b> ${hit.dir === 'bull' ? '▲多' : '▼空'} · 权重 ${hit.w.toFixed(2)}<br>信号:${hit.signal || '—'}${hit.isHook ? ' [钩]' : ''}${hit.reversed ? ' 已反转' : ''}<br>K ${fmt2(hit.k)} / D ${fmt2(hit.d)} · |K-D| ${hit.gap != null ? fmt2(Math.abs(hit.gap)) : '—'}<br>KD间距趋势: ${gapTxt}<br>新鲜度: ${hit.fresh != null ? hit.fresh + '根前' : '—'}`;
+  };
+  // 桌面: 鼠标悬停显示；移动端: 点击(tap)切换显示。click 在所有设备都可靠触发，不依赖 hover 能力检测
+  let shownKey = null;
+  cv.addEventListener('pointermove', (e) => {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    const { hit, dx, dy } = hitTest(e.clientX, e.clientY);
+    if (hit) showTip(hit, dx, dy); else if (tip) tip.style.display = 'none';
+  });
+  cv.addEventListener('pointerleave', (e) => {
+    if ((!e.pointerType || e.pointerType === 'mouse') && tip) { tip.style.display = 'none'; shownKey = null; }
+  });
+  cv.addEventListener('click', (e) => {
+    const { hit, dx, dy } = hitTest(e.clientX, e.clientY);
+    const key = hit ? hit.tf : 'overview';
+    if (tip && tip.style.display === 'block' && shownKey === key) { tip.style.display = 'none'; shownKey = null; return; } // 再点同一目标→关闭
+    if (hit) { showTip(hit, dx, dy, true); shownKey = hit.tf; }
+    else { showOverviewTip(); shownKey = 'overview'; }
+  });
+  const showOverviewTip = () => {
+    if (!tip) return;
+    const v = (multiTf && multiTf.verdict) || '分歧';
+    tip.style.display = 'block';
+    tip.style.left = '50%'; tip.style.transform = 'translateX(-50%)';
+    tip.style.top = 'auto'; tip.style.bottom = '4px';
+    tip.innerHTML = `<b>整体共识</b> ${v}<br>加权多空比 ${multiTf ? (multiTf.ratio * 100).toFixed(0) + '%多' : '—'}<br>共 ${model.nodes.length} 个短周期因子 · 点环上节点看明细`;
+  };
+
+  const getPrice = () => {
+    try { const S = globalThis.window && globalThis.window.S; const p = S && S.prices && S.prices[sym]; return p ? p.last : null; } catch (e) { return null; }
+  };
+  const start = (globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now();
+  function frame(now) {
+    const tt = ((globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now() - start) / 1000;
+    drawEnergyBall(ctx, model, { t: tt, price: getPrice(), W, H });
+    _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
+  }
+  _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
+}
+
+// ============ 短线价格路径预测（主路径·止盈 + 反向·止损备选 + ATR 扇带）============
+
+// 纯函数（可单测）：基于已实现信号推导预测路径要素与回调概率/依据
+export function pricePathForecast(analysis, price, opts) {
+  opts = opts || {};
+  const horizon = opts.horizonBars || 12;
+  const fanK = opts.fanK != null ? opts.fanK : 1.5;
+  const entry = (analysis && analysis.entry) || {};
+  const multiTf = (analysis && analysis.multiTf) || { ratio: 0.5, verdict: '分歧', hookOverride: false };
+  const ratio = (multiTf.ratio != null && isFinite(multiTf.ratio)) ? multiTf.ratio : 0.5;
+  const verdict = (multiTf.verdict || '分歧');
+  let dir = entry.dir || '观望';
+  let target = entry.target != null && isFinite(entry.target) ? entry.target : (price != null ? price : 0);
+  let support = entry.stop != null && isFinite(entry.stop) ? entry.stop : (price != null ? price : 0);
+  // 钩反转: 近线段(≥4h极值带+≤1h钩) → 短线预测改以 SRSI 共识方向呈现(均值回归/见顶回落), 不盲从趋势决策
+  if (multiTf.hookOverride) {
+    const atrP = (analysis && isFinite(analysis.atrP)) ? analysis.atrP : 0.4;
+    const atrAbs = price != null ? price * atrP / 100 : 0;
+    if (verdict === '一致偏空') { dir = '看空'; target = price != null ? price - 1.5 * atrAbs : target; support = price != null ? price + 1.5 * atrAbs : support; }
+    else if (verdict === '一致偏多') { dir = '看多'; target = price != null ? price + 1.5 * atrAbs : target; support = price != null ? price - 1.5 * atrAbs : support; }
+  }
+  const shortFactors = (analysis && analysis.shortFactors) || [];
+  const obTfs = shortFactors.filter(f => f.k != null && f.k >= 80).length;
+  const obShare = shortFactors.length ? obTfs / shortFactors.length : 0;
+  let pb = 0.15 + 0.30 * obShare + 0.40 * (1 - ratio);
+  if (dir.indexOf('观望') >= 0) pb = Math.max(pb, 0.5);
+  pb = Math.max(0, Math.min(0.85, pb));
+  const strength = Math.abs(ratio - 0.5) * 2;        // 0(完全分歧)~1(强单边)，等于能量球净强度 |wbull−wbear|/(wbull+wbear)
+  const uncertainty = 1 - Math.abs(2 * pb - 1);      // 0(确定)~1(50/50)，弱信号→更大
+  const weak = (verdict === '分歧') || strength < 0.3;
+  const conflictNote = (analysis && analysis.conflictNote) || null;
+  const reason = (entry && entry.reason) || '';
+  const shortReason = multiTf.hookOverride ? '短线段反转(≥4h极值带+≤1h钩)→均值回归' : reason.split('；')[0];
+  const basis = [];
+  if (shortReason) basis.push(`判${dir}：${shortReason}`);
+  if (obTfs > 0) basis.push(`短周期超买 ${obTfs}/${shortFactors.length} 个TF K≥80`);
+  basis.push(`短周期加权共识 ${(ratio * 100).toFixed(0)}% (${verdict})`);
+  if (conflictNote && !multiTf.hookOverride) basis.push(`趋势优先→判${dir}：${conflictNote}`);
+  if ((dir.indexOf('看空') >= 0 && verdict === '一致偏多') || (dir.indexOf('看多') >= 0 && verdict === '一致偏空'))
+    basis.push(`短周期共识(${verdict}) 与判${dir}相反 → 见首行原因`);
+  if (support != null && price != null) basis.push(`ATR支撑≈${support.toFixed(2)} (p−1.5×ATR)`);
+  if (weak) basis.push('信号弱·双向可能(扇带加宽)');
+  const atrP = analysis && isFinite(analysis.atrP) ? analysis.atrP : (price ? 0.4 : 0);
+  const atrAbs = price != null ? price * atrP / 100 : 0;
+  return {
+    dir, price: price != null ? price : (target + support) / 2, target, support,
+    atrP, atrAbs, horizon, fanK, pullbackProb: pb, pullbackBasis: basis,
+    bullish: dir.indexOf('看多') >= 0, strength, uncertainty, weak, conflictNote
+  };
+}
+
+// 绘制（Canvas，rAF 驱动）：ATR 扇带(按不确定性加宽) + 主路径(绿·止盈) + 反向路径(红虚·止损) + 流动粒子 + 止盈/支撑线
+export function drawPricePath(ctx, model, opts) {
+  const o = opts || {};
+  const t = o.t || 0;
+  const W = model.W || 320, H = model.H || 200;
+  const price = model.price, target = model.target, support = model.support;
+  const atrAbs = Math.max(model.atrAbs || 0, (price || 0) * 0.001);   // 兜底 0.1% 价，避免零ATR退化成顶部直线
+  const horizon = model.horizon || 12;
+  const fanK = model.fanK || 1.5;
+  const pb = (model.pullbackProb != null) ? model.pullbackProb : 0;
+  ctx.clearRect(0, 0, W, H);
+  const padL = 8, padR = 76, padT = 14, padB = 18;
+  const x0 = padL, x1 = W - padR;
+  const ease = (u) => u * u * (3 - 2 * u);
+  const N = 40;
+  const uncertainty = model.uncertainty != null ? model.uncertainty : 0.5;
+  const wUp = 1 - pb, wDown = pb;
+  // 期望价格中心：主/反路径按概率混合 → 弱信号(分歧)时趋平、扇带加宽（与能量球净强度联动）
+  const expP = (u) => price + (target - price) * ease(u) * wUp + (support - price) * ease(u) * wDown;
+  const halfW = (u) => fanK * atrAbs * Math.sqrt(u) * (1 + 0.8 * uncertainty);
+  const xOf = (i) => x0 + (i / horizon) * (x1 - x0);
+  // 竖直范围：纳入路径与扇带，并设最小范围（观望/零ATR 时仍为可见对称锥，不退化为顶部直线）
+  let pmin = Math.min(price, target, support, expP(1) - halfW(1));
+  let pmax = Math.max(price, target, support, expP(1) + halfW(1));
+  const minRange = Math.max(atrAbs * fanK * 1.4, (price || 1) * 0.002, 1e-6);
+  if (pmax - pmin < minRange) { const mid = (pmax + pmin) / 2; pmin = mid - minRange / 2; pmax = mid + minRange / 2; }
+  const range = pmax - pmin;
+  const yOf = (p) => padT + (pmax - p) / range * (H - padT - padB);
+  // 扇带（以期望价为中心，宽度随 sqrt 展开并按不确定性加宽）
+  const upper = [], lower = [];
+  for (let i = 0; i <= N; i++) {
+    const u = i / N, tt = u * horizon, c = expP(u), h = halfW(u);
+    upper.push([xOf(tt), yOf(c + h)]);
+    lower.push([xOf(tt), yOf(c - h)]);
+  }
+  const grad = ctx.createLinearGradient(x0, 0, x1, 0);
+  grad.addColorStop(0, 'rgba(0,230,118,0.05)');
+  grad.addColorStop(1, 'rgba(255,82,82,0.18)');
+  ctx.fillStyle = grad;
+  ctx.beginPath(); ctx.moveTo(upper[0][0], upper[0][1]);
+  for (const p of upper) ctx.lineTo(p[0], p[1]);
+  for (let i = lower.length - 1; i >= 0; i--) ctx.lineTo(lower[i][0], lower[i][1]);
+  ctx.closePath(); ctx.fill();
+  // 主路径 → 止盈（绿实线发光，方向无关：做多=上、做空=下）
+  ctx.strokeStyle = 'rgba(0,230,118,0.95)'; ctx.lineWidth = 2;
+  ctx.shadowColor = 'rgba(0,230,118,0.6)'; ctx.shadowBlur = 6;
+  ctx.beginPath();
+  for (let i = 0; i <= N; i++) { const u = i / N, x = xOf(u * horizon), y = yOf(price + (target - price) * ease(u)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.stroke(); ctx.shadowBlur = 0;
+  // 反向路径 → 止损（红虚线）
+  ctx.strokeStyle = 'rgba(255,82,82,0.9)'; ctx.lineWidth = 1.5; ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  for (let i = 0; i <= N; i++) { const u = i / N, x = xOf(u * horizon), y = yOf(price + (support - price) * ease(u)); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+  ctx.stroke(); ctx.setLineDash([]);
+  // 流动粒子
+  const NP = 40;
+  for (let i = 0; i < NP; i++) {
+    const u = ((i / NP) + (t * 0.15)) % 1, tt = u * horizon;
+    const c = expP(u), h = halfW(u);
+    const off = (i % 2 ? 1 : -1) * h * (0.3 + 0.6 * ((i * 7) % 10) / 10);
+    const x = xOf(tt), y = yOf(c + off);
+    const col = off >= 0 ? '0,230,118' : '255,82,82';
+    const a = 0.3 + 0.3 * Math.sin(t * 3 + i);
+    ctx.fillStyle = `rgba(${col},${Math.max(0, a)})`;
+    ctx.beginPath(); ctx.arc(x, y, 1, 0, Math.PI * 2); ctx.fill();
+  }
+  // 止盈 / 回调支撑 水平虚线 + 标签（仅当存在真实目标位；观望时 target≈support，仅显示对称扇带）
+  if (Math.abs(target - support) > (price || 1) * 0.0005) {
+    ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(0,230,118,0.7)'; ctx.beginPath(); ctx.moveTo(x0, yOf(target)); ctx.lineTo(x1, yOf(target)); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,82,82,0.7)'; ctx.beginPath(); ctx.moveTo(x0, yOf(support)); ctx.lineTo(x1, yOf(support)); ctx.stroke();
+    ctx.setLineDash([]);
+  ctx.font = '9px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const dw = model.dirWord || '';
+  ctx.fillStyle = 'rgba(0,230,118,0.95)'; ctx.fillText(`${dw}止盈 ${target.toFixed(2)}`, x1 + 4, yOf(target));
+  ctx.fillStyle = 'rgba(255,82,82,0.95)'; ctx.fillText(`${dw}止损 ${support.toFixed(2)} · 反向${(pb * 100).toFixed(0)}%`, x1 + 4, yOf(support));
+  }
+  // 弱信号提示（与能量球净强度联动：分歧/弱共识→扇带已加宽）
+  if (model.weak) {
+    ctx.font = '9px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = 'rgba(255,193,7,0.95)';
+    ctx.fillText('⚠ 信号弱·双向可能', (x0 + x1) / 2, 2);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  }
+  // 基点脉冲
+  const pulse = 0.5 + 0.5 * Math.sin(t * 2.5);
+  ctx.fillStyle = `rgba(255,107,53,${0.6 + 0.4 * pulse})`;
+  ctx.beginPath(); ctx.arc(x0, yOf(price), 3 + pulse * 1.5, 0, Math.PI * 2); ctx.fill();
+  ctx.textBaseline = 'alphabetic';
+}
+
+let _pathRaf = 0;
+function initPricePath(box, analysis, sym, fallbackPrice) {
+  if (_pathRaf) { globalThis.cancelAnimationFrame && globalThis.cancelAnimationFrame(_pathRaf); _pathRaf = 0; }
+  const cv = box.querySelector('#discPricePath');
+  if (!cv) return;
+  const W = 320, H = 200;
+  const dpr = Math.max(1, globalThis.devicePixelRatio || 1);
+  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const tip = box.querySelector('#discPathTip');
+  let curModel = null;
+  const livePrice = () => { try { const S = globalThis.window && globalThis.window.S; const p = S && S.prices && S.prices[sym]; return p ? p.last : null; } catch (e) { return null; } };
+  // 提示：桌面 hover 显示；手机/平板 tap 切换显示（pointerup），否则 PWA 移动端看不到
+  const showTip = (bottom) => {
+    if (!tip || !curModel) return;
+    tip.style.display = 'block';
+    if (bottom) {
+      tip.style.left = '50%'; tip.style.transform = 'translateX(-50%)';
+      tip.style.top = 'auto'; tip.style.bottom = '4px';
+    } else {
+      tip.style.transform = ''; tip.style.bottom = 'auto';
+      tip.style.left = '8px'; tip.style.top = '8px';
+    }
+    const up = curModel.bullish ? '做多' : (curModel.dir.indexOf('看空') >= 0 ? '做空' : '观望');
+    tip.innerHTML = `主路径→止盈 ${curModel.target.toFixed(2)} (${up})<br>反向路径→止损 ${curModel.support.toFixed(2)}<br>反向概率 ${(curModel.pullbackProb * 100).toFixed(0)}%` + (curModel.weak ? '<br>⚠ 信号弱·双向可能' : '');
+  };
+  // 桌面：hover 显示；移动端：点击(tap)切换（click 在所有设备可靠触发）
+  cv.addEventListener('pointermove', (e) => { if (e.pointerType && e.pointerType !== 'mouse') return; showTip(false); });
+  cv.addEventListener('pointerleave', (e) => { if ((!e.pointerType || e.pointerType === 'mouse') && tip) tip.style.display = 'none'; });
+  cv.addEventListener('click', () => {
+    if (!tip || !curModel) return;
+    if (tip.style.display === 'block') tip.style.display = 'none';
+    else showTip(true);
+  });
+  const start = (globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now();
+  function frame() {
+    const tt = ((globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now() - start) / 1000;
+    const base = livePrice() != null ? livePrice() : fallbackPrice;
+    const model = pricePathForecast(analysis, base != null ? base : 0, { horizonBars: 12 });
+    if (base == null) model.price = (model.target + model.support) / 2;
+    model.dirWord = model.bullish ? '做多' : (model.dir.indexOf('看空') >= 0 ? '做空' : '观望');
+    model.W = W; model.H = H;
+    curModel = model;
+    drawPricePath(ctx, model, { t: tt, W, H });
+    _pathRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
+  }
+  _pathRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
 }
 
 // 多周期 SRSI 速览表（纯数据，可单测）
@@ -597,11 +1544,12 @@ export function buildSrsiOverview(selTfs, srsiCfg, priceMap, bars = 150) {
   let bull = 0, bear = 0;
   (selTfs || []).slice().sort((a, b) => minutesOf(a) - minutesOf(b)).forEach(tf => {
     const price = (priceMap && priceMap[tf]) || [];
+    const useCfg = (typeof srsiCfg === 'function') ? srsiCfg(tf) : srsiCfg;
     const row = { tf, k: null, d: null, zone: 'neutral', crossing: null, fresh: null, hook: null, hookFresh: null };
     if (price.length >= 2) {
-      const sl = srsiPanelSeries(price, srsiCfg, bars);
+      const sl = srsiPanelSeries(price, useCfg, bars);
       const k = sl.k[sl.k.length - 1], d = sl.d[sl.d.length - 1];
-      const st = srsiSignal(k, sl.k.length > 1 ? sl.k[sl.k.length - 2] : null, { overbought: srsiCfg.overbought, oversold: srsiCfg.oversold });
+      const st = srsiSignal(k, sl.k.length > 1 ? sl.k[sl.k.length - 2] : null, { overbought: useCfg.overbought, oversold: useCfg.oversold });
       row.k = k != null ? k : null;
       row.d = d != null ? d : null;
       row.zone = st.zone;
@@ -631,6 +1579,55 @@ export function buildSrsiOverview(selTfs, srsiCfg, priceMap, bars = 150) {
   });
   const cb = countBullBear(rows);
   return { rows, bull: cb.bull, bear: cb.bear };
+}
+
+// 价格格式化（按量级自适应小数位，纯函数）
+export function fmtPrice(v) {
+  if (v == null || !isFinite(v)) return '--';
+  if (v >= 1000) return v.toFixed(2);
+  if (v >= 1) return v.toFixed(3);
+  if (v >= 0.01) return v.toFixed(4);
+  return v.toFixed(6);
+}
+
+// 速览表周期列: 该周期自身时长(真实时间)的回报率 + 同跨度最低/最高价（纯函数, 可单测）
+// 用时间戳 t 回看 durMin 分钟前的价格算涨跌%: 1d=最近24h, 10m=最近10min, 30d=最近30天(无论K线粒度)
+//   —— 避免"30d K线实际是日线分辨率"时单根邻接误算成1日涨跌。t 缺失时回退单根邻接(c[last] vs c[last-1])。
+// low/high: 取 [回看起点, 末根] 同跨度蜡烛 l/h 的 min/max(缺则回退 c)。
+export function tfOverviewStat(c, l, h, t, bars = 150, durMin = null) {
+  const cl = (c || []).length;
+  if (cl < 2) return { ok: false, chgPct: null, low: null, high: null };
+  const last = c[cl - 1];
+  let refPrice = null, refIdx = cl - 2;
+  if (durMin != null && t && t.length === cl) {
+    const now = t[cl - 1];
+    const target = now - durMin * 60000;
+    for (let i = 0; i < cl; i++) {
+      const ti = t[i];
+      if (ti != null && isFinite(ti)) {
+        if (ti <= target) { refPrice = c[i]; refIdx = i; }
+        else break;
+      }
+    }
+    if (refPrice == null) { refPrice = c[0]; refIdx = 0; }
+  } else {
+    refPrice = c[cl - 2]; refIdx = cl - 2;
+  }
+  const chgPct = (refPrice && isFinite(refPrice) && refPrice !== 0) ? (last - refPrice) / refPrice * 100 : null;
+  let low = null, high = null;
+  const useL = l && l.length === cl, useH = h && h.length === cl;
+  const start = Math.max(0, refIdx);
+  for (let i = start; i < cl; i++) {
+    if (useL && l[i] != null && isFinite(l[i]) && (low == null || l[i] < low)) low = l[i];
+    if (useH && h[i] != null && isFinite(h[i]) && (high == null || h[i] > high)) high = h[i];
+  }
+  if (low == null || high == null) {
+    for (let i = start; i < cl; i++) {
+      const v = c[i];
+      if (v != null && isFinite(v)) { if (low == null || v < low) low = v; if (high == null || v > high) high = v; }
+    }
+  }
+  return { ok: true, chgPct, low, high };
 }
 
 // 由速览表统计 → 聚合结论
@@ -672,8 +1669,10 @@ export function isReversed(row) {
 }
 
 // 多周期速览共识计数（纯函数，可单测）：按「穿越」列方向计多/空；若该行已反转则翻转贡献（死勾反转→计多 / 金勾反转→计空）。
+// 同时按 shortSignalWeight 计算加权多/空(wbull/wbear)，供加权共识判决使用。
 export function countBullBear(rows) {
-  let bull = 0, bear = 0;
+  const higherExtreme = (rows || []).some(r => minutesOf(r.tf) >= 240 && (r.zone === 'overbought' || r.zone === 'oversold'));
+  let bull = 0, bear = 0, wbull = 0, wbear = 0;
   (rows || []).forEach(row => {
     const lc = latestCross(row);
     if (!lc.cv) return;
@@ -681,9 +1680,51 @@ export function countBullBear(rows) {
                 : (lc.cv === 'sell' || lc.cv === 'deathHook') ? 'bear' : null;
     if (!contrib) return;
     if (row.reversed) contrib = contrib === 'bull' ? 'bear' : 'bull';
-    if (contrib === 'bull') bull++; else bear++;
+    const w = shortSignalWeight(row, lc.fv, { higherExtreme });
+    if (contrib === 'bull') { bull++; wbull += w; } else { bear++; wbear += w; }
   });
-  return { bull, bear };
+  return { bull, bear, wbull, wbear };
+}
+
+// 多周期速览共识的 TF 构成（纯函数，可单测）：与 countBullBear 同口径（KD 方向, 跳过 reversed），
+// 返回偏多/偏空 TF 名列表，供面板透明展示（如「偏多:1h/4h · 偏空:5m/15m」），
+// 避免「一致偏多」与用户实时看到的短周期下跌自相矛盾。
+export function bullBearTfs(rows) {
+  const bullTfs = [], bearTfs = [];
+  (rows || []).forEach(row => {
+    if (isReversed(row)) return;
+    if (row.k > row.d) bullTfs.push(row.tf); else bearTfs.push(row.tf);
+  });
+  return { bullTfs, bearTfs };
+}
+
+// 加权共识判决（纯函数，可单测）：用加权多/空占比判单边，替代二值(有/无)判定。
+// 占比 r = wbull/(wbull+wbear)；r≥th → 一致偏多，r≤1-th → 一致偏空，否则分歧。
+export function weightedVerdict(wbull, wbear, opts = {}) {
+  const th = opts.threshold != null ? opts.threshold : SHORT_CONSENSUS_TH;
+  const tot = (wbull || 0) + (wbear || 0);
+  if (tot <= 0) return '中性';
+  const r = wbull / tot;
+  if (r >= th) return '一致偏多';
+  if (r <= 1 - th) return '一致偏空';
+  return '分歧';
+}
+
+// 加权共识 + 锚定（纯函数，可单测）：单边需至少一个 ≥1h 周期同向，防纯短线(1m/5m)噪音成势。
+export function weightedShortVerdict(rows, wbull, wbear, opts = {}) {
+  let verdict = weightedVerdict(wbull, wbear, opts);
+  const anchorMin = minutesOf(opts.anchorTF || SHORT_ANCHOR_TF);
+  if (verdict === '一致偏多' || verdict === '一致偏空') {
+    const wantSide = verdict === '一致偏多' ? 'bull' : 'bear';
+    const hasAnchor = (rows || []).some(r => {
+      const lc = latestCross(r); if (!lc.cv) return false;
+      let c = (lc.cv === 'buy' || lc.cv === 'goldHook') ? 'bull' : 'bear';
+      if (r.reversed) c = c === 'bull' ? 'bear' : 'bull';
+      return c === wantSide && minutesOf(r.tf) >= anchorMin;
+    });
+    if (!hasAnchor) verdict = '分歧';
+  }
+  return verdict;
 }
 
 // 单周期 SRSI KD 能量分（用户概念：KD 线间距大 + 远离 50 中线 + 钩刚激活 → 能量足）：
@@ -934,6 +1975,88 @@ export function trendConflictNote(up, verdict, trendTF) {
   return null;
 }
 
+// ---- 仓位阶梯：长趋势 × 中趋势 × 短方向 三周期对齐 → 仓位乘数 ----
+// 长=7d/30d EMA(macroTrend.up)，中=≤4h EMA(trend.up)，短=多周期SRSI共识(multiTf.verdict)。
+// 三连共识=立即加大筹码；中+短对齐=顺势正常做；中短背离=仅轻仓逆势；长反向于中短=不追满。
+const SIZE_MULT = { triple: 1.5, aligned: 1.0, alignedShort: 1.2, counter: 0.5, diverge: 0.6 };
+
+// ---- 短线多空共识：多维因子加权（≤4h SRSI 共识轴）----
+// 因子排位（乘法关系，①周期时长是量级主轴，②③④⑤为单位乘子）：
+//  ① 周期时长：4h→1m 权重递減（sqrt(minutes/240)，4h=1.0）
+//  ② 信号类型：钩(金钩/死钩) > 叉(金叉/死叉)
+//  ③ KD 间距：|K-D| 振幅 大>小；且"间距拉大"(gapTrend=up)增强、"收窄"(down)衰减
+//  ④ 极值突破：刚突破20进金钩 / 刚跌破80进死钩（isHook 且新鲜 fv≤3）→ 加成
+//  ⑤ 新鲜度：根越新权重越高，陈旧有地板 0.4
+const SHORT_CONSENSUS_TH = 0.60;   // 加权占比≥60% 才判单边（否则分歧）
+const SHORT_ANCHOR_TF = '1h';      // 单边需至少一个 ≥1h 周期同向，防纯短线噪音成势
+
+// 单周期信号有效权重（0~约1.6）。供 countBullBear 加权汇总使用。
+// opts.higherExtreme: 当集合内存在 ≥4h 周期处于超买/超卖极值带时为真 → 触发钩反转加权。
+export function shortSignalWeight(row, fv, opts = null) {
+  const m = minutesOf(row.tf);
+  const W_tf = Math.sqrt(m / 240);                       // ① 4h=1.0, 1h=0.5, 5m≈0.144, 1m≈0.065
+  const isHook = row.hook != null;
+  const W_type = isHook ? 1.30 : 1.00;                  // ② 钩 > 叉
+  const k = row.k, d = row.d;
+  const amp = (k != null && d != null) ? Math.min(1, Math.max(0, Math.abs(k - d) / 20)) : 0;
+  const trendM = row.gapTrend === 'up' ? 1.15 : row.gapTrend === 'down' ? 0.70 : 1.00; // ③ 拉大增强/收窄衰减
+  const W_gap = (0.50 + 0.50 * amp) * trendM;           // ③ KD间距 大>小
+  const W_zone = (isHook && fv != null && fv <= 3) ? 1.15 : 1.00; // ④ 刚突破极值且新鲜 → 加成
+  const W_fresh = (fv == null) ? 0.40 : Math.max(0.40, Math.min(1.00, 1 - fv / 20)); // ⑤ 新鲜>老
+  let w = W_tf * W_type * W_gap * W_zone * W_fresh;
+  // 钩反转加权: ≥4h 极值带 + ≤1h 新鲜钩 → 放大, 使该钩压过 4h 趋势权重(均值回归/见顶回落识别)
+  if (opts && opts.higherExtreme && m <= 60 && isHook) {
+    w *= (THRESH.HOOK_OVERRIDE_MULT != null ? THRESH.HOOK_OVERRIDE_MULT : 3.0);
+  }
+  return w;
+}
+
+export function positionSizing(longUp, midUp, shortSide, decidedBull = null, opts = null) {
+  // shortSide: true=偏多 / false=偏空 / null=中性
+  // decidedBull: 已判决方向(true=做多 / false=做空 / null=未定).
+  //   提供后 side 强制跟随判决, mult 由与共识轴的对齐度决定（保持三轴上下文）.
+  //   null → 原逻辑(共识定方向, 向后兼容).
+  // opts.caveat: { present:true, reasons:[...] } 风险/置信不足/未确认/TSEV谨慎 → 不追满(×1.5→×1.0 标准仓)
+  const caveat = opts && opts.caveat;
+  const cavTxt = (caveat && caveat.reasons && caveat.reasons.length) ? caveat.reasons.join('、') : '风险/未确认';
+  const allUp = longUp === true && midUp === true && shortSide === true;
+  const allDown = longUp === false && midUp === false && shortSide === false;
+  if (allUp) {
+    if (caveat && caveat.present) return { mult: SIZE_MULT.aligned, label: '顺势但谨慎(不满攻)', side: 'up', cls: 'disc-size-up', hint: '长↑ 中↑ 短↑ 但' + cavTxt + ' → 不满攻，标准仓位' };
+    return { mult: SIZE_MULT.triple, label: '立即加大筹码', side: 'up', cls: 'disc-size-up', hint: '长↑ 中↑ 短↑ 三周期共识，全线看多，满攻' };
+  }
+  if (allDown) {
+    if (caveat && caveat.present) return { mult: SIZE_MULT.aligned, label: '顺势但谨慎(不满攻)', side: 'down', cls: 'disc-size-down', hint: '长↓ 中↓ 短↓ 但' + cavTxt + ' → 不满攻，标准仓位' };
+    return { mult: SIZE_MULT.triple, label: '立即加大筹码', side: 'down', cls: 'disc-size-down', hint: '长↓ 中↓ 短↓ 三周期共识，全线看空，满攻' };
+  }
+  const midShortSame = midUp === true && shortSide === true;
+  const midShortSameDn = midUp === false && shortSide === false;
+  if (midShortSame) {
+    if (longUp === false) {
+      const base = { mult: SIZE_MULT.counter, cls: 'disc-size-up', hint: '中↑ 短↑ 但长线↓，反弹/短线顺势，别追满' };
+      if (decidedBull === false) return { ...base, label: '逆势轻仓做空(中短共识背离)', side: 'down', cls: 'disc-size-down', hint: '中短共识偏多但判决做空，逆势轻仓，别追满' };
+      return { ...base, label: '顺势正常做(长线逆风不追满)', side: decidedBull === null ? 'up' : (decidedBull ? 'up' : 'down') };
+    }
+    if (decidedBull === false) return { mult: SIZE_MULT.counter, label: '逆势轻仓做空(中短共识背离)', side: 'down', cls: 'disc-size-down', hint: '中短共识偏多但判决做空，逆势轻仓，别追满' };
+    return { mult: SIZE_MULT.aligned, label: '顺势正常做', side: 'up', cls: 'disc-size-up', hint: '中↑ 短↑ 顺势，标准仓位' };
+  }
+  if (midShortSameDn) {
+    if (longUp === true) {
+      const base = { mult: SIZE_MULT.alignedShort, cls: 'disc-size-down', hint: '中↓ 短↓ 且长线↑，下跌中的顺势做空，可略加' };
+      if (decidedBull === true) return { ...base, label: '逆势轻仓做多(中短共识背离)', side: 'up', cls: 'disc-size-up', hint: '中短共识偏空但判决做多，逆势轻仓，别追满' };
+      return { ...base, label: '顺势做空(长线顺风可略加)', side: decidedBull === null ? 'down' : (decidedBull ? 'up' : 'down') };
+    }
+    if (decidedBull === true) return { mult: SIZE_MULT.counter, label: '逆势轻仓做多(中短共识背离)', side: 'up', cls: 'disc-size-up', hint: '中短共识偏空但判决做多，逆势轻仓，别追满' };
+    return { mult: SIZE_MULT.aligned, label: '顺势做空', side: 'down', cls: 'disc-size-down', hint: '中↓ 短↓ 顺势做空，标准仓位' };
+  }
+  if (midUp !== null && shortSide !== null && midUp !== shortSide) {
+    if (decidedBull !== null) return { mult: SIZE_MULT.counter, label: '仅轻仓逆势' + (decidedBull ? '做多' : '做空') + '(中短背离)', side: decidedBull ? 'up' : 'down', cls: 'disc-size-' + (decidedBull ? 'up' : 'down'), hint: '中周期与短方向背离，仅轻仓逆势，不重仓' };
+    return { mult: SIZE_MULT.counter, label: '仅轻仓逆势反弹/观望', side: null, cls: 'disc-size-neutral', hint: '中周期与短方向背离（如上涨中短线看空），仅轻仓逆势，不重仓' };
+  }
+  if (decidedBull !== null) return { mult: SIZE_MULT.diverge, label: '基准仓位(观望优先)', side: decidedBull ? 'up' : 'down', cls: 'disc-size-neutral', hint: '多周期未形成明确共识，基准仓位或观望' };
+  return { mult: SIZE_MULT.diverge, label: '基准仓位(观望优先)', side: null, cls: 'disc-size-neutral', hint: '多周期未形成明确共识，基准仓位或观望' };
+}
+
 // ---- 交易纪律分析引擎（纯函数，可单测）----
 // 输入: priceMap={tf:[close,...]}（各周期收盘序列）+ SRSI 配置 + 主图周期。
 // 规则硬编码自「交易纪律」百科：顺势交易/多周期共振/逆势信号警惕/回调≠反转/信号只是提示。
@@ -945,11 +2068,14 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const weights = opts.weights; // TSEV 权重（不传则运行时取 loadTsevWeights 的缓存；为空 → 走经典逻辑兜底）
   const allTfs = Object.keys(priceMap || {}).filter(tf => KLINE_TF.includes(tf)).sort((a, b) => minutesOf(a) - minutesOf(b));
   if (!allTfs.length) return null;
-  // SRSI/共识仅用用户勾选的 TF，方向基准用全部 TF 中 ≤capMin 的最长周期
-  const useTfs = allTfs.filter(tf => klineSel[tf] !== false);
-  if (!useTfs.length) return null;
-  const ov = buildSrsiOverview(useTfs, srsiCfg, priceMap, bars);
+  // SRSI/共识仅用用户勾选的 TF；被标记「辅助」的周期只参与放行闸门(不进共识/不加权)
+  const auxTfsIn = (opts.auxTfs || []).filter(tf => allTfs.includes(tf));
+  const useTfs = allTfs.filter(tf => klineSel[tf] !== false && !auxTfsIn.includes(tf));
+  if (!useTfs.length && !auxTfsIn.length) return null;
+  const gateTfs = [...new Set([...useTfs, ...auxTfsIn])];
+  const ov = buildSrsiOverview(gateTfs, srsiCfg, priceMap, bars);
   const rows = ov.rows;
+  const consRows = rows.filter(r => !auxTfsIn.includes(r.tf));
   const byTf = {};
   rows.forEach(r => { byTf[r.tf] = r; });
   // 能量/领跑：逐周期 KD 能量分 + 找出最高能量的「领跑者」（供呈现与置信度修正）
@@ -972,9 +2098,29 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const regimeState = regSeries ? detectRegimeState(regSeries) : null;
   const strategy = regimeStrategy(regimeState);
 
-  // 多周期共识
-  const bull = ov.bull, bear = ov.bear;
-  const verdict = overviewVerdict(bull, bear);
+  // 多周期共识（短线轴锁定 ≤4h SRSI 共识；全量 ov.rows 仍用于速览表显示）
+  const shortSrsiTfs = useTfs.filter(tf => minutesOf(tf) <= THRESH.HORIZON_CAP_MIN);
+  const ovShort = buildSrsiOverview(shortSrsiTfs, srsiCfg, priceMap, bars);
+  const bull = ovShort.bull, bear = ovShort.bear;
+  const cb = countBullBear(ovShort.rows);
+  let verdict = weightedShortVerdict(ovShort.rows, cb.wbull, cb.wbear);
+  const bbTfs = bullBearTfs(ovShort.rows); // 透明化: 偏多/偏空 TF 构成
+
+  // ≤1h 共识（保留字段，供对照/调试；不再单独驱动仓位短轴）
+  const short1hTfs = useTfs.filter(tf => minutesOf(tf) <= minutesOf('1h'));
+  const ovShort1h = buildSrsiOverview(short1hTfs, srsiCfg, priceMap, bars);
+  const cb1h = countBullBear(ovShort1h.rows);
+  const verdictShort1h = weightedShortVerdict(ovShort1h.rows, cb1h.wbull, cb1h.wbear);
+
+  // 钩反转标记：≥4h 极值带 + ≤1h 新鲜钩 → 近线段反转被识别（透明展示用）
+  const hookOverride = (ovShort.rows).some(r => minutesOf(r.tf) >= 240 && (r.zone === 'overbought' || r.zone === 'oversold'))
+    && (ovShort.rows).some(r => minutesOf(r.tf) <= 60 && r.hook != null);
+
+  // 仓位阶梯：长(7d/30d) × 中(≤4h EMA) × 短(≤4h SRSI共识, 含钩反转加权)。
+  // 注：早期曾把短轴收窄为 ≤1h（verdictShort1h），已回退——短轴与能量场/预测统一吃 ≤4h 共识。
+  const _longUp = (mt && mt.up != null) ? mt.up : null;
+  const _shortSide = verdict === '一致偏多' ? true : verdict === '一致偏空' ? false : null;
+  // sizing 移至 dir 决策后（见 TSEV 覆盖之后），确保与判决方向一致
 
   // 趋势与动能背离说明（双向对称）
   const conflictNote = trendConflictNote(trend.up, verdict, trendTF);
@@ -990,7 +2136,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   const zones = { daily: dailyRow.zone, main: mainRow.zone, scalp: scalpRow.zone, dailyTf };
 
   // 入场确认（方向感知: 门控安全网仍以趋势方向为基准, 策略只在无反向确认时切换方向源）
-  const shortTfs = rows.filter(r => minutesOf(r.tf) <= minutesOf(mainTFUse)).map(r => r.tf);
+  const shortTfs = rows.filter(r => !auxTfsIn.includes(r.tf) && minutesOf(r.tf) <= minutesOf(mainTFUse)).map(r => r.tf);
   const shortRows = (shortTfs.length ? shortTfs : [scalpRow.tf]).map(tf => byTf[tf]);
   const want = up === true ? 'buy' : up === false ? 'sell' : null;
   let confirm = pickConfirm(shortRows, want);
@@ -998,15 +2144,28 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   // 观望门控: 趋势方向明确(want) 但最近短周期信号已反向确认(≤3根) → 不追不逆, 观望等信号与趋势一致
   const gateWait = !!(want && confirm.contrarian && confirm.fresh != null && confirm.fresh <= 3);
 
+  // 逆势覆盖预判（用于规则与方向依据的诚实标注）：仅当 领跑/动量 与趋势相反 且 信号未被反转 才覆盖
+  const _leadBuy = !!(leader && leader.dir === 'buy');
+  const _leadAligned = up == null || (up === true) === _leadBuy;
+  const _leaderReversed = !!(leader && byTf[leader.tf] && byTf[leader.tf].reversed);
+  const _leaderOverride = strategy === 'energy-leader' && !!leader && !!leader.dir && leader.isClear && leader.score >= 70 && !_leadAligned && !_leaderReversed;
+  const _fsBuy = confirm.dir === 'buy';
+  const _fsAligned = up == null || (up === true) === _fsBuy;
+  const _fsOverride = strategy === 'freshest-signal' && !!confirm.dir && confirm.confirmed && !_fsAligned;
+  const contraTrade = _leaderOverride || _fsOverride;
+  const overrideSrc = _leaderOverride
+    ? (leader.tf + ' 能量' + leader.score + ' 偏' + (_leadBuy ? '多' : '空') + '独一档')
+    : (_fsOverride ? (confirm.tf + ' ' + dirName(confirm.dir, confirm.isHook) + ' 已确认') : '');
+
   // 数据驱动: 超买/超卖跨周期广度（仅勾选 TF）
-  const obCount = rows.filter(r => r.zone === 'overbought').length;
-  const osCount = rows.filter(r => r.zone === 'oversold').length;
+  const obCount = consRows.filter(r => r.zone === 'overbought').length;
+  const osCount = consRows.filter(r => r.zone === 'oversold').length;
 
   // —— 反转 / 全周期K / K-D间距动能（供置信度修正与说明）——
-  const allAbove = rows.length && rows.every(r => r.k != null && r.d != null && r.k > r.d);
-  const allBelow = rows.length && rows.every(r => r.k != null && r.d != null && r.k < r.d);
-  const allOB = rows.length && rows.every(r => r.zone === 'overbought');
-  const allOS = rows.length && rows.every(r => r.zone === 'oversold');
+  const allAbove = consRows.length && consRows.every(r => r.k != null && r.d != null && r.k > r.d);
+  const allBelow = consRows.length && consRows.every(r => r.k != null && r.d != null && r.k < r.d);
+  const allOB = consRows.length && consRows.every(r => r.zone === 'overbought');
+  const allOS = consRows.length && consRows.every(r => r.zone === 'oversold');
   // 反转韧性：所选 confirm 已反转 → 原空头被反转(K>D)=偏多韧性 / 原多头被反转(K<D)=偏空韧性
   let reversalAdd = 0; const reversalParts = []; let revNote = null;
   if (confirm.reversed && confirm.dir) {
@@ -1023,7 +2182,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   else if (allBelow) periodKAdd = -10;
   // K-D 间距动能（加速/减弱）：与方向基准一致时加速+, 减弱-；超买收窄=背离预警
   let gapAdd = 0; const gapParts = [];
-  rows.forEach(r => {
+  consRows.forEach(r => {
     if (r.gapNow == null || r.gapPrev == null) return;
     const gdir = r.k > r.d ? 'buy' : (r.k < r.d ? 'sell' : null);
     if (!gdir) return;
@@ -1052,7 +2211,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   else if (up === true) trendNote = '方向基准(' + trendTF + ') EMA20>EMA120, 顺势看多为主';
   else if (up === false) trendNote = '方向基准(' + trendTF + ') EMA 向下, 顺势看空为主';
   else trendNote = '方向基准(' + trendTF + ') EMA 价差 ' + trend.spreadPct.toFixed(2) + '% 低于死区 ' + deadZone.toFixed(2) + '%, 横盘观望';
-  rules.push({ name: '顺势交易', ok: up === true, note: trendNote });
+  rules.push({ name: '顺势交易', ok: !contraTrade, note: trendNote });
 
   rules.push({
     name: '多周期共振',
@@ -1140,15 +2299,17 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     reason = want === 'buy'
       ? '方向基准上升(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线回调中, 观望: 勿追多(下跌未完)亦勿逆势看空(趋势向上), 等金叉/金钩确认回调结束再低吸'
       : '方向基准下降(' + trendTF + ') 但 ' + (confirm.tf || '短周期') + ' ' + dirName(confirm.dir, confirm.isHook) + '已确认(反向) → 短线反弹中, 观望: 勿追空(反弹未完)亦勿逆势看多(趋势向下), 等死叉/死钩确认反弹结束再看空';
-    entryCue = want === 'buy'
-      ? '等 短周期金叉/金钩 确认回调结束, 或 ' + trendTF + ' 方向翻空后再考虑看空'
-      : '等 短周期死叉/死钩 确认反弹结束, 或 ' + trendTF + ' 方向翻多后再考虑看多';
+    entryCue = confirm.isHook
+      ? (want === 'buy' ? '死钩已现，等价格企稳' : '金钩已现，等价格企稳')
+      : want === 'buy'
+        ? '等 短周期金叉/金钩 确认回调结束, 或 ' + trendTF + ' 方向翻空后再考虑看空'
+        : '等 短周期死叉/死钩 确认反弹结束, 或 ' + trendTF + ' 方向翻多后再考虑看多';
     stop = null; target = null;
   } else if (strategy === 'energy-leader' && leader && leader.dir) {
     // 趋势极性约束: 逆势领跑仅当 独一档且能量≥70 才允许覆盖方向(顺势领跑/趋势未明直接用)
     const isBuy = leader.dir === 'buy';
     const aligned = up == null || (up === true) === isBuy;
-    const strongOverride = leader.isClear && leader.score >= 70;
+    const strongOverride = leader.isClear && leader.score >= 70 && !_leaderReversed;
     if (aligned || strongOverride) {
       dir = isBuy ? '看多' : '看空';
       base = Math.max(40, Math.min(70, leader.score));
@@ -1222,7 +2383,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     const leadAligned = (dir.startsWith('看多') && leader.dir === 'buy') || (dir.startsWith('看空') && leader.dir === 'sell');
     if (leadAligned) { const add = Math.min(leader.score / 10, 10); conf += add; confParts.push('领跑' + leader.tf + '+' + add); }
     else { conf -= 5; confParts.push('领跑反向-5'); }
-  } else if (strategy !== 'energy-leader' && !leader && rows.length && rows.every(r => !r.energy || r.energy.score < 30)) {
+  } else if (strategy !== 'energy-leader' && !leader && consRows.length && consRows.every(r => !r.energy || r.energy.score < 30)) {
     conf -= 5; confParts.push('信号耗尽-5');
   }
   // 反转韧性加/扣分
@@ -1235,22 +2396,57 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   // 全周期超买/超卖护栏：封顶置信度
   if (periodRisk) { conf = Math.min(conf, 80); }
   conf = Math.max(10, Math.min(90, Math.round(conf)));
-  const confLabel = conf >= 70 ? '高' : conf >= 45 ? '中' : '低';
+  let confLabel = conf >= 70 ? '高' : conf >= 45 ? '中' : '低';
 
   // ---- TSEV 数据门控投票：用数据训练的因子权重覆盖硬 if/else 方向 ----
   // 仅在权重可用（dev 下 /data/discipline-factors.jsonl 经 loadTsevWeights 训练）时启用；
   // 否则保持经典逻辑（其方向精度已证实低于随机，dev 下会用 TSEV 修正）。
   const factors = extractDisciplineFactors({ trend, mt, confirm, leading: leader, reversalAdd, zones, verdict, periodKAdd, gapAdd });
   let tsev = null;
-  const _w = (weights !== undefined) ? weights : getTsevWeights();
+  const _w = (weights !== undefined) ? weights : getTsevWeights(opts.sym);
   if (_w && Object.keys(_w).length) {
     tsev = voteTsev(factors, _w);
-    if (tsev.dir !== 0) {
+    if (tsev.unbalanced && !tsev.partial) {
+      // 真正无任何方向样本 → 回退经典逻辑；若是「仅学到一侧权重」(partial)，保留部分投票：
+      // 可给看空/看多（已学方向），但不确认未学到的一侧，避免单边样本伪造反向判决。
+      tsev = null;
+    } else if (tsev.dir !== 0) {
       dir = tsev.dirText;
       conf = Math.round(tsev.conf * 100);
       confLabel = tsev.confLabel;
+      // 可交易门控：置信或净票不足 → 保留投票方向(不丢弃, 避免与子信号自相矛盾)，仅标记不可交易（宁缺毋滥，不触发真实交易）
+      if (tsev.conf < TSEV_CFG.GATE || Math.abs(tsev.net) < TSEV_CFG.M) {
+        tsev.actionable = false;
+      } else {
+        tsev.actionable = true;
+        // 原分支(观望/等确认)未给具体计划 → 补 plan，避免「可交易」却无目标价/止损(面板空白)
+        if (target == null) {
+          const isBuy = tsev.dir === 1;
+          stop = p - (isBuy ? 1.5 : -1.5) * atrP;
+          target = trend.e20 != null && (isBuy ? trend.e20 > p : trend.e20 < p) ? trend.e20 : (isBuy ? p * 1.02 : p * 0.98);
+          if (entryCue && entryCue.charAt(0) === '等')
+            entryCue = 'TSEV 顺势方向, ' + (confirm.isHook ? (isBuy ? '金钩' : '死钩') : (isBuy ? '金叉' : '死叉')) + '确认后入场';
+        }
+      }
     } else {
-      dir = '观察';
+      // TSEV 无明确方向票 → 不覆盖经典方向(保留经典 看多/看空/观望)，仅标记不可交易（宁缺毋滥，不触发真实交易）
+      tsev.actionable = false;
+    }
+  }
+
+  // 辅助周期放行闸门（用户标记的周期仅作放行闸门: 与主方向反向 → 否决为观望, 且不进共识/不加权）
+  // 放在 TSEV 之后, 确保即使用户数据模型给出方向, 闸门仍优先否决。
+  const auxTfs = (opts && opts.auxTfs) || [];
+  if (auxTfs.length && dir !== '观望') {
+    const sigDir = dir.startsWith('看多') ? 'buy' : dir.startsWith('看空') ? 'sell' : null;
+    if (sigDir) {
+      const auxRowsForGate = rows.filter(r => auxTfs.includes(r.tf));
+      if (auxRowsForGate.length && auxGateStatus(sigDir, auxRowsForGate) === 'vetoed') {
+        dir = '观望'; conf = 30; confLabel = '低'; confParts.length = 0; confParts.push('辅助放行闸门否决');
+        reason = '辅助周期(' + auxRowsForGate.map(r => r.tf).join('/') + ') 方向与主方向反向 → 放行闸门否决, 转为观望';
+        entryCue = '等辅助周期与主方向同向, 再考虑入场';
+        stop = null; target = null;
+      }
     }
   }
 
@@ -1261,10 +2457,54 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   else if (mt && mt.up != null && dir.startsWith('看空') && mt.up === true)
     macroConflict = '⚠ 宏观(' + mt.tf + ') EMA 向上与看空方向冲突, 整体观点';
 
+  // 仓位门控(②)：置信不足/未确认/TSEV谨慎/动能背离/长周期极端反向/宏观反向 → 不追满（×1.5→×1.0 标准仓）
+  // 注：日线超买/超卖仅进「风险」展示，不单独触发降仓（健康上升势中日常超买，不应剥夺满攻）
+  const _momentumBear = (dir.startsWith('看多') && bear >= bull) || (dir.startsWith('看空') && bull >= bear);
+  const _caveat = {
+    present: !!(periodRisk || confLabel !== '高' || (tsev && tsev.actionable === false) || macroConflict || !confirmed || _momentumBear),
+    reasons: [
+      periodRisk ? '长周期极端反向' : null,
+      confLabel !== '高' ? ('置信' + confLabel) : null,
+      (tsev && tsev.actionable === false) ? 'TSEV置信不足' : null,
+      macroConflict ? '宏观反向' : null,
+      !confirmed ? '信号未确认' : null,
+      _momentumBear ? '动能背离' : null
+    ].filter(Boolean)
+  };
+
+  // 仓位阶梯（dir 决策后，确保与判决方向一致）
+  const decidedBull = dir.startsWith('看多') ? true : dir.startsWith('看空') ? false : null;
+  const sizing = positionSizing(_longUp, up, _shortSide, decidedBull, { caveat: _caveat });
+
   // 信号生命周期/强度（仅呈现层, 统一追加到所有档位 reason 尾部 + 单独 field 供 DOM）
   const life = signalLifecycle(confirm, leader, energyRows);
   if (life && life.txt) reason += '；信号: ' + life.txt;
   if (revNote) reason += '；' + revNote;
+
+  // 短线各周期因子明细（供能量球卡片渲染：方向/权重/KD/间距趋势/新鲜度/钩叉）
+  const _heRows = (ovShort && ovShort.rows) || [];
+  const _he = _heRows.some(r => minutesOf(r.tf) >= 240 && (r.zone === 'overbought' || r.zone === 'oversold'));
+  const shortFactors = _heRows.map(row => {
+    const lc = latestCross(row);
+    let dir = null;
+    if (lc.cv) {
+      let c = (lc.cv === 'buy' || lc.cv === 'goldHook') ? 'bull' : 'bear';
+      if (row.reversed) c = c === 'bull' ? 'bear' : 'bull';
+      dir = c;
+    }
+    return {
+      tf: row.tf,
+      dir,
+      w: shortSignalWeight(row, lc.fv, { higherExtreme: _he }),
+      k: row.k, d: row.d,
+      gap: (row.k != null && row.d != null) ? row.k - row.d : null,
+      gapTrend: row.gapTrend || 'flat',
+      fresh: lc.fv,
+      isHook: row.hook != null,
+      signal: lc.cv,
+      reversed: !!row.reversed
+    };
+  });
 
   return {
     strategy,
@@ -1272,7 +2512,12 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     macroConflict,
     conflictNote,
     trend,
-    multiTf: { bull, bear, verdict },
+    contraTrade,
+    basisNote: contraTrade
+      ? `⚠ 逆势覆盖: 长周期 EMA(${trendTF}) ${up === true ? '↑' : '↓'} 被短线 ${overrideSrc} 逆势覆盖 → ${dir}`
+      : `EMA(${trendTF}) ${up === true ? '↑ 看多基准' : up === false ? '↓ 看空基准' : '横盘观望'} ${trend.spreadPct.toFixed(2)}%`,
+    longUp: _longUp,
+    multiTf: { bull, bear, wbull: cb.wbull, wbear: cb.wbear, ratio: (cb.wbull + cb.wbear) > 0 ? cb.wbull / (cb.wbull + cb.wbear) : 0, verdict, verdictShort1h, hookOverride, bullTfs: bbTfs.bullTfs, bearTfs: bbTfs.bearTfs },
     zones,
     confirm: { dir: confirm.dir, fresh: confirm.fresh, tf: confirm.tf, isHook: confirm.isHook, confirmed, contrarian: confirm.contrarian, reversed: confirm.reversed },
     leading: leader ? { tf: leader.tf, dir: leader.dir, score: leader.score, isHook: leader.isHook, isClear: leader.isClear } : null,
@@ -1284,7 +2529,10 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     },
     factors,
     tsev,
-    rules
+    shortFactors,
+    sizing,
+    rules,
+    atrP
   };
 }
 
@@ -1407,7 +2655,102 @@ function allPriceMapOf(sym) {
   return m;
 }
 
+// 主图叠加周期列表：优先按周期独立的 overlayTfs；为空时回退到 klineSel（兼容迁移期旧配置）
+function overlayTfsList(c) {
+  if (c && c.overlayTfs && Object.keys(c.overlayTfs).length) {
+    return KLINE_TF.filter(tf => c.overlayTfs[tf]);
+  }
+  if (c && c.mainOverlay && c.klineSel) {
+    return KLINE_TF.filter(tf => c.klineSel[tf]);
+  }
+  return [];
+}
+
+// 主图蜡烛上要叠加 SRSI 的周期计划：主图叠加(overlayTfs) ∪ 辅助(srsiAux)，去重并标 aux。
+function mainChartSrsiPlan(c) {
+  const plan = [];
+  overlayTfsList(c).forEach(tf => plan.push({ tf, aux: false }));
+  KLINE_TF.forEach(tf => {
+    if (c.srsiAux && c.srsiAux[tf]) {
+      const ex = plan.find(p => p.tf === tf);
+      if (ex) ex.aux = true; else plan.push({ tf, aux: true });
+    }
+  });
+  return plan;
+}
+
+// 主图顶部快选 chip 栏：参与显隐快选的周期集合（overlay/aux 之外的持久记忆，按 KLINE_TF 顺序）
+// 兜底：一个都没有时也垫 mainTF（未开态），保证主图永远有一排可点的开关
+function ovQuickChips(c) {
+  const quick = (c.ovQuickTfs || []).slice();
+  Object.keys(c.overlayTfs || {}).forEach(tf => { if (!quick.includes(tf)) quick.push(tf); });
+  Object.keys(c.srsiAux || {}).forEach(tf => { if (!quick.includes(tf)) quick.push(tf); });
+  if (!quick.length && c.mainTF && KLINE_TF.includes(c.mainTF)) quick.push(c.mainTF);
+  return KLINE_TF.filter(tf => quick.includes(tf)).map(tf => {
+    const overlay = !!(c.overlayTfs && c.overlayTfs[tf]);
+    const aux = !!(c.srsiAux && c.srsiAux[tf]);
+    const hidden = !!(c.ovHide && c.ovHide[tf]);
+    return { tf, overlay, aux, hidden, on: (overlay || aux) && !hidden };
+  });
+}
+function keepInOvQuick(tf) {
+  cfg.ovQuickTfs = cfg.ovQuickTfs || [];
+  if (!cfg.ovQuickTfs.includes(tf)) cfg.ovQuickTfs.push(tf);
+}
+// 点击 chip 切换该周期显示（角色保持式）：激活项→记原角色并临时隐藏（仍在栏内置灰）；
+// 隐藏项→还原原角色（辅助仍是辅助、叠加仍是叠加）；皆无激活→加入叠加。
+function toggleOvQuickTf(tf) {
+  if (!KLINE_TF.includes(tf)) return;
+  cfg.overlayTfs = cfg.overlayTfs || {};
+  cfg.srsiAux = cfg.srsiAux || {};
+  cfg.ovHide = cfg.ovHide || {};
+  const hidden = cfg.ovHide[tf];
+  if (hidden === 'aux') {
+    delete cfg.ovHide[tf];
+    cfg.srsiAux[tf] = true; delete cfg.overlayTfs[tf];
+  } else if (hidden === 'ov') {
+    delete cfg.ovHide[tf];
+    cfg.overlayTfs[tf] = true; delete cfg.srsiAux[tf];
+  } else if (cfg.overlayTfs[tf]) {
+    cfg.ovHide[tf] = 'ov';
+  } else if (cfg.srsiAux[tf]) {
+    cfg.ovHide[tf] = 'aux';
+  } else {
+    cfg.overlayTfs[tf] = true;
+  }
+  keepInOvQuick(tf);
+  cfg.mainOverlay = Object.keys(cfg.overlayTfs).length > 0;
+  persist(); renderKChart();
+}
+
+// 纪律面板签名守卫：含 per-TF 全部 SRSI 参数(byTf) 与 辅助标记(aux)，使改任意参数/切辅助都即时重算
+function buildDiscSig(cfg, priceMap, deadMode, deadZone, loopStatus) {
+  let sig = cfg.symbol + '|' + cfg.mainTF + '|' + cfg.bars
+    + '|byTf:' + JSON.stringify(cfg.srsiByTf || {}) + '|aux:' + JSON.stringify(cfg.srsiAux || {}) + '|';
+  KLINE_TF.forEach(tf => {
+    const c = (priceMap && priceMap[tf]) || [];
+    sig += tf + ':' + (c.length ? c[c.length - 1] : 0) + ';';
+  });
+  sig += '|dz:' + (deadMode || 'fixed') + ':' + ((deadZone != null) ? deadZone.toFixed(3) : '');
+  if (loopStatus) {
+    const progSym = (loopStatus.backfilling && loopStatus.progress) ? loopStatus.progress.sym : null;
+    const progDone = (progSym && loopStatus.perSym && loopStatus.perSym[progSym]) ? loopStatus.perSym[progSym].done : 0;
+    sig += '|loop:' + loopStatus.sampleCount + ':' + loopStatus.factorCount + ':' + (loopStatus.backfilling ? (progSym + ':' + progDone) : 'idle');
+  }
+  return sig;
+}
+
 // ---- 主图蜡烛 ----
+function roundRectPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, h / 2, w / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = getTFData(sym, tf);
@@ -1461,6 +2804,154 @@ function drawMain(ctx, sym, tf, H) {
   ctx.fillText(fmt(last), PAD_L + plotW - 70, Math.max(PAD_T + 8, ly - 3));
   ctx.restore();
 
+  // 主图 SRSI 多周期叠加：仅叠加 overlayTfs 中勾选的周期（按周期独立，不再跟随全量 klineSel）；临时隐藏的跳过
+  const srsiPlan = mainChartSrsiPlan(cfg).filter(dp => !(cfg.ovHide && cfg.ovHide[dp.tf]));
+  const baseT = (t && t.length >= c.length) ? t.slice(start, c.length) : null;
+  if (srsiPlan.length) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, MAIN_H); ctx.clip();
+    const Y0 = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * MAIN_H;
+    // 50 中线（极淡，作为唯一通用参考）
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.setLineDash([2, 3]);
+    const yMid = Y0(50); ctx.beginPath(); ctx.moveTo(PAD_L, yMid); ctx.lineTo(W - PAD_R, yMid); ctx.stroke();
+    ctx.setLineDash([]);
+    // 每周期自定义上/下限带（超买/超卖）
+    srsiPlan.forEach(dp => {
+      const pc = getTFData(sym, dp.tf).c;
+      if (!pc || pc.length < 2) return;
+      const cfg2 = perTfSrsi(dp.tf, cfg.srsiByTf, cfg.srsi);
+      const col = dp.aux ? '#4dabf7' : tfColor(dp.tf);
+      [cfg2.overbought, cfg2.oversold].forEach(v => {
+        if (v == null || !isFinite(v)) return;
+        const y = Y0(v); ctx.strokeStyle = col; ctx.globalAlpha = 0.35; ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+      });
+      ctx.globalAlpha = 1; ctx.setLineDash([]);
+    });
+    // K/D 叠加线（按主图时间轴对齐；时间数据缺失时回退索引切片）
+    srsiPlan.forEach(dp => {
+      const pc = getTFData(sym, dp.tf).c;
+      if (!pc || pc.length < 2) return;
+      const tfT = getTFData(sym, dp.tf).t;
+      const cfg2 = perTfSrsi(dp.tf, cfg.srsiByTf, cfg.srsi);
+      const col = dp.aux ? '#4dabf7' : tfColor(dp.tf);
+      let kArr, dArr, useAlign = false;
+      if (baseT && tfT && tfT.length >= pc.length) {
+        const al = alignedSrsiOverlay(pc, tfT, baseT, cfg2);
+        if (al.k.length === baseT.length) { kArr = al.k; dArr = al.d; useAlign = true; }
+      }
+      if (useAlign) {
+        const drawAlign = (arr, dash, w) => {
+          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash || []);
+          ctx.beginPath(); let started = false;
+          for (let vi = 0; vi < baseT.length; vi++) {
+            const v = arr[vi]; if (v == null || !isFinite(v)) { started = false; continue; }
+            const x = X(start + vi), y = Y0(v);
+            if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        };
+        drawAlign(kArr, dp.aux ? [1, 2] : [], dp.tf === cfg.mainTF ? 1.6 : 1);
+        drawAlign(dArr, dp.aux ? [2, 3] : [4, 3], dp.tf === cfg.mainTF ? 1.4 : 0.9);
+      } else {
+        const sl = srsiPanelSeries(pc, cfg2, bars);
+        const off = Math.max(0, pc.length - Math.min(bars, pc.length));
+        const drawSlice = (arr, dash, w) => {
+          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash || []);
+          ctx.beginPath(); let started = false;
+          for (let i = start; i < c.length; i++) {
+            const li = i - off; if (li < 0 || li >= arr.length) continue;
+            const v = arr[li]; if (v == null || !isFinite(v)) { started = false; continue; }
+            const x = X(i), y = Y0(v);
+            if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        };
+        drawSlice(sl.k, dp.aux ? [1, 2] : [], dp.tf === cfg.mainTF ? 1.6 : 1);
+        drawSlice(sl.d, dp.aux ? [2, 3] : [4, 3], dp.tf === cfg.mainTF ? 1.4 : 0.9);
+      }
+    });
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 优化预览叠加（optPreviewOn）：以白色虚线画各已优选周期的 K/D + 上下带（不写入配置，便于看图对比）
+  if (cfg.optPreviewOn && cfg.srsiOptPreview) {
+    const Y0p = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * MAIN_H;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, MAIN_H); ctx.clip();
+    Object.keys(cfg.srsiOptPreview).forEach(tf => {
+      const pr = cfg.srsiOptPreview[tf]; if (!pr || !pr.best) return;
+      const pc = getTFData(sym, tf).c; if (!pc || pc.length < 2) return;
+      const tfT = getTFData(sym, tf).t;
+      const col = '#ffffff';
+      [pr.best.overbought, pr.best.oversold].forEach(v => {
+        if (v == null || !isFinite(v)) return;
+        const y = Y0p(v); ctx.strokeStyle = col; ctx.globalAlpha = 0.25; ctx.setLineDash([3, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke();
+      });
+      ctx.globalAlpha = 1; ctx.setLineDash([]);
+      let kArr, dArr, useAlign = false;
+      if (baseT && tfT && tfT.length >= pc.length) {
+        const al = alignedSrsiOverlay(pc, tfT, baseT, pr.best);
+        if (al.k.length === baseT.length) { kArr = al.k; dArr = al.d; useAlign = true; }
+      }
+      if (useAlign) {
+        const drawP = (arr, dash, w) => {
+          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash); ctx.beginPath(); let st = false;
+          for (let vi = 0; vi < baseT.length; vi++) { const v = arr[vi]; if (v == null || !isFinite(v)) { st = false; continue; } const x = X(start + vi), y = Y0p(v); if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y); }
+          ctx.stroke();
+        };
+        drawP(kArr, [2, 3], 1.1); drawP(dArr, [1, 3], 0.8);
+      } else {
+        const sl = srsiPanelSeries(pc, pr.best, bars);
+        const off = Math.max(0, pc.length - Math.min(bars, pc.length));
+        const drawS = (arr, dash, w) => {
+          ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash); ctx.beginPath(); let st = false;
+          for (let i = start; i < c.length; i++) { const li = i - off; if (li < 0 || li >= arr.length) continue; const v = arr[li]; if (v == null || !isFinite(v)) { st = false; continue; } const x = X(i), y = Y0p(v); if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y); }
+          ctx.stroke();
+        };
+        drawS(sl.k, [2, 3], 1.1); drawS(sl.d, [1, 3], 0.8);
+      }
+    });
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 主图顶部 SRSI 快选药丸条（显眼、明确可点）：前缀 SRSI: + 每周期圆角药丸
+  // 显示中=实心底+实色描边；隐藏/未开=空心描边+低透明+灰字；悬停=白亮边框；点击=切换显隐（角色保持）
+  _legendBoxes = [];
+  const PH = 14; // pill 高度
+  ctx.font = '10px monospace'; ctx.textBaseline = 'middle';
+  const pfx = 'SRSI:';
+  ctx.fillStyle = '#7a8699'; ctx.font = '9px monospace';
+  let lx = PAD_L + 2, lyv = PAD_T + 22 + PH / 2;
+  ctx.fillText(pfx, lx, lyv);
+  lx += ctx.measureText(pfx).width + 8;
+  ctx.font = '10px monospace';
+  ovQuickChips(cfg).forEach(ch => {
+    const label = ch.tf + (ch.aux && !ch.overlay ? ' 辅' : '');
+    const w = ctx.measureText(label).width + 12;
+    if (lx + w > W - PAD_R) { lx = PAD_L + 2 + ctx.measureText(pfx).width + 8; lyv += PH + 6; }
+    const col = ch.aux ? '#4dabf7' : tfColor(ch.tf);
+    const px = lx, py = lyv - PH / 2;
+    const hovering = _hover && px - 2 <= _hover.lx && _hover.lx <= px + w + 2 && py - 2 <= _hover.ly && _hover.ly <= py + PH + 2;
+    ctx.save();
+    if (ch.on) { ctx.globalAlpha = 0.30; ctx.fillStyle = col; roundRectPath(ctx, px, py, w, PH, PH / 2); ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.strokeStyle = hovering ? '#fff' : col;
+    ctx.lineWidth = hovering ? 1.6 : 1;
+    if (!ch.on) ctx.setLineDash([2, 2]);
+    ctx.globalAlpha = ch.on ? 1 : 0.55;
+    roundRectPath(ctx, px, py, w, PH, PH / 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = hovering ? '#fff' : (ch.on ? col : '#6b7481');
+    ctx.fillText(label, px + 6, lyv + 1);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    _legendBoxes.push({ tf: ch.tf, x0: px - 2, x1: px + w + 2, y0: py - 2, y1: py + PH + 2 });
+    lx += w + 5;
+  });
+
   // 标题
   ctx.fillStyle = '#8b95a5'; ctx.font = '9px monospace';
   ctx.fillText(sym + ' · ' + tf + '  最近 ' + n + ' 根', PAD_L + 4, PAD_T + 10);
@@ -1487,12 +2978,13 @@ function drawSub(ctx, sub, sym, y0) {
   } else if (sub.key === 'srsi') {
     const n = Math.min(cfg.bars, price.length);
     if (n < 2) { drawSubTitle(ctx, sub.name, SUB_COLORS.srsi, y0); return; }
-    const sl = srsiPanelSeries(price, cfg.srsi, n);
+    const srsiCfg = perTfSrsi(sub.tf || cfg.mainTF, cfg.srsiByTf, cfg.srsi);
+    const sl = srsiPanelSeries(price, srsiCfg, n);
     drawSrsiPanel(ctx, { k: sl.k, d: sl.d, hooks: sl.hooks }, sl.crossings, y0, n, sub);
     // 标题：SRSI 周期  Kxx.x Dxx.x ▲金叉/▼死叉  [主图]
     const k = sl.k.length ? sl.k[sl.k.length - 1] : null;
     const d = sl.d.length ? sl.d[sl.d.length - 1] : null;
-    const st = srsiSignal(k, sl.k.length > 1 ? sl.k[sl.k.length - 2] : null, { overbought: cfg.srsi.overbought, oversold: cfg.srsi.oversold });
+    const st = srsiSignal(k, sl.k.length > 1 ? sl.k[sl.k.length - 2] : null, { overbought: srsiCfg.overbought, oversold: srsiCfg.oversold });
     let title = sub.name;
     title += '  K' + (k != null ? k.toFixed(1) : '--') + ' D' + (d != null ? d.toFixed(1) : '--');
     if (st.crossing === 'buy') title += ' ▲金叉';
@@ -1881,16 +3373,24 @@ export function initKChart() {
     };
     _cv.addEventListener('mousemove', (e) => {
       _hover = toLocal(e);
+      // 区分拖动与点击：mousedown 后位移过大视为拖动（点击监听据此忽略）
+      if (_press && !_pressMoved) {
+        const dx = Math.abs(_hover.lx - _press.lx), dy = Math.abs(_hover.ly - _press.ly);
+        if (dx > 6 || dy > 6) _pressMoved = true;
+      }
       // 命中标题栏 → 拖拽
       const reg = _subRegions.find(r => _hover.ly >= r.y0 && _hover.ly <= r.y0 + SUB_GAP && _hover.lx >= PAD_L && _hover.lx <= W - PAD_R);
-      _cv.style.cursor = reg ? 'grab' : 'crosshair';
-      if (_drag) { if (Math.abs(_hover.ly - _drag.startY) > 8) _drag.moved = true; if (_drag.moved) _drag.curY = _hover.ly; _cv.style.cursor = 'grabbing'; renderKChart(); return; }
+      const chipAt = _legendBoxes.find(b => _hover.lx >= b.x0 && _hover.lx <= b.x1 && _hover.ly >= b.y0 && _hover.ly <= b.y1);
+      if (chipAt) { _cv.style.cursor = 'pointer'; _cv.title = 'SRSI ' + chipAt.tf + '：点击切换显隐'; }
+      else { _cv.style.cursor = _drag ? 'grabbing' : (reg ? 'grab' : 'crosshair'); if (_cv.title) _cv.title = ''; }
+      if (_drag) { if (Math.abs(_hover.ly - _drag.startY) > 8) _drag.moved = true; if (_drag.moved) _drag.curY = _hover.ly; renderKChart(); return; }
       renderKChart();
     });
     _cv.addEventListener('mousedown', (e) => {
       const p = toLocal(e);
+      _press = p; _pressMoved = false;
       const reg = _subRegions.find(r => p.ly >= r.y0 && p.ly <= r.y0 + SUB_GAP && p.lx >= PAD_L && p.lx <= W - PAD_R);
-      if (reg) _drag = { fromIdx: reg.idx, startY: p.ly, curY: p.ly, moved: false };
+      if (reg) _drag = { fromIdx: reg.idx, startX: p.lx, startY: p.ly, curY: p.ly, moved: false };
     });
     const endDrag = () => {
       if (_drag && _drag.moved) {
@@ -1923,14 +3423,66 @@ export function initKChart() {
     };
     _cv.addEventListener('mouseup', endDrag);
     window.addEventListener('mouseup', endDrag);
-    _cv.addEventListener('mouseleave', () => { _hover = null; renderKChart(); });
+    _cv.addEventListener('mouseleave', () => { _hover = null; _press = null; _pressMoved = false; renderKChart(); });
+    // 主图顶部 chip 栏点击：按下后未拖动且命中热区 → 切换该周期 SRSI 线显隐
+    _cv.addEventListener('click', (e) => {
+      if (_pressMoved) return;
+      const p = toLocal(e);
+      const hit = _legendBoxes.find(b => p.lx >= b.x0 && p.lx <= b.x1 && p.ly >= b.y0 && p.ly <= b.y1);
+      if (hit) toggleOvQuickTf(hit.tf);
+    });
   }
   renderKChart();
   bindOverviewClick();
 }
 
 // ---- 公共设置 ----
-function setSym(sym) { if (!sym) return; cfg.symbol = sym; persist(); renderKChart(); }
+function setSym(sym) {
+  if (!sym) return;
+  if (sym === cfg.symbol) { persist(); renderKChart(); return; }
+  persist();                 // 先以旧 symbol 保存当前币对配置
+  cfg.symbol = sym;
+  _ovFootTf = null;         // 切币对时重置页脚参数周期
+  loadCfg();                 // 加载该币对配置（无则默认）
+  persist();                 // 更新 lastSymbol
+  if (typeof document !== 'undefined') renderControls(); // 同步 SRSI 设置卡等控件显示的新币对
+  renderKChart();
+}
+function enumSymbols() {
+  try {
+    const sel = document.getElementById('kchartSymbol');
+    if (sel && sel.options && sel.options.length) return Array.from(sel.options).map(o => o.value).filter(Boolean);
+  } catch (e) {}
+  if (globalThis.SYMS && globalThis.SYMS.length) return globalThis.SYMS.map(s => (s && s.id) || s);
+  return [];
+}
+function copyCfgToAll(symbols) {
+  if (!_store) _store = readStore();
+  const list = (symbols && symbols.length) ? symbols : enumSymbols();
+  const snap = JSON.parse(JSON.stringify(cfg));
+  let n = 0;
+  list.forEach(s => { if (s && s !== cfg.symbol) { _store.bySymbol[s] = Object.assign(JSON.parse(JSON.stringify(snap)), { symbol: s }); n++; } });
+  persist();
+  toast('已复制本币对设置到 ' + n + ' 个币对');
+}
+function resetSymbolCfg() {
+  if (!_store) _store = readStore();
+  const sym = cfg.symbol;
+  delete _store.bySymbol[sym];
+  try { localStorage.setItem(STATE_KEY, JSON.stringify(_store)); } catch (e) {}
+  cfg = defaultKConfig(); cfg.symbol = sym;
+  normalizeCfg(cfg);
+  if (typeof document !== 'undefined') { renderControls(); renderKChart(); }
+}
+function openSrsiCardFor(tf) {
+  if (!KLINE_TF.includes(tf)) return;
+  cfg.srsiEditTf = tf;
+  cfg.srsi = { ...cfg.srsiByTf[tf] };
+  persist();
+  const wrap = document.getElementById('kchartSrsiCardWrap');
+  if (wrap) wrap.classList.remove('closed');
+  if (typeof document !== 'undefined') { renderControls(); renderKChart(); }
+}
 function applyKMode(res) {
   if (!res) return;
   if (res.mainTF) cfg.mainTF = res.mainTF;
@@ -1962,9 +3514,356 @@ function setShow(key, on) {
   renderControls();
   renderKChart();
 }
-function setSrsi(name, v) { if (!(name in cfg.srsi)) return; cfg.srsi[name] = parseInt(v) || DEFAULT_SRSI[name]; persist(); renderKChart(); }
-function resetSrsi() { cfg.srsi = { ...DEFAULT_SRSI }; persist(); renderKChart(); window.__renderKControls && window.__renderKControls(); }
-export function refreshWith(t) { cfg = t || defaultKConfig(); loadCfg(); persist(); }
+function setSrsi(name, v) {
+  const tf = cfg.srsiEditTf;
+  if (!cfg.srsiByTf[tf]) cfg.srsiByTf[tf] = { ...DEFAULT_SRSI };
+  if (!(name in cfg.srsiByTf[tf])) return;
+  cfg.srsiByTf[tf][name] = parseInt(v) || DEFAULT_SRSI[name];
+  cfg.srsi = { ...cfg.srsiByTf[tf] }; // 保持旧全局镜像同步
+  persist(); renderKChart();
+}
+function resetSrsi() { cfg.srsiByTf[cfg.srsiEditTf] = { ...DEFAULT_SRSI }; cfg.srsi = { ...DEFAULT_SRSI }; persist(); renderKChart(); if (typeof document !== 'undefined') renderControls(); }
+function setSrsiTf(tf) { if (KLINE_TF.includes(tf)) { cfg.srsiEditTf = tf; cfg.srsi = { ...cfg.srsiByTf[tf] }; } persist(); if (typeof document !== 'undefined') renderControls(); }
+function setSrsiAux(tf, on) { if (KLINE_TF.includes(tf)) { if (on) { cfg.srsiAux[tf] = true; keepInOvQuick(tf); } else delete cfg.srsiAux[tf]; } persist(); renderKChart(); }
+function setMainOverlayTf(tf, on) {
+  if (!KLINE_TF.includes(tf)) return;
+  cfg.overlayTfs = cfg.overlayTfs || {};
+  if (on) { cfg.overlayTfs[tf] = true; keepInOvQuick(tf); } else delete cfg.overlayTfs[tf];
+  cfg.mainOverlay = Object.keys(cfg.overlayTfs).length > 0; // 兼容镜像
+  persist(); renderKChart();
+}
+// 全局开关语义（兼容旧调用）：打开=按当前 klineSel 全勾；关闭=清空
+function setMainOverlay(on) {
+  cfg.overlayTfs = {};
+  if (on) KLINE_TF.forEach(tf => { if (cfg.klineSel[tf]) { cfg.overlayTfs[tf] = true; keepInOvQuick(tf); } });
+  cfg.mainOverlay = !!on;
+  persist(); renderKChart();
+}
+
+// 某周期优选角色：勾选「辅助(只做放行闸门)」的周期即闸门(gate)，其余为波段(swing)
+function roleForTf(tf) { return !!(cfg.srsiAux && cfg.srsiAux[tf]) ? 'gate' : 'swing'; }
+
+// 闸门放行对象可选目标（原生周期，覆盖用户常用场景）；动态过滤为比当前闸门周期更长者。
+const GATE_TARGET_OPTIONS = ['30m', '1h', '4h', '8h', '1d'];
+// 各 TF 一根 K 线的毫秒数（闸门对齐时间用，避免硬编码 1h 偏移）
+const TF_MS = { '1m': 60000, '5m': 300000, '10m': 600000, '15m': 900000, '30m': 1800000, '1h': 3600000, '4h': 14400000, '8h': 28800000, '1d': 86400000, '7d': 604800000, '30d': 2592000000 };
+function tfMs(tf) { return TF_MS[tf] || 60000; }
+
+function setGateTarget(tf) {
+  if (!KLINE_TF.includes(tf) || tf === cfg.srsiEditTf || tfMs(tf) <= tfMs(cfg.srsiEditTf)) return;
+  cfg.gateTargetTf = tf;
+  persist();
+  if (typeof document !== 'undefined') renderControls();
+}
+
+// 目标周期"下游冠军"参数推导（不硬编码逐币参数）：
+// 1) 优先用用户已对该目标周期「优选并应用」的参数；
+// 2) 否则对目标数据跑轻量 band 优选取数据驱动冠军；
+// 3) 都不可用回退 PDF 手册参考基线 / 全默认。
+function resolveGateChampion(target, closesT, opensT) {
+  if (cfg.srsiOptSource && cfg.srsiOptSource[target] === 'optimized' && cfg.srsiByTf && cfg.srsiByTf[target]) {
+    return { params: cfg.srsiByTf[target], origin: 'applied' };
+  }
+  try {
+    const res = optimizeSrsiBand(closesT, opensT, { grid: srsiNeighborhoodGrid(), manualParams: null, defaultParams: DEFAULT_SRSI_BAND, rollingFolds: 1 });
+    if (res && res.best && res.decision !== 'reject') return { params: res.best, origin: 'derived' };
+  } catch (e) { /* 退化到手册 */ }
+  const man = manualSwingParams(cfg.symbol, target);
+  if (man) return { params: man, origin: 'manual' };
+  return { params: DEFAULT_SRSI_BAND, origin: 'default' };
+}
+
+// 长历史拉取（默认 ~2 年，按 TF 分页 fetchKlinesRange；会话级缓存 + localStorage 持久化避免重复拉取）
+const _optHistCache = new Map();
+let _optFetchImpl = null; // 测试可注入桩
+export function __setOptFetch(fn) { _optFetchImpl = fn; }
+// 总时长上限：fetch 在半连接/极慢网络下 abort 可能不及时，用此兜底，超时即放弃并回退屏上 K 线
+function withTimeout(promise, ms, msg) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(msg || 'timeout')), ms);
+    Promise.resolve(promise).then(v => { clearTimeout(t); resolve(v); }, e => { clearTimeout(t); reject(e); });
+  });
+}
+// 各周期回测所需「尾切片」根数（来自 PDF 手册验收口径：1h 取末尾 15000 根、4h 取末尾 3500 根；
+// 15m 闸门需覆盖 1h 信号跨度 ≈ 625 天 = 60000 根）。拉足历史后只取末尾 N 根，不整段跑。
+const OPT_TAIL_BARS = {
+  '1m': 144000, '3m': 48000, '5m': 120000, '10m': 60000, '15m': 60000,
+  '30m': 30000, '1h': 15000, '2h': 7500, '4h': 3500, '6h': 3500,
+  '8h': 1750, '12h': 875, '1d': 730,
+};
+const OPT_CACHE_VER = 8; // v8：冠军选择对齐 AgentMore 手册规格（t↓排序+两半稳定性+邻域稳健三门槛顺序过滤；闸门=放行子集均值收益最大化），去除旧 walk-forward 覆盖逻辑
+const _optStoreKey = (sym, tf, days, maxBars) => 'srsiOptHist:v' + OPT_CACHE_VER + ':' + sym + '|' + tf + '|' + days + '|' + maxBars;
+function _optReadStore(sym, tf, days, maxBars) {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const c = localStorage.getItem(_optStoreKey(sym, tf, days, maxBars));
+    if (!c) return null;
+    const o = JSON.parse(c);
+    // 校验缓存根数是否达到该 TF 应有根数（版本或旧量缓存一律视为失效，重新拉取）
+    return (o && o.closes && o.closes.length >= Math.floor(maxBars * 0.9)) ? o : null;
+  } catch (e) { return null; }
+}
+function _optWriteStore(sym, tf, days, maxBars, obj) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(_optStoreKey(sym, tf, days, maxBars), JSON.stringify(obj));
+  } catch (e) { /* 配额超限(如 15m 体量) 静默跳过，仅保留会话缓存 */ }
+}
+async function optFetchKlines(sym, tf, days, role) {
+  const now = Date.now();
+  const startTime = now - days * 86400000;
+  // 按 TF 取「尾切片」应有根数并封顶（1h=15000/4h=3500/15m=60000，对齐 PDF 手册验收），不整段跑
+  const tfMins = tfMs(tf) / 60000;
+  const bars730 = Math.floor(730 * 1440 / tfMins);
+  const maxBars = Math.min(OPT_TAIL_BARS[tf] || bars730, 76000);
+  const key = sym + '|' + tf + '|' + days + '|' + maxBars;
+  if (_optHistCache.has(key)) return _optHistCache.get(key);
+  const cached = _optReadStore(sym, tf, days, maxBars); // 持久化命中且根数达标 → 秒回，不重新拉取
+  if (cached) { _optHistCache.set(key, cached); return cached; }
+  const totalMs = maxBars > 40000 ? 240000 : maxBars > 15000 ? 150000 : 90000; // 总超时兜底（根数越多越宽）
+  let raw = null;
+  try {
+    if (_optFetchImpl) raw = await _optFetchImpl(sym, tf, days);
+    else {
+      const p = await withTimeout(
+        fetchKlinesRange(sym, tf, startTime, now, () => {}, maxBars),
+        totalMs, '拉取历史K线超时'
+      );
+      if (p && p.closes && p.closes.length >= 60) raw = p;
+    }
+  } catch (e) { raw = null; }
+  let parsed = null;
+  if (raw && raw.closes && raw.closes.length >= 60) {
+    const times = raw.times || [];
+    parsed = {
+      closes: raw.closes,
+      opens: raw.opens || raw.closes,
+      times,
+      from: raw.from != null ? raw.from : (times.length ? times[0] : now),
+      to: raw.to != null ? raw.to : (times.length ? times[times.length - 1] : now)
+    };
+  }
+  if (parsed) { _optHistCache.set(key, parsed); _optWriteStore(sym, tf, days, maxBars, parsed); }
+  return parsed;
+}
+
+// 对当前币对某周期运行 SRSI 参数优选。
+// 异步：先拉取 ~2 年历史 K 线（带进度 loading），再 walk-forward 优选。
+// 拉取失败则回退当前屏上 K 线（≤500 根，标注 source:'local'）。
+export async function optimizeSrsiForTf(tf, role, opts = {}) {
+  tf = tf || cfg.srsiEditTf;
+  if (!KLINE_TF.includes(tf)) return null;
+  const r = role || roleForTf(tf);
+  const days = opts.days != null ? opts.days : 730;
+  const deep = !!cfg.srsiOptDeep;
+  const grid = deep ? srsiParamGrid() : srsiNeighborhoodGrid();
+  const minValSamples = r === 'gate' ? 6 : 15;
+  cfg.srsiOptPreview = cfg.srsiOptPreview || {};
+  cfg.srsiOptPreview[tf] = { loading: true, role: r, tf, symbol: cfg.symbol, ts: Date.now(), days };
+  if (typeof document !== 'undefined') renderControls();
+
+  let data1h = null, dataGate = null, meta = null;
+  try {
+    if (r === 'gate') {
+      const tg = cfg.gateTargetTf || '1h';
+      const gateTf = tf; // 闸门周期(被勾选为「辅助只做放行闸门」的周期，默认 15m)，不再硬编码
+      const dT = await optFetchKlines(cfg.symbol, tg, days, 'gate');
+      const dG = await optFetchKlines(cfg.symbol, gateTf, days, 'gate');
+      if (dT && dG && dT.closes.length >= 60 && dG.closes.length >= 60) {
+        const tail = Math.min(OPT_TAIL_BARS[tg] || dT.closes.length, dT.closes.length); // 目标周期尾窗（1h→15000、4h→3500）
+        const startT = Math.max(0, dT.closes.length - tail);
+        const closesT = dT.closes.slice(startT), opensT = dT.opens.slice(startT), timesT = dT.times.slice(startT);
+        data1h = { closes: closesT, opens: opensT, times: timesT };
+        dataGate = { closesG: dG.closes, opensG: dG.opens, timesG: dG.times };
+        meta = { bars: closesT.length, from: timesT[0], to: timesT[timesT.length - 1], days, source: 'history', target: tg, gate: gateTf, gateBars: dG.closes.length };
+      }
+    } else {
+      const fetched = await optFetchKlines(cfg.symbol, tf, days, r);
+      if (fetched && fetched.closes && fetched.closes.length >= 60) {
+        const tail = Math.min(OPT_TAIL_BARS[tf] || fetched.closes.length, fetched.closes.length);
+        const start = Math.max(0, fetched.closes.length - tail);
+        const closes = fetched.closes.slice(start);
+        const opens = fetched.opens.slice(start);
+        const times = fetched.times.slice(start);
+        data1h = { closes, opens, times };
+        meta = { bars: closes.length, from: times[0] != null ? times[0] : fetched.from, to: times.length ? times[times.length - 1] : fetched.to, days, source: 'history' };
+      }
+    }
+  } catch (e) { data1h = null; }
+  if (!data1h || data1h.closes.length < 60) {
+    const c = (getTFData(cfg.symbol, tf).c || []).slice();
+    if (c.length >= 60) {
+      data1h = { closes: c, opens: (getTFData(cfg.symbol, tf).o || c).slice(), times: (getTFData(cfg.symbol, tf).t || []) };
+      meta = { bars: c.length, days: 0, source: 'local', note: '无法拉取长历史，已用当前屏上 K 线' };
+    }
+  }
+  if (!data1h || data1h.closes.length < 60 || (r === 'gate' && !dataGate)) {
+    delete cfg.srsiOptPreview[tf];
+    if (typeof document !== 'undefined') renderControls();
+    return null;
+  }
+
+  let res = null;
+  try {
+    if (r === 'gate') {
+      const tg = cfg.gateTargetTf || '1h';
+      const targetMs = tfMs(tg);
+      const gateMs = tfMs(tf);
+      const champ = resolveGateChampion(tg, data1h.closes, data1h.opens);
+      // 闸门为固定文献链(15m RSI14/stoch9/K2)放行过滤，非参数优选；见 PDF 手册验收(41笔/73.2%/+1.072%)
+      const canonicalGate = { rsiPeriod: 14, stochPeriod: 9, smoothK: 2, smoothD: 2, overbought: 90, oversold: 10 };
+      res = optimizeGateBand({
+        closesT: data1h.closes, opensT: data1h.opens, timesT: data1h.times,
+        closesG: dataGate.closesG, opensG: dataGate.opensG, timesG: dataGate.timesG,
+        target: tg, targetMs, gateMs, downstream: champ.params, opts: { grid: GATE_PARAMS_GRID, rollingFolds: 5 }
+      });
+      res.championOrigin = champ.origin;
+    } else {
+      res = optimizeSrsiBand(data1h.closes, data1h.opens, {
+        grid, minValSamples,
+        defaultParams: perTfSrsi(tf, cfg.srsiByTf, cfg.srsi)
+      });
+      const atrRes = optimizeSrsi(data1h.closes, { role: 'swing', grid, minValSamples, defaultParams: perTfSrsi(tf, cfg.srsiByTf, cfg.srsi) });
+      res.atr = atrRes;
+      res.neighbor = bandNeighborTPos(data1h.closes, data1h.opens, res.best);
+    }
+  } catch (e) {
+    cfg.srsiOptPreview[tf] = { role: r, tf, symbol: cfg.symbol, ts: Date.now(), loading: false, error: (e && e.message) || String(e), ...meta };
+    persist();
+    if (typeof document !== 'undefined') renderControls();
+    return null;
+  }
+  cfg.srsiOptPreview[tf] = { ...res, role: r, tf, symbol: cfg.symbol, ts: Date.now(), ...meta };
+  persist();
+  if (typeof document !== 'undefined') renderControls();
+  return cfg.srsiOptPreview[tf] || null;
+}
+export function applySrsiOpt(tf) {
+  tf = tf || cfg.srsiEditTf;
+  const p = cfg.srsiOptPreview && cfg.srsiOptPreview[tf];
+  if (!p || !p.best) return;
+  cfg.srsiByTf[tf] = { ...p.best };
+  cfg.srsi = { ...p.best };
+  cfg.srsiOptSource = cfg.srsiOptSource || {};
+  cfg.srsiOptSource[tf] = 'optimized';
+  persist(); renderKChart(); if (typeof document !== 'undefined') renderControls();
+}
+export function clearSrsiOpt(tf) {
+  tf = tf || cfg.srsiEditTf;
+  cfg.srsiOptPreview = cfg.srsiOptPreview || {};
+  cfg.srsiOptSource = cfg.srsiOptSource || {};
+  delete cfg.srsiOptPreview[tf]; delete cfg.srsiOptSource[tf];
+  persist(); if (typeof document !== 'undefined') renderControls();
+}
+export function setSrsiOptPreview(on) { cfg.optPreviewOn = !!on; persist(); renderKChart(); }
+export function setSrsiOptDeep(on) { cfg.srsiOptDeep = !!on; persist(); if (typeof document !== 'undefined') renderControls(); }
+
+// 优选结果卡的 HTML（renderControls 内联渲染）
+function fmtDate(ts) {
+  if (ts == null) return '';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function optSectionHtml(tf) {
+  const p = cfg.srsiOptPreview && cfg.srsiOptPreview[tf];
+  if (!p) return '';
+  if (p.loading) {
+    return `<div class="kchart-srsi-opt"><div class="kchart-srsi-opt-head">⚡ 优选结果 <span class="kchart-srsi-badge warn">拉取历史K线…</span></div>
+      <div class="kchart-srsi-opt-metrics">正在拉取约 ${p.days || 730} 天历史 K 线数据，请稍候…</div></div>`;
+  }
+  if (p.error) {
+    return `<div class="kchart-srsi-opt"><div class="kchart-srsi-opt-head">⚡ 优选结果 <span class="kchart-srsi-badge bad">优选失败</span></div>
+      <div class="kchart-srsi-opt-metrics">${String(p.error).replace(/</g, '&lt;')}</div></div>`;
+  }
+  if (!p.best) return '';
+  const b = p.best;
+  const badge = p.decision === 'adopt' ? '✓ 建议采用' : p.decision === 'caution' ? '⚠ 谨慎采用' : '✗ 不建议';
+  const badgeCls = p.decision === 'adopt' ? 'ok' : p.decision === 'caution' ? 'warn' : 'bad';
+  const srcTag = cfg.srsiOptSource && cfg.srsiOptSource[tf] === 'optimized' ? ' · 已应用' : '';
+  const pct = (x) => (x == null ? '--' : (x >= 0 ? '+' : '') + x.toFixed(1) + '%');
+  const f2 = (x) => (x == null ? '--' : (x * 100).toFixed(1) + '%');
+  const evStr = (s) => (s && s.ev != null ? (s.ev * 100).toFixed(2) + '%' : '--');
+  const tStr = (s) => (s && s.t != null ? s.t.toFixed(2) : '--');
+  const ddStr = (s) => (s && s.dd != null ? pct(s.dd * 100) : '--');
+  const isGate = p.role === 'gate';
+  const paramStr = `${b.rsiPeriod ?? '-'}/${b.stochPeriod ?? '-'}/${b.smoothK ?? '-'}/${b.smoothD ?? '-'} · 带${b.overbought ?? '-'}/${b.oversold ?? '-'}`;
+  const defCmp = isGate ? '' : `${p.defFull && p.defFull.stats ? f2(p.defFull.stats.winRate) : '--'} 胜(默认)`;
+  const be = p.bestEv, beS = p.bestEvStats;
+  const bw = p.bestWin, bwS = p.bestWinStats;
+  const evParamStr = be ? `${be.rsiPeriod ?? '-'}/${be.stochPeriod ?? '-'}/${be.smoothK ?? '-'}/${be.smoothD ?? '-'}` : null;
+  const winParamStr = bw ? `${bw.rsiPeriod ?? '-'}/${bw.stochPeriod ?? '-'}/${bw.smoothK ?? '-'}/${bw.smoothD ?? '-'}` : null;
+  const bestKey = `${b.rsiPeriod}/${b.stochPeriod}/${b.smoothK}/${b.smoothD}`;
+  let crossLine = '';
+  if (evParamStr && evParamStr !== bestKey) crossLine += `EV最优 ${evParamStr}(${beS ? evStr(beS) : '--'},${beS ? beS.n : '--'}笔) `;
+  if (winParamStr && winParamStr !== bestKey && winParamStr !== evParamStr) crossLine += `胜率最优 ${winParamStr}(${bwS ? f2(bwS.winRate) : '--'},${bwS ? bwS.n : '--'}笔)`;
+
+  let dataLine;
+  if (p.source === 'history') {
+    const spanDays = (p.from && p.to) ? Math.round((p.to - p.from) / 86400000) : (p.days || 0);
+    const dataTf = isGate ? (p.target || '1h') : tf;
+    const tailBars = OPT_TAIL_BARS[dataTf] || Math.floor((p.days || 730) * 1440 / (tfMs(dataTf) / 60000));
+    const reqBars = Math.floor(tailBars * 0.9);
+    const full = p.bars >= reqBars;
+    const tfLabel = isGate ? `${dataTf}(目标)` : dataTf;
+    let s = `数据 ${p.bars} 根 ${tfLabel} (${fmtDate(p.from)}~${fmtDate(p.to)}, ${spanDays}天${full ? '· 满窗口' : `· 不足${tailBars}根请清缓存重拉`})`;
+    if (isGate && p.gateBars) {
+      const gtf = p.gate || '15m';
+      const gtail = OPT_TAIL_BARS[gtf] || Math.floor((p.days || 730) * 1440 / (tfMs(gtf) / 60000));
+      const greq = Math.floor(gtail * 0.9);
+      s += ` · 闸门${gtf} ${p.gateBars} 根${p.gateBars >= greq ? '· 满' : '· 不足'}`;
+    }
+    dataLine = s;
+  } else {
+    dataLine = `数据 ${p.bars} 根（当前屏上 K 线${p.note ? '· ' + p.note : ''}）`;
+  }
+
+  let primary, secondary, extra, oosLine = '';
+  if (isGate) {
+    const tg = p.target || '1h';
+    if (!p.stats) {
+      primary = '预览数据已过期（结构更新），请重新运行优选';
+      secondary = ''; extra = '';    } else {
+      const oos = p.oos && p.oos.stats;
+      oosLine = oos ? `滚动样本外(${p.oosFolds || 5}折) 胜率${f2(oos.winRate)}/${oos.n}笔/ EV${evStr(oos)}/累计${pct(oos.cum * 100)}/t=${tStr(oos)}` : '';
+      primary = `手册离场(闸门放行) 胜率${f2(p.stats.winRate)}/${p.stats.n}笔/ EV${evStr(p.stats)}/累计${pct(p.stats.cum * 100)}/t=${tStr(p.stats)}` +
+        (p.downstream ? ` · 下游${tg}冠军 ${p.downstream.rsiPeriod}/${p.downstream.stochPeriod}/${p.downstream.smoothK}/${p.downstream.smoothD}@${p.downstream.overbought}/${p.downstream.oversold}` : '') +
+        (p.championOrigin ? ` · 冠军来源(${p.championOrigin})` : '');
+      secondary = '';
+      extra = '';
+    }
+  } else {
+    const full = p.full ? p.full.stats : null;
+    const fullOpen = p.full ? p.full.openCount : 0;
+    if (!full) {
+      primary = '预览数据已过期（结构更新），请重新运行优选';
+      secondary = ''; extra = '';
+    } else {
+      primary = `手册离场(全样本) 胜率${f2(full.winRate)}/${full.n}笔/ EV${evStr(full)}/累计${pct(full.cum * 100)}/t=${tStr(full)}/回撤${ddStr(full)}${fullOpen ? ` · 持仓中${fullOpen}` : ''}`;
+      const atr = p.atr && p.atr.val;
+      secondary = atr ? `ATR固定离场(旧) 胜率${f2(atr.winRate)}/${atr.signals}笔/ EV${evStr(atr)}/累计${pct(atr.cumReturnPct)}` : '';
+      const oos = p.oos && p.oos.stats;
+      oosLine = oos ? `滚动样本外(${p.oosFolds || 5}折) 胜率${f2(oos.winRate)}/${oos.n}笔/ EV${evStr(oos)}/累计${pct(oos.cum * 100)}/t=${tStr(oos)}` : '';
+      const nb = p.neighbor;
+      extra = nb ? `<br><span class="kchart-srsi-reason">邻域正收益占比 ${nb.pos}/${nb.total} (${(nb.ratio * 100).toFixed(0)}%) · 两半稳定性 ${p.championFilters && p.championFilters.twoHalf ? `h1=${(p.championFilters.twoHalf.h1 * 100).toFixed(2)}%/h2=${(p.championFilters.twoHalf.h2 * 100).toFixed(2)}%` : '—'}</span>` : '';
+    }
+  }
+  const warn = (p.full && p.full.n < 20) || (isGate && p.stats.n < 20) ? `<br><span class="kchart-srsi-warn">⚠ 样本偏少，结论仅供参考（手册 ${p.gate || '15m'} 闸门 2 年亦仅 31 笔）</span>` : '';
+
+  return `<div class="kchart-srsi-opt">
+    <div class="kchart-srsi-opt-head">⚡ 优选结果 <span class="kchart-srsi-badge ${badgeCls}">${badge}${srcTag}</span> <span class="kchart-srsi-role">${isGate ? `闸门(${p.gate || '15m'}放行${p.target || '1h'})` : '波段'} · 默认对照 ${defCmp}</span></div>
+    <div class="kchart-srsi-opt-params">推荐(样本外最优) ${paramStr}${crossLine ? `<br>${crossLine}` : ''}</div>
+    <div class="kchart-srsi-opt-data">${dataLine}</div>
+    <div class="kchart-srsi-opt-metrics">${primary}${oosLine ? '<br>' + oosLine : ''}${secondary ? '<br>' + secondary : ''}${extra}<br><span class="kchart-srsi-reason">${p.reason || ''}</span>${warn}</div>
+    <div class="kchart-srsi-opt-actions">
+      <button class="kchart-srsi-btn" onclick="window.kApplySrsiOpt('${tf}')">应用</button>
+      <button class="kchart-srsi-btn" onclick="window.kClearSrsiOpt('${tf}')">放弃</button>
+      <button class="kchart-srsi-btn" onclick="window.kSetSrsiOptPreview(true)">预览叠加</button>
+      <button class="kchart-srsi-btn" onclick="window.kSetSrsiOptPreview(false)">关预览</button>
+    </div>
+  </div>`;
+}
+export function refreshWith(t) { cfg = t || defaultKConfig(); if (!_store) _store = readStore(); _store.lastSymbol = cfg.symbol; persist(); }
 
 // 供 main.js / index.html 暴露
 export function kSymbol() { return cfg.symbol; }
@@ -2080,7 +3979,7 @@ export function subHoverAt(frac, sym, tf, key, bars) {
   }
   if (key === 'srsi') {
     const price = getTFData(sym, tf).c;
-    const sl = srsiPanelSeries(price, cfg.srsi, bars);
+    const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars);
     // srsiPanelSeries 把数组切到最后 bars 根(局部索引 0..n-1)，需把绝对索引 i 换算成局部索引
     const off = Math.max(0, price.length - Math.min(bars, price.length));
     const li = i - off;
@@ -2110,6 +4009,11 @@ export const kchartApi = {
   setBars,
   setShow,
   setSrsi,
+  setSrsiTf,
+  setSrsiAux,
+  setGateTarget,
+  setMainOverlay,
+  setMainOverlayTf,
   resetSrsi: () => { resetSrsi(); },
   renderControls: renderKControls,
   render: renderKChart,
@@ -2124,7 +4028,38 @@ export const kchartApi = {
   checkUserTpSl,
   openOrderManager,
   closeOrderManager,
-  reversePosition
+  reversePosition,
+  copyCfgToAll,
+  resetSymbolCfg,
+  openSrsiCardFor,
+  toggleOvQuickTf,
+  optimizeSrsiForTf,
+  applySrsiOpt,
+  clearSrsiOpt,
+  setSrsiOptPreview,
+  setSrsiOptDeep,
+  // 单测钩子
+  __testStore: () => _store,
+  __clearStore: () => { _store = { __v: 2, lastSymbol: null, bySymbol: {} }; try { localStorage.removeItem(STATE_KEY); } catch (e) {} },
+  __setCfgForTest: (c) => { cfg = c; },
+  __persist: persist,
+  __load: loadCfg,
+  __normalizeCfg: normalizeCfg,
+  __overlayTfsList: overlayTfsList,
+  __mainChartSrsiPlan: mainChartSrsiPlan,
+  __buildDiscSig: buildDiscSig,
+  __alignedSrsiOverlay: alignedSrsiOverlay,
+  __ovQuickChips: ovQuickChips,
+  __legendBoxes: () => _legendBoxes,
+  __toggleOvQuickTf: toggleOvQuickTf,
+  __setOptFetch,
+  __optimizeSrsiForTf: optimizeSrsiForTf,
+  __applySrsiOpt: applySrsiOpt,
+  __clearSrsiOpt: clearSrsiOpt,
+  __setSrsiOptPreview: setSrsiOptPreview,
+  __setSrsiOptDeep: setSrsiOptDeep,
+  __roleForTf: roleForTf,
+  __optSectionHtml: optSectionHtml
 };
 if (typeof window !== 'undefined') window.kchartApi = kchartApi;
 

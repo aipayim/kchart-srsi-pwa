@@ -26,16 +26,36 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest}'],
-        navigateFallback: 'kchart.html'
+        navigateFallback: 'kchart.html',
+        runtimeCaching: [
+          { urlPattern: ({ request }) => request.mode === 'navigate', handler: 'NetworkFirst', options: { cacheName: 'nav', networkTimeoutSeconds: 5 } }
+        ]
       }
     })
   ],
+  server: {
+    host: true,
+    port: 5173,
+    proxy: {
+      '/llm-proxy': {
+        target: 'http://127.0.0.1:3457',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/llm-proxy/, '')
+      },
+      '/rss-proxy': {
+        target: 'https://www.coindesk.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/rss-proxy/, '/arc/outboundfeeds/rss')
+      }
+    }
+  },
   build: {
     target: 'es2020',
     outDir: 'dist',
     sourcemap: true,
     rollupOptions: {
       input: {
+        main: 'index.html',
         kchart: 'kchart.html'
       }
     }

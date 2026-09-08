@@ -151,13 +151,34 @@ export function buildAblation(rows, { decorr, minGroupN = 5 } = {}) {
 // ============================================================================
 
 export const TSEV_CFG = {
-  MIN_SAMPLE: 400,   // 训练：单因子态最低样本数（低于则不入票）
+  MIN_SAMPLE: 400,   // 官方训练：单因子态最低样本数（低于则不入票）
   Z_THRESH: 1.5,     // 训练：|z| 阈值（< 则视为噪声，权重归 0）
   M: 0.5,            // 投票：净票数绝对值 > M 才发方向，否则 观察
+  GATE: 0.60,        // 可交易门控：TSEV 置信 ≥ 此值 且 |net|≥M 才给 ✅ 可做多/空，否则判观望（宁缺毋滥）
   CONF_HIGH: 0.60,
   CONF_MID: 0.55,
-  LOCAL_MIN_SAMPLE: 400, // 本机优先：本机样本数 ≥ 此值才用本机权重，否则回落全局/经典
+  LOCAL_MIN_SAMPLE: 50,  // 本机优先：本机样本数 ≥ 此值才用本机权重（远低于官方，使少量本机样本即可启用）
+  LOCAL_FACTOR_MIN: 50, // 本机训练：单因子态最低样本数（低于则不入票；远低于官方 400 以便首开回补即出权重）
+  LOCAL_RECENCY_HALFLIFE_DAYS: 60, // 本机训练近期加权半衰期(天)：远低于官方 365，使 TSEV 跟随当前 regime（如近期多头行情）翻转，而非被 4 年历史稀释
+  IMBALANCE_RATIO: 3,   // 行情中立护栏：单边权重总量/反向权重总量 > 此值(或任一边为 0) → 判定样本偏单方向，TSEV 不可信、回退经典逻辑
+  SHRINK: true,         // 小样本 Wilson 收缩：把 wr 拉向 0.5，抑制伪显著（确定性、非自适应、不引入不确定性）
+  RECENCY_HALFLIFE_DAYS: 365, // 本机训练近期加权半衰期(天)：按样本真实时间分桶，训练期对每桶乘 exp(-桶龄/半衰期)。旧行情(如多年前的 bull/bear 周期)自动淡出、近期 regime 主导，使 TSEV 跟随当前涨跌翻转、对称多空。仅作用于本机 loop(localLoop) 的 buckets 结构，不影响离线快照
 };
+
+// 训练期近期加权：把按周分桶的统计聚合成有效 n/h。
+// a.buckets: { [周索引]: { n, h } }，周索引 = floor(ts / (7天ms))。旧桶权重随桶龄按半衰期指数衰减。
+function aggregateBuckets(a, now, halfLifeDays) {
+  let n = 0, h = 0;
+  const WEEK_MS = 7 * 86400000;
+  for (const wk in a.buckets) {
+    const bucketTs = Number(wk) * WEEK_MS;
+    const ageDays = (now - bucketTs) / 86400000;
+    const w = Math.exp(-ageDays / halfLifeDays);
+    n += w * (a.buckets[wk].n || 0);
+    h += w * (a.buckets[wk].h || 0);
+  }
+  return { n, h };
+}
 
 // TSEV 权重合并（本机优先）：给定全局权重与本机权重，按「本机优先」返回最终权重与来源。
 // 返回 { weights, source:'local'|'global'|'classic', n }。
@@ -165,9 +186,10 @@ export function combineWeights(globalW, localW, opts = {}) {
   const localMin = opts.localMin != null ? opts.localMin : TSEV_CFG.LOCAL_MIN_SAMPLE;
   const localN = opts.localN || 0;
   const globalN = opts.globalN || 0;
-  if (localW && Object.keys(localW).length && localN >= localMin)
+  const _count = (o) => o ? Object.keys(o).filter(k => !k.startsWith('__')).length : 0;
+  if (localW && _count(localW) && localN >= localMin)
     return { weights: localW, source: 'local', n: localN };
-  if (globalW && Object.keys(globalW).length)
+  if (globalW && _count(globalW))
     return { weights: globalW, source: 'global', n: globalN };
   return { weights: {}, source: 'classic', n: 0 };
 }
@@ -221,12 +243,13 @@ export function trainTsevWeights(rows, opts = {}) {
     for (const f of fs) {
       if (!f || f.side === 0) continue;
       const key = f.name + '|' + f.cond + '|' + f.side;
-      const a = acc[key] || (acc[key] = { n: 0, h: 0 });
+      const a = acc[key] || (acc[key] = { n: 0, h: 0, side: f.side });
       a.n++;
       a.h += (fut === f.side) ? 1 : 0;
     }
   }
   const W = {};
+  let posW = 0, negW = 0;
   for (const k in acc) {
     const a = acc[k];
     if (a.n < MIN_SAMPLE) continue;
@@ -235,7 +258,72 @@ export function trainTsevWeights(rows, opts = {}) {
     const z = (p - 0.5) / se;
     if (Math.abs(z) < Z_THRESH) continue;
     if (p <= 0 || p >= 1) continue;
-    W[k] = Math.log(p / (1 - p));
+    const w = Math.log(p / (1 - p));
+    W[k] = w;
+    if (a.side > 0) posW += w; else if (a.side < 0) negW += w;
+  }
+  // 行情中立护栏：若训练样本只覆盖单一方向(如仅上涨行情)，则只有同向因子达到样本阈值，
+  // 权重表会天然偏向该方向、永远无法表达反向。此时 TSEV 不可信，应回退经典逻辑。
+  const IMBALANCE_RATIO = TSEV_CFG.IMBALANCE_RATIO ?? 3;
+  const eps = 1e-9;
+  if (posW < eps || negW < eps || Math.max(posW, negW) / (Math.min(posW, negW) + eps) > IMBALANCE_RATIO) {
+    W.__unbalanced = true;
+    W.__pos = +posW.toFixed(3);
+    W.__neg = +negW.toFixed(3);
+  }
+  return W;
+}
+
+// 小样本 Wilson 收缩：把命中率 p 拉向 0.5，抑制伪显著（确定性、非自适应）。
+// 返回收缩后的 p（center）。z=1.96 对应 95% 置信。
+export function wilsonShrink(p, n, z = 1.96) {
+  if (n <= 0) return 0.5;
+  const denom = 1 + (z * z) / n;
+  const center = (p + (z * z) / (2 * n)) / denom;
+  return center;
+}
+
+// 由「已聚合的每因子统计」训练 TSEV 权重（本机 loop 用，避免存原始样本、节省移动端空间）。
+// stats: { 'name|cond|side': { n, h } }，h = 与 side 同向的未来样本数。返回同 trainTsevWeights 的权重表。
+// opts.shrink: 是否对 p 做 Wilson 收缩（默认按 TSEV_CFG.SHRINK）。收缩只减小幅度、不改方向符号。
+export function trainTsevWeightsStats(stats, opts = {}) {
+  const MIN_SAMPLE = opts.MIN_SAMPLE ?? TSEV_CFG.LOCAL_FACTOR_MIN;
+  const Z_THRESH = opts.Z_THRESH ?? TSEV_CFG.Z_THRESH;
+  const shrink = opts.shrink != null ? opts.shrink : TSEV_CFG.SHRINK;
+  const halfLife = opts.recencyHalfLifeDays ?? TSEV_CFG.RECENCY_HALFLIFE_DAYS;
+  const now = opts.now != null ? opts.now : Date.now();
+  const W = {};
+  let posW = 0, negW = 0;
+  for (const k in stats) {
+    const a = stats[k];
+    if (!a) continue;
+    // 本机 loop 走时间分桶(近期加权)；全局/JSON 快照走 {n,h} 直接聚合（兼容旧结构）
+    let n = 0, h = 0;
+    if (a.buckets) {
+      const agg = aggregateBuckets(a, now, halfLife);
+      n = agg.n; h = agg.h;
+    } else {
+      n = a.n || 0; h = a.h || 0;
+    }
+    if (n < MIN_SAMPLE) continue;
+    const p = h / n;
+    const se = 0.5 / Math.sqrt(n);
+    const z = (p - 0.5) / se;
+    if (Math.abs(z) < Z_THRESH) continue;
+    if (p <= 0 || p >= 1) continue;
+    const pAdj = shrink ? wilsonShrink(p, n) : p;
+    const w = Math.log(pAdj / (1 - pAdj));
+    W[k] = w;
+    const side = Number(k.split('|')[2]);
+    if (side > 0) posW += w; else if (side < 0) negW += w;
+  }
+  // 行情中立护栏：权重只覆盖单一方向(如仅上涨行情学到的因子) → 无法表达反向，标记不可信。
+  const IMBALANCE_RATIO = TSEV_CFG.IMBALANCE_RATIO ?? 3;
+  const eps = 1e-9;
+  if (posW < eps || negW < eps || Math.max(posW, negW) / (Math.min(posW, negW) + eps) > IMBALANCE_RATIO) {
+    W.__unbalanced = true;
+    W.__pos = +posW.toFixed(3);
+    W.__neg = +negW.toFixed(3);
   }
   return W;
 }
@@ -243,6 +331,9 @@ export function trainTsevWeights(rows, opts = {}) {
 // TSEV 投票：因子态 × 权重 → 方向。
 // 返回 { dir:+1/-1/0, dirText:'看多'/'看空'/'观察', net, conf, confLabel, parts }。
 export function voteTsev(factors, weights, opts = {}) {
+  // 行情中立护栏（部分投票）：若权重只学到单一方向(如仅上涨行情样本)，不整体禁用，
+  // 而是仅允许投出「已学到权重的那一侧」（如仅跌行情 → 可给看空，但不给看多），
+  // 避免把唯一有用的方向也丢掉。仅当两侧都无任何有效权重(__pos、__neg 均≈0)才彻底不投票(回退经典)。
   const M = opts.M ?? TSEV_CFG.M;
   let net = 0;
   const parts = [];
@@ -253,9 +344,134 @@ export function voteTsev(factors, weights, opts = {}) {
     net += w * f.side;
     parts.push(f.name + (w > 0 ? '+' : '') + w.toFixed(2));
   }
-  const dir = net > M ? +1 : net < -M ? -1 : 0;
+  let dir = net > M ? +1 : net < -M ? -1 : 0;
+  let unbalanced = false, partial = false;
+  if (W.__unbalanced) {
+    const posW = W.__pos || 0, negW = W.__neg || 0;
+    if (posW < 1e-9 && negW < 1e-9) {
+      return { dir: 0, dirText: '观察', net: 0, conf: 0.5, confLabel: '低', parts: [], unbalanced: true, partial: false };
+    }
+    // 部分投票：不确认「未学到」的一侧（避免单边样本伪造反向判决）
+    if (posW < 1e-9 && dir > 0) dir = 0;
+    if (negW < 1e-9 && dir < 0) dir = 0;
+    unbalanced = true; partial = true;
+  }
   const conf = 1 / (1 + Math.exp(-net));
   const confLabel = conf >= TSEV_CFG.CONF_HIGH ? '高' : conf >= TSEV_CFG.CONF_MID ? '中' : '低';
   const dirText = dir > 0 ? '看多' : dir < 0 ? '看空' : '观察';
-  return { dir, dirText, net, conf, confLabel, parts };
+  return { dir, dirText, net, conf, confLabel, parts, unbalanced, partial };
+}
+
+// 前向准确度回测（供面板信任看板）：把带标签样本按时间切 train/test，用 train 训练权重，
+// 在 test 上重放 TSEV 投票，统计「TSEV 方向 = 实际方向(raw)」的命中率。
+// rows: [{ factors:[{name,cond,side}], raw:+1/-1/0 }]（raw = 未来真实方向标签，0=无标签跳过）。
+// 返回 { acc, n(判决笔数), coverage(test中有标签占比) } 或 null（样本不足）。
+// 由已训练/已聚合统计生成可读因子表（诊断用）：列出每个因子态的有效样本数、命中率、z、权重及是否入票。
+// 与线上 train() 使用同一套阈值/半衰期，便于肉眼比对。
+export function factorStatsTable(stats, opts = {}) {
+  const MIN_SAMPLE = opts.MIN_SAMPLE ?? TSEV_CFG.LOCAL_FACTOR_MIN;
+  const Z_THRESH = opts.Z_THRESH ?? TSEV_CFG.Z_THRESH;
+  const halfLife = opts.recencyHalfLifeDays ?? TSEV_CFG.LOCAL_RECENCY_HALFLIFE_DAYS;
+  const now = opts.now != null ? opts.now : Date.now();
+  const out = [];
+  for (const k in stats) {
+    const a = stats[k];
+    if (!a) continue;
+    let n = 0, h = 0;
+    if (a.buckets) { const agg = aggregateBuckets(a, now, halfLife); n = agg.n; h = agg.h; }
+    else { n = a.n || 0; h = a.h || 0; }
+    const p = n > 0 ? h / n : 0;
+    const se = n > 0 ? 0.5 / Math.sqrt(n) : 0;
+    const z = se > 0 ? (p - 0.5) / se : 0;
+    const passed = n >= MIN_SAMPLE && Math.abs(z) >= Z_THRESH && p > 0 && p < 1;
+    const pAdj = p <= 0 ? 1e-6 : p >= 1 ? 1 - 1e-6 : p;
+    const w = Math.log(pAdj / (1 - pAdj));
+    const side = Number(k.split('|')[2]);
+    out.push({ key: k, side, n: Math.round(n), h, p: +p.toFixed(3), z: +z.toFixed(2), w: +w.toFixed(3), passed });
+  }
+  out.sort((a, b) => b.w - a.w);
+  return out;
+}
+
+// 前向准确度回测（供面板信任看板）：把带标签样本按时间切 train/test，用 train 训练权重，
+// 在 test 上重放 TSEV 投票，统计「TSEV 方向 = 实际方向」的命中率。
+// 与线上 train() 严格一致：使用 LOCAL_FACTOR_MIN / LOCAL_RECENCY_HALFLIFE_DAYS / Z_THRESH / SHRINK。
+// 改进（A）：非重叠 walk-forward（embargo 间隔，去除 STRIDE=1 相邻强相关）+ 各周期(h4/d1/d3)独立命中率 +
+// 覆盖率 + 入票因子数，使「51%」数字真实反映部署模型而非更严的离线默认。
+// rows: [{ factors:[{name,cond,side}], raw:+1/-1/0, futDir:{h4,d1,d3} }]
+// 返回 { acc, n, coverage, perHorizon:{h4,d1,d3}, factorCount } 或 null（样本不足）。
+export function forwardAccuracy(rows, opts = {}) {
+  if (!rows || rows.length < 40) return null;
+  const split = opts.split != null ? opts.split : 0.7;
+  const embargo = opts.embargo != null ? opts.embargo : 24; // 测试集每隔 embargo 根才计一次，去相邻强相关
+  const trainOpts = {
+    MIN_SAMPLE: TSEV_CFG.LOCAL_FACTOR_MIN,
+    Z_THRESH: TSEV_CFG.Z_THRESH,
+    recencyHalfLifeDays: TSEV_CFG.LOCAL_RECENCY_HALFLIFE_DAYS,
+    shrink: TSEV_CFG.SHRINK
+  };
+  const HZ = ['h4', 'd1', 'd3'];
+  const cut = Math.floor(rows.length * split);
+  const gap = embargo; // 训练/测试之间留空窗，避免 STRIDE=1 的价格窗重叠导致泄漏（非重叠 walk-forward）
+  const train = rows.slice(0, cut);
+  const test = rows.slice(Math.min(rows.length, cut + gap));
+  // 按各 horizon 标签分别累积训练统计（各周期独立训一套权重）
+  const acc = { h4: {}, d1: {}, d3: {} };
+  for (const r of train) {
+    const fs = r.factors || [];
+    for (const h of HZ) {
+      const lab = (r.futDir && r.futDir[h]) || r.raw || 0;
+      if (!lab) continue;
+      const a = acc[h];
+      for (const f of fs) {
+        if (!f || f.side === 0) continue;
+        const key = f.name + '|' + f.cond + '|' + f.side;
+        const s = a[key] || (a[key] = { n: 0, h: 0 });
+        s.n++; s.h += (lab === f.side) ? 1 : 0;
+      }
+    }
+  }
+  const W = {};
+  for (const h of HZ) W[h] = trainTsevWeightsStats(acc[h], trainOpts);
+  const per = {}; let n = 0, hit = 0;
+  for (const r of test) {
+    const lab = (r.futDir && r.futDir.d1) || r.raw || 0; // 主判决用 d1（与线上 addRow 一致）
+    if (!lab) continue;
+    const v = voteTsev(r.factors || [], W.d1, trainOpts);
+    if (v.dir === 0) continue;
+    n++;
+    if ((v.dir > 0 ? 1 : -1) === lab) hit++;
+    for (const h of HZ) {
+      const lh = (r.futDir && r.futDir[h]) || r.raw || 0;
+      if (!lh) continue;
+      const vh = voteTsev(r.factors || [], W[h], trainOpts);
+      if (vh.dir === 0) continue;
+      per[h] = per[h] || { n: 0, hit: 0 };
+      per[h].n++;
+      if ((vh.dir > 0 ? 1 : -1) === lh) per[h].hit++;
+    }
+  }
+  if (!n) return null;
+  const perHorizon = {};
+  for (const h of HZ) perHorizon[h] = per[h] ? +(per[h].hit / per[h].n).toFixed(3) : null;
+  return {
+    acc: +(hit / n).toFixed(3),
+    n,
+    coverage: +(n / test.length).toFixed(3),
+    perHorizon,
+    factorCount: Object.keys(W.d1).filter(k => !k.startsWith('__')).length
+  };
+}
+
+// 近期衰减：把聚合统计整体乘 factor（factor∈[0,1]），用于本机 loop 让旧行情样本随时间淡出，
+// 使 TSEV 权重跟随实时行情（对称地多空、不偏袒任何单边）。原地修改 stats 并返回（便于单测与原地应用）。
+export function decayStats(stats, factor) {
+  if (!stats || factor == null || factor >= 1) return stats;
+  const f = Math.max(0, Math.min(1, factor));
+  for (const k in stats) {
+    const s = stats[k];
+    if (!s) continue;
+    s.n *= f; s.h *= f;
+  }
+  return stats;
 }

@@ -35,12 +35,13 @@ public/pwa-512.png
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation}.js
+src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js}
+src/pwa/{data.js,kchartApp.js,localLoop.js}
 src/tech2/kchart.js
 tests/{kchart.test.mjs,consistency.test.mjs}
 tests/fixtures/bnbusdt_klines.json
+public/tsev-weights.json
 ```
 
 > 这些文件就是 PWA 运行 / 构建 / 测试所需的全部依赖闭环。新增文件必须属于此白名单，否则不要入库。
@@ -50,7 +51,7 @@ tests/fixtures/bnbusdt_klines.json
 ## 3. 排除项（绝不入库 / 已脱敏）
 
 - 主系统 UI 与交易核心：`index.html`、`src/legacy.js`、`src/main.js`、`src/ai/`、`src/tech/`、`src/auth/`、`src/tech2/fusionBacktest.js`
-- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`
+- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/gen-tsev-weights.mjs`、`scripts/rehearse-tsev.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`
 - 主系统测试（覆盖主系统模块）：`tests/engine|persist|reconcile|ai|regime|disciplineAnalysis.test.mjs`
 - 内部文档：`AGENTS.md`、`PLAN.md`、`CHANGELOG.md`、`index.legacy.html.bak`、`docs/`（含真实 Cloudflare 区域/账户 ID）
 - 构建产物与数据：`dist/`、`dev-dist/`、`node_modules/`、`data/`（均已在 `.gitignore`）
@@ -65,11 +66,19 @@ tests/fixtures/bnbusdt_klines.json
 ```bash
 # ① 在源码版改代码
 cd /mnt/d/TEST/app/app36-trader-hst
-# …编辑 src/tech2/kchart.js…
-npm test                 # 全量测试必须全绿（kchart 274 + 其余）
+# …编辑 src/tech2/kchart.js / src/pwa/* / src/engine/* …
+npm test                 # 全量测试必须全绿（kchart 295 + 其余）
+
+# ①-b 若改动了 TSEV：重新生成全局权重快照（需 data/discipline-factors.jsonl 含 factors+fut 样本）
+#     无网络环境会产出空权重（PWA 回落经典逻辑，本机 loop 仍可逐设备自学习）
+node scripts/gen-tsev-weights.mjs
 
 # ② 仅把白名单内改动同步到脱敏版
 cp src/tech2/kchart.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/tech2/kchart.js
+cp src/engine/disciplineAnalysis.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/engine/disciplineAnalysis.js
+cp src/engine/srsiOptimizer.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/engine/srsiOptimizer.js  # SRSI 优选器（kchart.js 已 import，须随包发布）
+cp src/pwa/localLoop.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/pwa/localLoop.js
+cp public/tsev-weights.json /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/public/tsev-weights.json
 # 若改了测试，也同步：
 cp tests/kchart.test.mjs /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/tests/kchart.test.mjs
 
@@ -101,12 +110,14 @@ cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版
 export CLOUDFLARE_API_TOKEN="$(grep -m1 '^Token:' /mnt/d/TEST/app/app29-openapi/pat.txt | sed 's/^Token://')"
 export CLOUDFLARE_ACCOUNT_ID="766d2b730eb31ff7aac0210a1808ad7f"
 
-npx wrangler pages deploy dist --project-name=srsi-pwa --commit-dirty=true
+npx wrangler pages deploy dist --project-name=srsi-pwa --branch main --commit-dirty=true
 ```
 
 - 部署后 `https://srsi.openapi.im/kchart` 即为最新版；根路径 `/` 经 `public/_redirects` 302 跳转到 `/kchart.html`。
+- **⚠️ 分支必须是 `main`**：自定义域 `srsi.openapi.im` **只服务 Production 部署**，而 Cloudflare Pages 把 `main` 分支视为 Production。用 `--branch production`（或其它名）部署只会产生 **Preview** 部署，自定义域**不会更新**，线上仍显示旧版。务必 `--branch main`。
 - 首次/罕见情况下 wrangler 上传较慢会超时，重试一次即可；**不要用 `--yes`**（该子命令不识别此标志，会打印用法）。
-- 验证：`curl -s -o /dev/null -w "%{http_code}" https://srsi.openapi.im/kchart` 应返回 `200`；并确认线上 JS 含本次改动。
+- 验证：`curl -s -o /dev/null -w "%{http_code}" https://srsi.openapi.im/kchart` 应返回 `200`；并确认线上 JS 含本次改动（如 `curl -s https://srsi.openapi.im/kchart | grep kchartSrsiCard`）。
+- 浏览器若仍缓存旧 Service Worker：用 PWA「刷新」按钮（unregister SW + 清 Cache + 硬刷新），或新开标签页。
 
 ---
 

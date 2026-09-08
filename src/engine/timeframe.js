@@ -12,7 +12,9 @@ export const TICK_TF = ['1t', '5t', '10t', '20t', '50t'];
 // K线 REST 周期（由 Binance klines API 获取，存 S.klines）。7d/30d 内部用 1w/1M 蜡烛；10m 由 5m 合成
 export const KLINE_TF = ['1m', '5m', '10m', '15m', '30m', '1h', '4h', '8h', '1d', '7d', '30d'];
 // 显示周期 → Binance klines interval 映射（仅 7d/30d 需转义，其余同 key）
-export const KLINE_INTERVAL = { '1m': '1m', '10m': '5m', '7d': '1w', '30d': '1M' };
+// 7d/30d 用日线(1d)拉取: 月线/周线分辨率无法表达"最近7/30个自然日"的真实回报,
+// 必须日线分辨率才能用时间戳精确回看 N 天前价格(tfOverviewStat 时长感知)。
+export const KLINE_INTERVAL = { '1m': '1m', '10m': '5m', '7d': '1d', '30d': '1d' };
 // 各 K线周期的分钟数（用于多 SRSI 子图共享时间轴 —— 宽度比例 = 分钟数之比）
 export const KLINE_MINUTES = {
   '1m': 1, '5m': 5, '10m': 10, '15m': 15, '30m': 30,

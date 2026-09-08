@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智能交易系统 v1.0</title>
+  <script type="module" crossorigin src="./assets/main-BgZXI0BF.js"></script>
+  <link rel="modulepreload" crossorigin href="./assets/localLoop-38F0E2Xh.js">
+  <link rel="stylesheet" crossorigin href="./assets/localLoop-oK9Zh2CO.css">
+<link rel="manifest" href="./manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="./registerSW.js"></script></head>
+<body>
+<div class="header">
+  <div class="logo">&#9670; 智能交易系统 <span id="appVersion">v1.0</span></div>
+  <div class="header-center">
+    <button class="nav-btn active" onclick="switchPage('dashboard',this)">行情</button>
+    <button class="nav-btn" id="nav_fusion" onclick="switchPage('fusion',this)">数据融合</button>
+    <button class="nav-btn" onclick="switchPage('ai',this)">AI管理</button>
+    <button class="nav-btn" id="nav_tech" onclick="switchPage('tech',this)">技术分析</button>
+    <button class="nav-btn" id="nav_kchart" onclick="switchPage('kchart',this)">K线分析</button>
+    <button class="nav-btn" id="nav_arb" onclick="switchPage('arb',this)">套利</button>
+    <button class="nav-btn" id="nav_subs" onclick="switchPage('subs',this)">子账户</button>
+    <button class="nav-btn" id="nav_pnl" onclick="switchPage('pnl',this)">盈亏</button>
+    <button class="nav-btn" onclick="switchPage('settings',this)">设置</button>
+    <button class="nav-btn" id="nav_ledger" onclick="switchPage('ledger',this)">账本</button>
+  </div>
+  <div class="header-right">
+    <select class="risk-preset" id="riskPreset" onchange="setRiskPreset(this.value)">
+      <option value="conservative">保守模式</option>
+      <option value="standard" selected>标准模式</option>
+      <option value="aggressive">激进模式</option>
+    </select>
+    <div class="mode-badge">模拟</div>
+    <span id="dataStatus" style="font-size:9px;color:var(--gold)">连接中</span>
+    <div class="total-assets"><span id="totalLabel">总资产</span> <b id="totalAssets">$1,000.00</b></div>
+    <button class="mode-toggle" id="modeToggleBtn" onclick="toggleMode()">切换大白话版</button>
+    <button class="mode-toggle" onclick="restart()" style="border-color:var(--red);color:var(--red)">重来</button>
+  </div>
+</div>
+<div class="main">
+  <div class="sidebar">
+    <div><h3 id="side_coins">币种</h3><div id="symbolList"></div></div>
+    <div><h3 id="side_subs_label">子账户</h3><div id="subList"></div></div>
+    <div style="margin-top:auto;padding-top:8px;border-top:1px solid var(--border)">
+      <h3 id="side_risk">风控</h3>
+      <div style="font-size:9px;color:var(--text2)">
+        <div><span id="side_pnl">今日盈亏</span>: <span id="dailyPnl" style="color:var(--red)">+$0.00</span></div>
+        <div><span id="side_active">活跃仓位</span>: <span id="activePos">0</span>/<span id="maxPos">10</span></div>
+        <div class="fusion-bar" style="margin-top:3px"><div class="fusion-bar-fill" id="riskFill" style="width:10%;background:var(--green)"></div></div>
+        <div style="margin-top:4px"><span id="side_winrate">AI胜率</span>: <span id="aiWinRate" style="color:var(--purple)">0%</span></div>
+        <div><span id="side_arb">套利次数</span>: <span id="arbCount" style="color:var(--gold)">0</span></div>
+        <div><span>累计理论利润</span>: <span id="arbProfit" style="color:var(--gold)">$0.00</span></div>
+        <div style="margin-top:6px;border-top:1px dashed var(--border);padding-top:4px;font-size:8px;line-height:1.5">
+          <div id="auditPanel">
+            <div>子账户余额: <span id="audBal">$0</span></div>
+            <div>持仓保证金: <span id="audMargin">$0</span></div>
+            <div>浮动盈亏: <span id="audFloat" style="color:var(--text2)">$0</span></div>
+            <div>合计: <span id="audSum" style="color:var(--green)">$0</span></div>
+            <div style="color:var(--purple)">已实现盈亏: <span id="audReal">$0</span></div>
+            <div style="color:var(--text2)">期初本金: <span id="audInit">$1000</span></div>
+            <div style="color:var(--gold)">净盈亏: <span id="audNet">$0</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="content">
+    <div class="page active" id="page-dashboard">
+      <div class="ticker-grid" id="tickerGrid"></div>
+      <div class="pos-section"><h3 id="pos_section_label">当前持仓</h3><div id="positionList"><div class="no-pos">暂无持仓</div></div></div>
+    </div>
+    <div class="page" id="page-fusion">
+      <h3 style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px"><span id="fusion_title_label">多维数据融合</span> — <select id="fusionSel" onchange="setFusionSym(this.value)" style="font-size:10px;background:var(--card2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px"></select> <span id="fusionPrice" style="margin-left:6px;font-size:12px;font-weight:bold"></span> <span id="fusionLSRatio" style="margin-left:4px;font-size:9px;color:var(--text2)"></span> <span onclick="resetFusionOrder()" title="恢复默认排序" style="cursor:pointer;font-size:11px;color:var(--text2);margin-left:6px">↺</span></h3>
+      <div class="fusion-grid" id="fusionGrid"></div>
+    </div>
+    <div class="page" id="page-ai">
+      <div class="ai-grid">
+        <div class="ai-card"><h4>&#9670; <span id="ai_engine_label">AI 决策引擎</span></h4>
+          <div style="margin-bottom:8px"><button class="btn btn-buy" id="btnFullAnalysis" onclick="fullMarketAnalysis()" style="width:100%;font-size:10px;padding:6px 0">&#9670; <span id="ai_full_label">全面分析行情</span></button></div>
+          <div id="fullAnalysisResult" style="margin-bottom:8px"></div>
+          <div id="aiDecisions"></div></div>
+        <div class="ai-card"><h4>&#9670; <span id="ai_evo_label">AI 进化统计</span></h4><div class="ai-stats" id="aiStats"></div>
+          <h4 style="margin-top:10px">&#9670; <span id="ai_prompt_label">AI 分析提示词</span></h4><div class="ai-prompt" id="aiPrompt"></div>
+          <div style="font-size:9px;color:var(--text2);padding:4px 0" id="aiGate">方向门: 等待数据…</div>
+          <div id="aiCap"></div>
+          <div id="aiSigScores"></div>
+          <div id="aiWarn"></div></div>
+        <div class="ai-card" style="grid-column:1/-1"><h4>&#9670; LLM 分析</h4>
+          <div style="margin-bottom:6px"><button class="btn btn-ai btn-sm" onclick="refreshLLMAnalysis()">手动刷新</button>&nbsp;<span id="llmBudgetDisplay" style="font-size:9px;color:var(--text2)"></span></div>
+          <div id="aiLLMBlock"><div class="no-pos">LLM 未配置 / 未开启</div></div>
+          <div style="margin-top:6px"><h5 style="font-size:10px;color:var(--text2);margin:6px 0 4px">会话历史 (上下文记忆)</h5><div id="aiLLMHist"><div class="no-pos">暂无历史会话</div></div></div>
+        </div>
+        <div class="ai-card" style="grid-column:1/-1"><h4>&#9670; 交易知识库 (成功/失败案例)</h4>
+          <div style="display:flex;gap:6px;margin-bottom:6px">
+            <button class="btn btn-ai btn-sm" onclick="switchTradeLibTab('win')">成功案例</button>
+            <button class="btn btn-ai btn-sm" onclick="switchTradeLibTab('lose')">失败案例</button>
+            <span style="font-size:9px;color:var(--text2);align-self:center">为持续成功交易积累案例轨迹，供 LLM Few-shot 与人工复盘</span>
+          </div>
+          <div id="aiTradeLib"><div class="no-pos">暂无交易记录</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="page" id="page-arb">
+      <h3 style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px"><span id="arb_title_label">跨交易所套利监控</span></h3>
+      <div id="arbList"></div>
+    </div>
+    <div class="page" id="page-tech">
+      <div class="tech-header">
+        <select id="techSymbol" onchange="window.setTechSymbol(this.value)"></select>
+        <div class="tf-controls">
+          <span class="tf-label">tick:</span>
+          <label class="tf-chk"><input type="checkbox" data-tf="1t" onchange="window.toggleTimeframe('1t',this.checked)">1t</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="5t" onchange="window.toggleTimeframe('5t',this.checked)">5t</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="10t" onchange="window.toggleTimeframe('10t',this.checked)">10t</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="20t" onchange="window.toggleTimeframe('20t',this.checked)">20t</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="50t" onchange="window.toggleTimeframe('50t',this.checked)">50t</label>
+          <span class="tf-label">k线短:</span>
+          <label class="tf-chk"><input type="checkbox" data-tf="1m" onchange="window.toggleTimeframe('1m',this.checked)">1m</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="5m" onchange="window.toggleTimeframe('5m',this.checked)">5m</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="10m" onchange="window.toggleTimeframe('10m',this.checked)">10m</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="15m" onchange="window.toggleTimeframe('15m',this.checked)">15m</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="30m" onchange="window.toggleTimeframe('30m',this.checked)">30m</label>
+          <span class="tf-label">k线中长:</span>
+          <label class="tf-chk"><input type="checkbox" data-tf="1h" onchange="window.toggleTimeframe('1h',this.checked)">1h</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="4h" onchange="window.toggleTimeframe('4h',this.checked)">4h</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="8h" onchange="window.toggleTimeframe('8h',this.checked)">8h</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="1d" onchange="window.toggleTimeframe('1d',this.checked)">1d</label>
+          <span class="tf-label">k线超长:</span>
+          <label class="tf-chk"><input type="checkbox" data-tf="7d" onchange="window.toggleTimeframe('7d',this.checked)">7d</label>
+          <label class="tf-chk"><input type="checkbox" data-tf="30d" onchange="window.toggleTimeframe('30d',this.checked)">30d</label>
+          <span class="tf-label">主图:</span>
+          <select id="techPrimaryTF" onchange="window.setPrimaryTF(this.value)">
+            <option value="1t">1t</option>
+            <option value="5t">5t</option>
+            <option value="10t">10t</option>
+            <option value="20t">20t</option>
+            <option value="50t">50t</option>
+            <option value="1m">1m</option>
+            <option value="5m">5m</option>
+            <option value="10m">10m</option>
+            <option value="15m">15m</option>
+            <option value="30m">30m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+            <option value="8h">8h</option>
+            <option value="1d">1d</option>
+            <option value="7d">7d</option>
+            <option value="30d">30d</option>
+          </select>
+        </div>
+        <span id="techDataCount" style="font-size:9px;color:var(--text2)"></span>
+      </div>
+      <div class="tech-signal" id="techSignal"></div>
+      <div class="tech-chart-box">
+        <canvas id="techCanvas"></canvas>
+        <div class="tech-plan" id="techPlan"></div>
+        <button class="tech-plan-show" id="techPlanShow" onclick="window.setPlanVisible(true)" title="显示交易计划">交易计划</button>
+      </div>
+      <div class="tech-toggles" id="techToggles"></div>
+      <div class="tech-cfg-bar">
+        <button class="tech-cfg-toggle" id="techCfgToggle" onclick="window.toggleCfgVisible()">⚙ 分析设置</button>
+        <span class="tech-cfg-hint" id="techCfgHint">信号源 · 最低票数 · 确认K线 · SRSI策略</span>
+      </div>
+      <div class="tech-cfg-wrapper" id="techCfgWrapper" style="display:none">
+        <div class="tech-sig-cfg" id="techSignalCfg"></div>
+        <div class="tech-srsi-cfg" id="techSrsiCfg"></div>
+      </div>
+      <div class="tech-ais-info" id="techAisInfo"></div>
+    </div>
+    <div class="page" id="page-kchart">
+      <div class="kchart-header">
+        <select id="kchartSymbol" onchange="window.setKSymbol(this.value)"></select>
+        <div class="kchart-tfbox">
+          <span class="kchart-lbl">周期:</span>
+          <span class="kchart-presets">
+            <button class="kchart-preset" data-preset="scalp" onclick="window.setKPreset('scalp')">短线</button>
+            <button class="kchart-preset" data-preset="day" onclick="window.setKPreset('day')">日内</button>
+            <button class="kchart-preset" data-preset="swing" onclick="window.setKPreset('swing')">波段</button>
+            <button class="kchart-preset" data-preset="all" onclick="window.setKPreset('all')">全选</button>
+          </span>
+          <span class="kchart-tfs" id="kchartTFRow"></span>
+        </div>
+        <div class="kchart-tfbox">
+          <span class="kchart-lbl">根线数:</span>
+          <input type="range" id="kchartBars" min="60" max="300" step="10"
+                 oninput="window.setKBars(this.value)">
+          <span id="kchartBarsLbl" class="kchart-lbl"></span>
+        </div>
+        <div class="kchart-tfbox">
+          <span class="kchart-lbl">子图:</span>
+          <span id="kchartSubToggles" class="kchart-subtog"></span>
+        </div>
+        <div class="kchart-tfbox kchart-srsibox">
+          <span class="kchart-lbl">SRSI:</span>
+          <span id="kchartSrsi"></span>
+        </div>
+        <span class="kchart-fresh" id="kchartFresh"></span>
+      </div>
+      <div class="kchart-hint" id="kchartHint">点击 TF 圆点=设为主图 · 方框=切换SRSI子图 · SRSI速览表可折叠 · 交易纪律分析可折叠 · 拖拽子图标题栏调整顺序</div>
+      <div class="kchart-ovwrap" id="kchartOverviewWrap">
+        <div class="kchart-ovhead" onclick="window.kToggleOverview()">多周期 SRSI 速览 <span class="kchart-ovarrow" id="kchartOvArrow">▾</span></div>
+        <div id="kchartOverview" class="kchart-overview"></div>
+      </div>
+      <div class="kchart-discwrap" id="kchartDiscWrap">
+        <div class="kchart-ovhead" onclick="window.kToggleDisc()">📋 交易纪律分析 <span class="kchart-ovarrow">▾</span></div>
+        <div id="kchartDisc" class="kchart-disc"></div>
+      </div>
+      <div class="kchart-tradebar" id="kchartTradeBar"></div>
+      <div class="kchart-box">
+        <canvas id="kchartCanvas"></canvas>
+      </div>
+    </div>
+    <div class="page" id="page-subs">
+      <h3 style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px"><span id="subs_title_label">虚拟子账户管理</span></h3>
+      <div class="sub-detail-grid" id="subDetailGrid"></div>
+    </div>
+    <div class="page" id="page-pnl">
+      <h3 style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px"><span id="pnl_title_label">盈亏总览</span></h3>
+      <div class="pnl-grid">
+        <div class="pnl-card"><h4 id="pnl_win_h" style="color:var(--green)">盈利记录 (已实现)</h4><div id="pnlWin"><div class="pnl-empty">暂无已盈利平仓记录</div></div></div>
+        <div class="pnl-card"><h4 id="pnl_loss_h" style="color:var(--red)">亏损记录 (已实现)</h4><div id="pnlLoss"><div class="pnl-empty">暂无亏损平仓记录</div></div></div>
+        <div class="pnl-card"><h4 id="pnl_sum_h" style="color:var(--purple)">持仓/汇总</h4>
+          <div class="pnl-summary">
+            <div>累计已实现: <span id="pnlReal" style="color:var(--purple)">$0.00</span></div>
+            <div>当前浮盈: <span id="pnlFloat" style="color:var(--text2)">$0.00</span></div>
+            <div>总净盈亏: <span id="pnlNet" style="color:var(--green)">$0.00</span></div>
+            <div>总笔数: <span id="pnlCount" style="color:var(--text2)">0</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="pnl-curve-card">
+        <h4 class="pnl-hist-title" style="margin-bottom:6px">当前持仓 浮盈亏全程曲线</h4>
+        <div id="pnlCurves"><div class="pnl-empty">暂无持仓</div></div>
+      </div>
+      <div class="pnl-hist-card">
+        <h4 style="margin-bottom:6px" id="pnl_hist_label" class="pnl-hist-title">全部已实现交易记录</h4>
+        <div class="pnl-hist" id="pnlHist"><div class="pnl-empty">暂无交易记录</div></div>
+      </div>
+    </div>
+    <div class="page" id="page-ledger">
+      <h3 style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">账本 / 事件溯源</h3>
+      <div class="ledger-toolbar" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
+        <button class="btn btn-ai" onclick="exportLedger()">导出账本 (JSON)</button>
+        <button class="btn btn-ai" onclick="exportCsv()">导出交易记录 (CSV)</button>
+        <button class="btn btn-cancel" onclick="clearLedger()">清空账本</button>
+        <button class="btn btn-ai" onclick="doBackup()">📦 备份全部</button>
+        <button class="btn btn-ai" onclick="document.getElementById('restoreFile').click()">📂 恢复</button>
+        <button class="btn btn-cancel" onclick="doWipe()">⚠️ 重置</button>
+        <input type="file" id="restoreFile" accept=".json" onchange="doRestore()" style="display:none">
+        <span style="font-size:9px;color:var(--text2)" id="ledgerStats"></span>
+      </div>
+      <div class="pnl-hist-card" style="margin-top:0">
+        <h4 style="margin-bottom:6px" class="pnl-hist-title">事件溯源日志（只读，最近 500 条）</h4>
+        <div class="pnl-hist" id="ledgerList" style="max-height:520px"><div class="pnl-empty">加载中...</div></div>
+      </div>
+    </div>
+    <div class="page" id="page-settings">
+      <div class="settings-grid">
+        <div class="settings-card"><h4 id="set_trade_h">交易设置</h4>
+          <div class="setting-row"><label id="set_maxlev_l">最大杠杆</label><select id="setMaxLev" onchange="applyMaxLev()"><option>5x</option><option selected>20x</option><option>50x</option></select></div>
+          <div class="setting-row"><label id="set_maxorder_l">单笔最大</label><input value="100" id="setMaxOrder" onchange="saveState()"></div>
+          <div class="setting-row"><label id="set_maxloss_l">每日最大亏损</label><input value="500" id="setMaxDailyLoss" onchange="saveState()"></div>
+        </div>
+        <div class="settings-card"><h4>K线快捷交易（纸面）</h4>
+          <div class="setting-row"><label>快捷交易开关</label><select id="setKchartTradeOn" onchange="onKchartTradeOnChange()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label>联动主系统资金</label><select id="setKchartLink" onchange="onKchartLinkChange()"><option value="1" selected>开启(进PnL/子账户)</option><option value="0">关闭(独立沙盒)</option></select></div>
+          <div class="setting-row"><label>交易纪律 TSEV（本机自学习）</label><select id="setKchartTsevOn" onchange="onKchartTsevOnChange()"><option value="1" selected>开启(每60min累积+首次回补)</option><option value="0">关闭(纯经典逻辑)</option></select></div>
+          <div style="font-size:9px;color:var(--text2);margin-top:4px">方向定死：开空=U本位 / 开多=币本位；平仓利润 50% 自动再投另一资产。杠杆/仓位在 K线页内调整。</div>
+        </div>
+        <div class="settings-card"><h4>模拟真实交易（初始资金）</h4>
+          <div class="setting-row"><label>现货 USDT 池</label><input id="simSpotUsdt" type="number" min="0" step="any" value="5000" onchange="onSimChange()"></div>
+          <div class="setting-row"><label>永续U本位 USDT 池</label><input id="simPerpUsdt" type="number" min="0" step="any" value="5000" onchange="onSimChange()"></div>
+          <div style="font-size:9px;color:var(--text2);margin:4px 0 2px">各交易对 币本位库存（现货与永续同量，仅填一次）</div>
+          <div id="simCoinList" class="sim-coin-list"></div>
+          <div class="setting-row" style="margin-top:6px"><button onclick="onSimReset()">重置为默认并重建账户</button></div>
+        </div>
+        <div class="settings-card"><h4 id="set_aiset_h">AI 设置</h4>
+          <div class="setting-row"><label id="set_aiauto_l">AI自动交易</label><select id="setAiAuto" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label id="set_aiconf_l">最低置信度</label><input value="70" id="setMinConf" onchange="saveState()"></div>
+          <div class="setting-row"><label id="set_aimax_l">每日AI上限</label><input value="20" id="setAiMax" onchange="saveState()"></div>
+          <div class="setting-row"><label id="set_trademode_l">交易模式</label><select id="setTradeMode" onchange="saveState()"><option value="standard" selected>标准(多空混合)</option><option value="trend">顺势回调(趋势+回踩)</option></select></div>
+          <div style="font-size:9px;color:var(--text2);margin-top:4px" id="set_trademode_hint">顺势回调：中期(1m)判方向，短期(1t)回踩 AIS/EMA20 企稳才入场，逆势信号被强制过滤。</div>
+        </div>
+        <div class="settings-card"><h4>&#9670; AI 模型接入 (LLM 信号)</h4>
+          <div style="font-size:9px;color:var(--text2);margin-bottom:6px">接入大模型参与信号识别。API Key 经 AES-GCM 加密后存于本地 IndexedDB，绝不上传。LLM 只提供方向判断，最终风控由规则引擎把关。</div>
+          <div class="setting-row"><label>LLM 开关</label><select id="setLLMOn" onchange="saveState()"><option value="0">关闭</option><option value="1" selected>开启</option></select></div>
+          <div class="setting-row"><label>LLM 角色</label><select id="setLLMRole" onchange="onLLMRoleChange()"><option value="signal" selected>仅信号(加权)</option><option value="trade">可参与交易</option></select></div>
+          <div class="setting-row"><label>供应商</label><select id="setLLMProvider" onchange="onLLMProviderChange()"><option value="deepseek" selected>DeepSeek</option><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option><option value="custom">自定义</option></select></div>
+          <div class="setting-row"><label>模型名</label><input id="setLLMModel" value="deepseek-chat" placeholder="如 deepseek-chat" style="flex:1" onchange="saveState(true)"></div>
+          <div class="setting-row" id="rowLLMUrl" style="display:none"><label>自定义端点</label><input id="setLLMUrl" placeholder="https://your-api.xyz/v1" style="flex:1" onchange="saveState(true)"></div>
+          <div class="setting-row"><label>API Key</label><input id="setLLMKey" type="password" placeholder="sk-..." style="flex:1"></div>
+          <div class="setting-row" style="gap:6px;flex-wrap:wrap"><label style="width:auto"> </label><button class="btn btn-ai btn-sm" onclick="saveLLMKey()">加密保存 Key</button><span id="llmKeyStatus" style="font-size:9px;color:var(--text2)">未配置</span><button class="btn btn-ai btn-sm" onclick="testLLMConnection()">测试连接</button><span id="llmTestStatus" style="font-size:9px;color:var(--text2)"></span></div>
+          <div class="setting-row"><label>调用频次</label><select id="setLLMFreq" onchange="saveState()"><option value="1m">1 分钟</option><option value="5m" selected>5 分钟</option><option value="15m">15 分钟</option><option value="30m">30 分钟</option><option value="1h">1 小时</option><option value="off">关闭</option></select></div>
+          <div class="setting-row"><label>预算方式</label><select id="setLLMBudgetMode" onchange="saveState()"><option value="calls" selected>按次数</option><option value="tokens">按 token 量</option></select></div>
+          <div class="setting-row"><label>每日预算上限</label><input id="setLLMBudget" value="50" style="width:120px" onchange="saveState()"></div>
+          <div class="setting-row"><label>信号权重 (分)</label><input id="setLLMWeight" value="15" type="number" min="0" max="30" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>最低置信</label><input id="setLLMMinConf" value="60" type="number" min="0" max="100" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>提示词注入条数</label><input id="setLLMHistPrompt" value="8" type="number" min="1" max="20" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>本地保留条数</label><input id="setLLMHistKeep" value="100" type="number" min="1" max="500" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>保留天数</label><input id="setLLMHistDays" value="7" type="number" min="1" max="90" style="width:80px" onchange="saveState()"></div>
+          <div style="font-size:8px;color:var(--text2)">会话历史: 每次分析自动积累, 本地最多保留"条数"与"天数"双上限; 每次对话仅把最近"N"条注入提示词供大模型参考。</div>
+          <div style="font-size:8px;color:var(--text2)">⚠ "仅信号"模式：LLM 判断给 ls/ss 加分，仍需规则引擎门槛；"可参与交易"模式：LLM 置信达标时可触发开仓，但仍受全部风控约束。</div>
+          <div class="setting-row"><label>AI平仓管理</label><select id="setAiMgmtOn" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label>逆势置信阈值</label><input id="setAiMgmtConf" value="60" type="number" min="0" max="100" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>最短持有(分钟)</label><input id="setAiMgmtHoldMin" value="10" type="number" min="0" style="width:80px" onchange="saveState()"></div>
+          <div class="setting-row"><label>每日提前平仓上限</label><input id="setAiMgmtDaily" value="5" type="number" min="1" style="width:80px" onchange="saveState()"></div>
+          <div style="font-size:8px;color:var(--text2)">AI平仓管理: 开启后对 AI 持仓提前平仓(LLM方向逆转或规则评分反转), 受最短持有与每日上限保护, 默认关闭。</div>
+          <div style="margin-top:6px;border-top:1px solid var(--border);padding-top:4px;font-size:9px;color:var(--text2);margin-bottom:4px">链上数据 (Etherscan/BscScan V2, 免费 Key, 加密存储于本地 IndexedDB)。无 Key 时 ETH 自动降级到 Blockchair 免 Key 数据。</div>
+          <div class="setting-row"><label>链上 API Key</label><input id="setOnChainKey" type="password" placeholder="Etherscan/BscScan Key" style="flex:1"></div>
+          <div class="setting-row" style="gap:6px;flex-wrap:wrap"><label style="width:auto"> </label><button class="btn btn-ai btn-sm" onclick="saveOnChainKey()">加密保存 Key</button><span id="onChainKeyStatus" style="font-size:9px;color:var(--text2)">未配置</span><button class="btn btn-ai btn-sm" onclick="fetchOnChain()">立即刷新</button></div>
+        </div>
+        <div class="settings-card"><h4 id="set_arbset_h">套利设置</h4>
+          <div class="setting-row"><label id="set_arbon_l">套利开关</label><select id="setArbOn" onchange="saveState()"><option value="1">开启</option><option value="0" selected>关闭</option></select></div>
+          <div class="setting-row"><label id="set_minspread_l">最小价差%</label><input value="0.05" id="setMinSpread" onchange="saveState()"></div>
+          <div class="setting-row"><label id="set_boths_l">必须双边</label><select id="setBothSide" onchange="saveState()"><option value="1" selected>是</option><option value="0">否</option></select></div>
+          <div class="setting-row"><label id="set_minprofit_l">最小净利润</label><input value="0.50" id="setMinProfit" onchange="saveState()"></div>
+          <div class="setting-row"><label id="set_slip_l">滑点保护</label><select id="setSlipProtect" onchange="saveState()"><option value="0.0001">0.01%</option><option value="0.0002" selected>0.02%</option><option value="0.0005">0.05%</option><option value="0.001">0.1%</option></select></div>
+        </div>
+        <div class="settings-card"><h4 id="set_fusion_h">数据融合</h4>
+          <div class="setting-row"><label id="set_fr_l">资金费率</label><select id="setFusionFR" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label id="set_oi_l">持仓量(OI)</label><select id="setFusionOI" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label id="set_fg_l">恐惧贪婪</label><select id="setFusionFG" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label id="set_whale_l">鲸鱼监控</label><select id="setFusionWhale" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+          <div class="setting-row"><label id="set_ls_l">多空比数据</label><select id="setFusionLS" onchange="saveState()"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+        </div>
+        <div class="settings-card"><h4 id="set_syms_h">交易对管理</h4>
+          <div style="font-size:9px;color:var(--text2);margin-bottom:6px">添加/删除行情交易对（保存后立即生效，重启不丢失）</div>
+          <div id="symList" style="margin-bottom:6px"></div>
+          <div class="setting-row"><input id="newSymInput" placeholder="如 PEPEUSDT" style="flex:1"><button class="btn btn-ai btn-sm" onclick="addSymbolInput()">添加</button></div>
+        </div>
+        <div class="settings-card"><h4>交易所接入 (测试网)</h4>
+          <div style="font-size:9px;color:var(--text2);margin-bottom:6px">API Key 经 AES-GCM 加密后存于本地 IndexedDB，绝不上传。仅用于双测试网一致性对账（真实资金默认硬锁）。</div>
+          <div class="setting-row"><label>Binance Testnet Key</label><input id="binApiKey" placeholder="API Key" style="flex:1"></div>
+          <div class="setting-row"><label>Binance Secret</label><input id="binSecret" type="password" placeholder="Secret"></div>
+          <div class="setting-row"><label style="width:auto"> </label><button class="btn btn-ai btn-sm" onclick="saveApiSetting('Binance')">保存 Binance</button><span id="binStatus" style="font-size:9px;color:var(--text2)">未配置</span></div>
+          <div class="setting-row"><label>OKX Testnet Key</label><input id="okxApiKey" placeholder="API Key" style="flex:1"></div>
+          <div class="setting-row"><label>OKX Secret</label><input id="okxSecret" type="password" placeholder="Secret"></div>
+          <div class="setting-row"><label>OKX Passphrase</label><input id="okxPass" type="password" placeholder="Passphrase (可选)"></div>
+          <div class="setting-row"><label style="width:auto"> </label><button class="btn btn-ai btn-sm" onclick="saveApiSetting('OKX')">保存 OKX</button><span id="okxStatus" style="font-size:9px;color:var(--text2)">未配置</span></div>
+          <div class="setting-row" style="border-top:1px solid var(--border);padding-top:6px"><label>真实资金模式</label><span id="realModeStatus" style="font-size:9px;color:var(--red)">硬锁 (locked)</span></div>
+          <div class="setting-row"><button class="btn btn-ai btn-sm" onclick="runReconciliation()">对账验证</button><span style="font-size:9px;color:var(--text2)">纸面 vs 测试网</span></div>
+          <div style="font-size:8px;color:var(--text2)">⚠️ 真实资金默认硬锁：需先配置双所测试网 Key 并通过对账验证后方可解除（本版本不开放）。</div>
+        </div>
+        <div id="appVerLine" style="font-size:8px;color:var(--text2);text-align:center;padding:6px 0">版本加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="terminal">
+  <div class="terminal-header">
+    <div class="terminal-tab active" onclick="setTermTab(this,'all')">全部</div>
+    <div class="terminal-tab" onclick="setTermTab(this,'trade')">交易</div>
+    <div class="terminal-tab" onclick="setTermTab(this,'ai')">AI</div>
+    <div class="terminal-tab" id="term_arb" onclick="setTermTab(this,'arb')">套利</div>
+    <div class="terminal-tab" id="term_sub" onclick="setTermTab(this,'sub')">子账户</div>
+  </div>
+  <div class="terminal-body" id="terminalBody"></div>
+</div>
+<div class="modal-overlay" id="tradeModal">
+  <div class="modal">
+    <h3 id="modalTitle">买入 BTCUSDT</h3>
+    <div class="modal-row"><label id="modal_sub_label">子账户</label><select id="modalSub"></select></div>
+    <div class="modal-row"><label id="modal_dir_label">方向</label><select id="modalSide"><option id="modal_opt_long" value="long">做多</option><option id="modal_opt_short" value="short">做空</option></select></div>
+    <div class="modal-row"><label id="modal_lev_label">杠杆</label><select id="modalLeverage" onchange="updateModalFees()"><option value="1">1x 现货</option><option value="5">5x</option><option value="10" selected>10x</option><option value="20">20x</option><option value="50">50x</option></select></div>
+    <div class="modal-row"><label id="modal_amt_label">投入金额</label><input type="number" id="modalAmount" value="10" min="1" max="100" oninput="updateModalFees()"></div>
+    <div class="modal-row"><label id="modal_fee_label">手续费</label><span id="modalFeeDisplay" style="color:var(--gold)">$0.00</span></div>
+    <div class="modal-row"><label id="modal_slip_label">预估滑点</label><span id="modalSlipDisplay" style="color:var(--text2)">$0.00</span></div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closeModal()">取消</button>
+      <button class="btn btn-buy" id="modalConfirm" onclick="confirmTrade()">确认</button>
+    </div>
+  </div>
+</div>
+<div class="modal-overlay" id="closePosModal">
+  <div class="modal">
+    <h3 id="closePosTitle">平仓确认</h3>
+    <div class="modal-row"><label>方向 / 杠杆</label><span id="closePosDirLev" style="color:var(--gold)">--</span></div>
+    <div class="modal-row"><label>入场价</label><span id="closePosEntry" style="color:var(--text2)">--</span></div>
+    <div class="modal-row"><label>当前价</label><span id="closePosCur" style="color:var(--text2)">--</span></div>
+    <div class="modal-row"><label>持仓数量</label><span id="closePosQty" style="color:var(--text2)">--</span></div>
+    <div class="modal-row"><label>实时盈亏</label><span id="closePosPnl" style="color:var(--green)">--</span></div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closePosModal()">取消</button>
+      <button class="btn btn-sell" id="closePosConfirm" onclick="confirmClosePosModal()">确认平仓</button>
+    </div>
+  </div>
+</div>
+<button class="glossary-btn" onclick="toggleGlossary()" title="术语百科">📖</button>
+<div class="glossary-overlay" id="glossaryOverlay" onclick="if(event.target===this)toggleGlossary()">
+  <div class="glossary-panel">
+    <div class="glossary-header"><h3>📖 术语百科</h3><button class="glossary-close" onclick="toggleGlossary()">✕</button></div>
+    <div class="glossary-back" onclick="backToTags()"><span>← 返回标签</span></div>
+    <div class="glossary-search"><input type="text" id="glossarySearch" placeholder="搜索术语..." oninput="filterGlossary()"></div>
+    <div class="glossary-tags" id="glossaryTags"></div>
+    <div class="glossary-content" id="glossaryContent"><div class="glossary-empty">点击上方标签查看术语解释</div></div>
+  </div>
+</div>
+</body>
+</html>
