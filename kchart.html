@@ -78,9 +78,9 @@
     <span class="kchart-lbl">子图:</span>
     <span id="kchartSubToggles" class="kchart-subtog"></span>
   </div>
-  <div class="kchart-tfbox kchart-srsibox">
-    <span class="kchart-lbl">SRSI:</span>
-    <span id="kchartSrsi"></span>
+  <div class="kchart-settings closed" id="kchartSrsiCardWrap">
+    <div class="kchart-ovhead" onclick="document.getElementById('kchartSrsiCardWrap').classList.toggle('closed')">⚙ SRSI 各币对各周期参数（本地持久化）<span class="kchart-ovarrow">▾</span></div>
+    <div id="kchartSrsiCard" class="kchart-settings-body"></div>
   </div>
   <div class="kchart-hint" id="kchartHint">点击 TF 圆点=设为主图 · 方框=切换SRSI子图 · 速览表/纪律面板可折叠 · 拖拽子图标题栏调整顺序</div>
   <div class="kchart-ovwrap" id="kchartOverviewWrap">
