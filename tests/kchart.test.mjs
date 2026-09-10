@@ -336,6 +336,29 @@ console.log('\n[kchart: subHoverAt srsi 索引对齐 (len>bars 回归)]');
   ok('srsi 回归: crossing 对齐 (null 一致)', (sr.cross === null) === (sl.crossings[75] == null));
 }
 
+//  SRSI 子图 7d/30d 改用原生周/月线：不再依赖稀疏的日线聚合(71/16 根)，悬停读数应基于足量原生数据
+{
+  const sym = 'NATIVE7D', tf = '7d';
+  const N = 500;
+  const c = [], o = [], h = [], l = [], v = [], t = [];
+  for (let i = 0; i < N; i++) {
+    const x = 100 + Math.sin(i / 11) * 5 + i * 0.002;
+    c.push(x); o.push(x - 0.1); h.push(x + 0.3); l.push(x - 0.3); v.push(i + 1); t.push(1600000000000 + i * 604800000);
+  }
+  globalThis.S = { klinesWeek: { [sym]: { o, h, l, c, v, t } }, klinesMonth: {} };
+  const bars = 150;
+  const sr = subHoverAt(0.5, sym, tf, 'srsi', bars);
+  ok('7d SRSI 子图读原生周线 → k 为数值(非稀疏)', typeof sr.k === 'number' && isFinite(sr.k));
+  // 起点(i=350 局部0) 也应有有效读数而非恒 null
+  const s0 = subHoverAt(0, sym, tf, 'srsi', bars);
+  ok('7d SRSI 子图原生 起点 k 非 null', typeof s0.k === 'number');
+  // 30d 原生月线同理
+  const cM = c.map((x, i) => x + Math.cos(i / 9) * 3), oM = cM.map(x => x - 0.1), hM = cM.map(x => x + 0.3), lM = cM.map(x => x - 0.3), vM = v, tM = t.map(x => x + 1);
+  globalThis.S.klinesMonth = { [sym]: { o: oM, h: hM, l: lM, c: cM, v: vM, t: tM } };
+  const srM = subHoverAt(0.5, sym, '30d', 'srsi', bars);
+  ok('30d SRSI 子图读原生月线 → k 为数值', typeof srM.k === 'number' && isFinite(srM.k));
+  delete globalThis.S;
+}
 
 console.log('\n[kchart: 统一周期选择 nextKMode]');
 {

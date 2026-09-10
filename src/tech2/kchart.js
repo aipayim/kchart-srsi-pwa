@@ -3125,7 +3125,8 @@ function drawSub(ctx, sub, sym, y0) {
   ctx.strokeRect(PAD_L, y0, plotW, SUB_H);
 
   const S = window.S;
-  const price = aggTFData(sym, sub.tf || cfg.mainTF).c;
+  // 主图已对 7d/30d 改用原生周/月线（足量根数）；子图 SRSI 价格线与其保持一致，避免 7d/30d 仅 71/16 根导致 SRSI 线不全。
+  const price = nativeMain(sym, sub.tf || cfg.mainTF).c;
 
   if (sub.key === 'rsi') {
     const s = subTf(sym, sub.tf || cfg.mainTF);
@@ -4132,10 +4133,13 @@ export function mainHoverAt(frac, sym, tf, bars) {
 
 // 某个子图在 frac 处的读数 (纯数据)
 export function subHoverAt(frac, sym, tf, key, bars) {
-  const lenBase = aggTFData(sym, tf).c.length;
-  const i = idxFromFrac(frac, lenBase, bars);
   const s = subTf(sym, tf);
   const series = s && s.series;
+  // SRSI 子图已改用原生周/月线（与主图一致）；RSI/MACD 维持原 aggTFData 基准，故按 key 分别取 lenBase。
+  const lenBase = (key === 'srsi')
+    ? nativeMain(sym, tf).c.length
+    : aggTFData(sym, tf).c.length;
+  const i = idxFromFrac(frac, lenBase, bars);
   if (key === 'rsi') {
     const v = series && series.rsi ? series.rsi[i] : null;
     return { i, rsi: v };
@@ -4149,7 +4153,7 @@ export function subHoverAt(frac, sym, tf, key, bars) {
     };
   }
   if (key === 'srsi') {
-    const price = aggTFData(sym, tf).c;
+    const price = nativeMain(sym, tf).c;
     const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars);
     // srsiPanelSeries 把数组切到最后 bars 根(局部索引 0..n-1)，需把绝对索引 i 换算成局部索引
     const off = Math.max(0, price.length - Math.min(bars, price.length));
