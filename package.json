@@ -1,10 +1,11 @@
 {
-  "name": "kchart-srsi-pwa",
-  "version": "1.0.0",
-  "description": "K线多周期 SRSI + 交易纪律分析 独立 PWA（纯前端·纸面模拟·开源） / Standalone PWA: multi-timeframe K-line SRSI + trade-discipline analysis (client-only, paper trading, open source)",
+  "name": "smart-trader",
+  "version": "1.5.1",
+  "description": "智能交易系统 v1.0 - 纸面交易引擎（双所行情 + 事件溯源持久化 + 可验证一致性）",
   "type": "module",
   "scripts": {
     "version:gen": "node scripts/gen-version.mjs",
+    "release": "node scripts/release.mjs",
     "predev": "node scripts/gen-version.mjs",
     "prebuild": "node scripts/gen-version.mjs",
     "dev": "vite",
@@ -13,21 +14,6 @@
     "preview": "vite preview",
     "test": "node tests/kchart.test.mjs && node tests/consistency.test.mjs"
   },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/aipayim/kchart-srsi-pwa.git"
-  },
-  "keywords": [
-    "pwa",
-    "trading",
-    "technical-analysis",
-    "srsi",
-    "kline",
-    "binance",
-    "paper-trading",
-    "discipline"
-  ],
-  "license": "MIT",
   "devDependencies": {
     "playwright": "^1.62.1",
     "vite": "^5.4.0",

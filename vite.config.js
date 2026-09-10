@@ -25,11 +25,13 @@ export default defineConfig({
         ]
       },
       workbox: {
+        // HTML 仍纳入预缓存（供离线壳 + 消除 non-precached-url 报错）；导航走 NetworkFirst
+        // （线上每次拉最新 HTML，断网才回退缓存），并保留 cleanup/clientsClaim/skipWaiting 自愈。
         globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest}'],
+        navigateFallback: 'kchart.html',
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
-        navigateFallback: 'kchart.html',
         runtimeCaching: [
           { urlPattern: ({ request }) => request.mode === 'navigate', handler: 'NetworkFirst', options: { cacheName: 'nav', networkTimeoutSeconds: 5 } }
         ]
@@ -58,7 +60,6 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       input: {
-        main: 'index.html',
         kchart: 'kchart.html'
       }
     }

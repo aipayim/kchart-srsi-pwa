@@ -63,7 +63,7 @@ export class PaperEngine extends ExchangeAdapter {
    * 开仓：投入保证金 amt，杠杆 lev，方向 side
    * @returns order + position
    */
-  async placeOrder({ symbol, side, qty, type = ORDER_TYPE.MARKET, price, lev = 1, sub, amt, ai = false, sig = '', marginMode, reinvest = false }) {
+  async placeOrder({ symbol, side, qty, type = ORDER_TYPE.MARKET, price, lev = 1, sub, amt, ai = false, sig = '', marginMode, reinvest = false, src = 'manual' }) {
     const S = this.S;
     const priceRef = (S.prices[symbol] || {}).last;
     // 默认 U 本位(兼容旧调用/AI)；新调用显式传 marginMode('usdt'|'coin')
@@ -112,7 +112,7 @@ export class PaperEngine extends ExchangeAdapter {
 
     const position = this._openPosition({
       symbol, side, lev, qty: fillQty, entry: fillPrice, fee, account,
-      amt, ai, sig, orderId: order.orderId, marginMode: mm, reinvest
+      amt, ai, sig, orderId: order.orderId, marginMode: mm, reinvest, src
     });
     order.extra.positionIndex = S.pos.indexOf(position);
 
@@ -194,7 +194,7 @@ export class PaperEngine extends ExchangeAdapter {
   /**
    * 开仓核心记账（共享数学，纸面/真实共用）
    */
-  _openPosition({ symbol, side, lev, qty, entry, fee, account, amt, ai, sig, orderId, marginMode = 'usdt', reinvest = false }) {
+  _openPosition({ symbol, side, lev, qty, entry, fee, account, amt, ai, sig, orderId, marginMode = 'usdt', reinvest = false, src = 'manual' }) {
     const S = this.S;
     if (!account.coins) account.coins = {};
     const mm = marginMode === 'coin' ? 'coin' : 'usdt';
@@ -202,7 +202,7 @@ export class PaperEngine extends ExchangeAdapter {
       orderId, sym: symbol, sid: account.id, side, lev, qty, entry,
       pnl: 0, pnlPct: 0, be: false, tl: 0, hi: entry, lo: entry,
       fee, ai: !!ai, amt, sig: sig || '', openTime: Date.now(), pnlHis: [0],
-      exchange: account.ex || 'Binance', marginMode: mm, reinvest: !!reinvest
+      exchange: account.ex || 'Binance', marginMode: mm, reinvest: !!reinvest, src: src || 'manual'
     };
     S.pos.push(pos);
     if (mm === 'coin') {
@@ -309,7 +309,7 @@ export class PaperEngine extends ExchangeAdapter {
 
   _recordClosed({ pos, pnl, reason, price }) {
     const S = this.S;
-    S.closed.push({ t: Date.now(), sym: pos.sym, side: pos.side, lev: pos.lev, sub: pos.sid, pnl: Math.round(pnl * 100) / 100, reason, entry: pos.entry, exit: price });
+    S.closed.push({ t: Date.now(), sym: pos.sym, side: pos.side, lev: pos.lev, sub: pos.sid, pnl: Math.round(pnl * 100) / 100, reason, entry: pos.entry, exit: price, src: pos.src || 'manual', marginMode: pos.marginMode || 'usdt' });
     this._emitOrder({
       orderId: pos.orderId || nextOrderId('C'), event: 'closed', symbol: pos.sym,
       side: pos.side, pnl: Math.round(pnl * 100) / 100, reason, ts: Date.now()

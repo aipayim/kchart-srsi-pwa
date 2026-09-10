@@ -4,6 +4,7 @@ import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈
 import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
+import { APP_BUILD_TIME } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
 // 开发模式下自动注销残留 Service Worker（dev SW 缓存会导致浏览器长期跑旧代码，Ctrl+Shift+R 不清 SW 缓存）。
@@ -110,7 +111,7 @@ globalThis.kSetMainOverlay = (on) => api.setMainOverlay(on);
 globalThis.kSetMainOverlayTf = (tf, on) => api.setMainOverlayTf(tf, on);
 globalThis.kCopyCfgToAll = () => api.copyCfgToAll();
 globalThis.kResetSymbolCfg = () => api.resetSymbolCfg();
-globalThis.kOptimizeSrsi = (tf, role) => api.optimizeSrsiForTf(tf, role);
+globalThis.kOptimizeSrsi = (tf, role) => api.optimizeSrsiForTf(tf, role).then(r => { if (r && r.best) api.applySrsiOpt(tf); return r; });
 globalThis.kApplySrsiOpt = (tf) => api.applySrsiOpt(tf);
 globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
 globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
@@ -145,23 +146,55 @@ function hideSrcErr() {
   if (bar) bar.hidden = true;
 }
 
-// 清除 PWA Service Worker 缓存并硬刷新（解决 dev/部署后旧缓存不更新）
-async function clearCacheAndReload() {
-  setFresh('正在刷新缓存…');
+// 彻底清除所有 Service Worker 注册与全部 Cache（不遗留任何旧版本资源）
+async function forceClearCaches() {
   try {
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations();
-      for (const r of regs) { try { await r.unregister(); } catch (e) {} }
-    }
-    if (window.caches) {
-      const keys = await caches.keys();
-      for (const k of keys) { try { await caches.delete(k); } catch (e) {} }
+      await Promise.all(regs.map(r => r.unregister().catch(() => {})));
     }
   } catch (e) { /* 忽略 */ }
-  // 强制绕过 SW 与浏览器 HTTP 磁盘缓存：用带时间戳的新 URL 重新加载（SPA fallback 仍返回 kchart.html）
+  try {
+    if (window.caches && caches.keys) {
+      const keys = await caches.keys();
+      await Promise.all(keys.map(k => caches.delete(k).catch(() => {})));
+    }
+  } catch (e) { /* 忽略 */ }
+}
+
+// 版本戳：取构建时生成的 APP_BUILD_TIME（每次构建都唯一），供版本门控判断“是否发了新版本”
+const APP_VER = APP_BUILD_TIME || 'dev';
+const VER_KEY = 'kchartVer';
+const FORCE_CLEAR_FLAG = 'sw_force_clear';
+
+// 版本门控：新构建发布后首次启动自动清干净旧缓存，确保加载的是最新资源
+// （防止 SW 卡在旧版导致 HTML/JS 错位、按钮消失）。仅清缓存，不重载（当前已是最新 JS）。
+async function applyVersionGate() {
+  try {
+    // 上一轮点「刷新」遗留的双保险标记：新页面启动再清一次，确保无残留
+    if (sessionStorage.getItem(FORCE_CLEAR_FLAG)) {
+      sessionStorage.removeItem(FORCE_CLEAR_FLAG);
+      await forceClearCaches();
+    }
+    const seen = localStorage.getItem(VER_KEY);
+    if (seen && seen !== APP_VER) {
+      await forceClearCaches();
+    }
+    localStorage.setItem(VER_KEY, APP_VER);
+  } catch (e) { /* 忽略 */ }
+}
+
+// 清除 PWA Service Worker 缓存并硬刷新（解决 dev/部署后旧缓存不更新）
+// 双保险：重载前清一次 + 写入 sessionStorage 标记（新页面启动 applyVersionGate 再清一次）
+async function clearCacheAndReload() {
+  setFresh('正在刷新缓存…');
+  try { sessionStorage.setItem(FORCE_CLEAR_FLAG, '1'); } catch (e) {}
+  await forceClearCaches();
+  // 强制绕过 SW 与浏览器/边缘 HTTP 缓存：用随构建唯一变化的 _swclear 参数生成新 URL，
+  // 确保 Cloudflare/浏览器不会命中旧 HTML 缓存（每次部署 APP_BUILD_TIME 不同 → URL 必为最新）。
   const url = new URL(window.location.href);
-  url.searchParams.set('_swclear', String(Date.now()));
-  window.location.replace(url.toString());
+  url.searchParams.set('_swclear', APP_VER);
+  window.location.replace(url.pathname + url.search);
 }
 
 // ---- 页面缩放（＝/－，持久化）----
@@ -242,6 +275,7 @@ async function loadSymbol(sym) {
   }
   try { await refreshPrice(sym); } catch (e) { /* 价格可选 */ }
   api.render();                       // 用实际数据重绘（含纪律面板实时价）
+  if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色
   localLoop.kick();                   // K线就绪后立刻触发一次本机采样（无需等 60min 周期）
   touchSym(sym);
   renderSymList();
@@ -261,10 +295,15 @@ async function tickKlines() {
     if (e && e.sourceUnreachable) showSrcErr(e.message);
   }
   api.render();
+  if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（canvas render 不重建 DOM）
 }
 
-function init() {
+async function init() {
+  // 先执行版本门控：若部署了新版本，自动清掉旧 SW/缓存，确保下面渲染的是最新资源
+  await applyVersionGate().catch(() => {});
   api.init();                         // 绑定 canvas + 事件
+  curSym = symList[symList.length - 1] || 'BTCUSDT';  // 回到上次使用的币对（loadCfg 前确定，确保恢复的是该币对配置）
+  api.loadCfg(curSym);                // 从 smartTrader_kchart 恢复 K线/SRSI 持久化配置（含各周期优选参数），必须在渲染与切币对之前
   api.renderControls();               // 渲染 TF 按钮/预设/子图/SRSI 参数
   if (symBtn) symBtn.addEventListener('click', () => addSymbol(symInput.value));
   const refreshBtn = document.getElementById('pwaRefreshBtn');
@@ -335,6 +374,11 @@ function loadPwaPaper() {
         globalThis.S.realized = o.realized || 0;
       }
     }
+    // 迁移：旧版本自动开仓未写 src 字段 → 补齐为 'srsiAuto'（仅针对缺失项，不影响新开仓的显式 src 标识）
+    [globalThis.S.pos, globalThis.S.closed].forEach(arr => {
+      if (!Array.isArray(arr)) return;
+      arr.forEach(p => { if (p && !p.src) p.src = 'srsiAuto'; });
+    });
   } catch (e) {}
 }
 function savePwaPaper() {
@@ -377,6 +421,10 @@ function initPwaTrade() {
     // 纪律/速览面板实时刷新（每秒，_discSig/_ovSig 守卫下轻量；实时价每 tick 更新）
     const wrap = document.getElementById('kchartDiscWrap');
     if (api && api.refreshPanels && wrap && !wrap.classList.contains('closed')) api.refreshPanels();
+    // SRSI 自动交易：每秒按 15m KD 带状态机执行开/平仓
+    if (api && api.runSrsiAutoTrade) api.runSrsiAutoTrade();
+    // 自动优选引擎：定时 + 无成交双触发重优选（防参数过期）
+    if (api && api.maybeAutoOpt) api.maybeAutoOpt();
   }, 1000);
   savePwaPaper();
 }
@@ -408,6 +456,15 @@ globalThis.pwaSimReset = function pwaSimReset() {
   if (localPE) localPE.resetSim(pwaSim);
   renderPwaSimCoins();
   savePwaPaper();
+};
+// 清空全部 PWA 本地持久化（交易对列表 / 模拟设置 / 纸面账户 / K线参数 / 缩放 / 版本标记），用于彻底重置
+globalThis.pwaClearAll = function pwaClearAll() {
+  const keys = ['pwa_syms', 'pwa_sim_settings', 'pwa_paper_state', 'smartTrader_kchart', 'pwa_zoom', 'kchartVer'];
+  keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+  try { sessionStorage.removeItem('sw_force_clear'); } catch (e) {}
+  if (confirm('确定清空所有本地设置并刷新？此操作不可撤销。')) {
+    location.reload(true);
+  }
 };
 globalThis.pwaTradeOn = function pwaTradeOn(v) { api.setTradeConfig({ on: v === '1' }); };
 

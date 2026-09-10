@@ -126,27 +126,29 @@ async function fetchJson(url, timeout = 10000) {
   }
 }
 
-// 带端点自动切换的数据请求：当前端点失败 → 依次尝试其余端点；成功则把可用索引缓存到 _goodIdx。
-// 全部失败才抛错（保留最后一次错误信息，供页面上报"数据源不可达"）。
-async function fetchApiData(path, timeout = 10000) {
+// 带端点自动切换的数据请求：所有端点并发竞速，取首个成功；全部失败才抛错。
+// 用 Promise.any 而非串行 for：被墙端点会静默挂起，串行会一直等到超时，
+// 并发则可用端点一旦返回即胜出，不再空等被墙的那个（避免页面"回测中"久转）。
+async function fetchApiData(path, timeout = 8000) {
   const list = endpointList();
   if (!list.length) throw new Error('未配置数据端点');
-  let lastErr = null;
-  for (let i = 0; i < list.length; i++) {
-    const idx = (_goodIdx + i) % list.length;
-    const url = list[idx] + path;
-    try {
-      const data = await fetchJson(url, timeout);
-      _goodIdx = idx;               // 缓存当前可用端点，下次直连
-      saveGoodIdx(idx);             // 持久化，跨会话默认用该端点（避免大陆用户每次等被墙端点超时）
-      return data;
-    } catch (e) {
-      lastErr = e;
-    }
+  if (list.length === 1) {
+    try { const d = await fetchJson(list[0] + path, timeout); _goodIdx = 0; saveGoodIdx(0); return d; }
+    catch (e) { const err = new Error('数据源不可达: ' + (e && e.message)); err.sourceUnreachable = true; throw err; }
   }
-  const e = new Error('数据源不可达 (全部端点失败): ' + (lastErr && lastErr.message));
-  e.sourceUnreachable = true;
-  throw e;
+  const attempts = list.map((base, i) => fetchJson(base + path, timeout).then(d => ({ i, d })));
+  try {
+    const first = await Promise.any(attempts);
+    _goodIdx = first.i;              // 缓存当前可用端点，下次优先
+    saveGoodIdx(first.i);            // 持久化，跨会话默认用该端点
+    return first.d;
+  } catch (agg) {
+    const errs = (agg && agg.errors) ? agg.errors : [agg];
+    const lastErr = errs[errs.length - 1];
+    const e = new Error('数据源不可达 (全部端点失败): ' + (lastErr && lastErr.message));
+    e.sourceUnreachable = true;
+    throw e;
+  }
 }
 
 // 拉取某币种全部 TF 的 klines，写回 globalThis.S.klines*（与 kchart.js 读取结构一致）
@@ -206,7 +208,7 @@ export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, 
     const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval
       + '&endTime=' + end + '&limit=1000';
     let raw;
-    try { raw = await fetchApiData(path, 15000); }
+    try { raw = await fetchApiData(path, 8000); }
     catch (e) { break; }
     if (!raw || !raw.length) break;
     all = raw.concat(all);             // raw 为本批较早数据，拼到队首
@@ -220,7 +222,35 @@ export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, 
     // 导致不同周期/不同次拉取的数据窗口不一致（如 1h 只拉到 15000/625天 而非 17520/730天）。
     await new Promise(r => setTimeout(r, 30));
   }
-  return parseKlines(tf, all);
+  // 按请求窗口 [startTime, endTime] 截断，避免单次 limit=1000 页覆盖超过目标周期
+  // （如 15m 一页≈10.4天，会让 24h/7d 拉到同一整页 → 回测数据雷同）
+  const trimmed = all.filter(k => k[0] >= startTime && k[0] <= endTime);
+  return parseKlines(tf, trimmed.length ? trimmed : all);
+}
+
+// 拉取真实历史资金费率（Binance U 本位合约 /fapi/v1/fundingRate），用于回测成本还原
+// 返回 [{fundingTime, fundingRate}] 升序；与 PaperEngine 实盘 fundingPayment 共用同一结算口径
+export async function fetchFundingRate(sym, startTime, endTime) {
+  const hosts = ['https://fapi.binance.com', 'https://fapi.binance.vision'];
+  const path = '/fapi/v1/fundingRate?symbol=' + sym + '&startTime=' + startTime + '&endTime=' + endTime + '&limit=1000';
+  let lastErr;
+  for (const base of hosts) {
+    try {
+      const ctl = new AbortController();
+      const to = setTimeout(() => ctl.abort(), 8000);
+      const resp = await fetch(base + path, { signal: ctl.signal });
+      clearTimeout(to);
+      if (!resp.ok) continue;
+      const json = await resp.json();
+      if (!Array.isArray(json)) continue;
+      return json
+        .filter(r => r && r.fundingTime != null && r.fundingRate != null)
+        .map(r => ({ fundingTime: +r.fundingTime, fundingRate: +r.fundingRate }))
+        .sort((a, b) => a.fundingTime - b.fundingTime);
+    } catch (e) { lastErr = e; }
+  }
+  if (lastErr) throw lastErr;
+  return [];
 }
 
 // 拉取最新价/24h 涨跌（Binance /ticker/24hr），写回 globalThis.S.prices[sym]

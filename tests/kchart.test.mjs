@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi } from '../src/tech2/kchart.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands, kdTrendColor, emaOpp2 } from '../src/tech2/kchart.js';
 import { srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -1505,6 +1505,67 @@ console.log('\n[kchart: 主图叠加 alignSeriesToBase]');
   kchartApi.setSrsiTf('1h');
   ok('setSrsiTf: 无 __renderKControls 桩也不抛错且更新 editTf', kchartApi.getConfig().srsiEditTf === '1h');
 
+  // 10m 优选参数刷新后应持久化（修复自动面板显示“未优选”）
+  freshStore();
+  const cfg10 = __defaultKConfig();
+  cfg10.symbol = 'BTCUSDT';
+  cfg10.srsiOptSource = { '10m': 'optimized' };
+  cfg10.srsiByTf['10m'] = { r: 9, k: 3, d: 9, ub: 90, lb: 10 };
+  kchartApi.__setCfgForTest(cfg10);
+  kchartApi.__persist();
+  kchartApi.__load();
+  const after10 = kchartApi.getConfig();
+  ok('10m 优选刷新后 标记不丢失', after10.srsiOptSource['10m'] === 'optimized');
+  ok('10m 优选参数刷新后保留', after10.srsiByTf['10m'] && after10.srsiByTf['10m'].r === 9);
+
+  // 真实 applySrsiOpt 流程（模拟用户点“应用 10m 优选”后刷新）
+  freshStore();
+  const cfgA = __defaultKConfig(); cfgA.symbol = 'BTCUSDT';
+  cfgA.srsiOptPreview['10m'] = { role: 'swing', best: { r: 9, k: 3, d: 9, ub: 90, lb: 10 }, symbol: 'BTCUSDT' };
+  kchartApi.__setCfgForTest(cfgA);
+  kchartApi.applySrsiOpt('10m');
+  kchartApi.__load();
+  const afterApply = kchartApi.getConfig();
+  ok('applySrsiOpt(10m) 刷新后仍标记 optimized', afterApply.srsiOptSource['10m'] === 'optimized');
+  ok('applySrsiOpt(10m) 刷新后仍写入 srsiByTf', afterApply.srsiByTf['10m'] && afterApply.srsiByTf['10m'].r === 9);
+
+  // PWA 刷新路径回归：原先 PWA init 从不调 loadCfg，且在 setSymbol 同币对 early-return 把默认 cfg 覆盖写回 → 所有优选 SRSI 被清空。
+  // 现 PWA init 已加 api.loadCfg()，验证：全部周期优选 → 模拟刷新(__setCfgForTest 重置为默认) → loadCfg() 应全量恢复。
+  freshStore();
+  const cfgAll = __defaultKConfig(); cfgAll.symbol = 'BTCUSDT';
+  kchartApi.__setCfgForTest(cfgAll);
+  KLINE_TF.forEach(tf => {
+    cfgAll.srsiOptPreview[tf] = { role: 'swing', best: { r: 9, k: 3, d: 9, ub: 92, lb: 8 }, symbol: 'BTCUSDT' };
+    kchartApi.applySrsiOpt(tf);
+  });
+  kchartApi.__setCfgForTest(__defaultKConfig()); // 模拟刷新：内存 cfg 被重置为默认（未含优选）
+  kchartApi.loadCfg();                            // PWA init 现在会调一次
+  const reloaded = kchartApi.getConfig();
+  ok('PWA刷新: 全部周期 srsiOptSource 恢复', KLINE_TF.every(tf => reloaded.srsiOptSource[tf] === 'optimized'));
+  ok('PWA刷新: 全部周期 srsiByTf 参数恢复', KLINE_TF.every(tf => reloaded.srsiByTf[tf] && reloaded.srsiByTf[tf].r === 9));
+  kchartApi.setSymbol('BTCUSDT');                 // 同币对应走 early-return persist，不应清掉已载入 SRSI
+  const afterSame = kchartApi.getConfig();
+  ok('PWA刷新: 同币对 setSymbol 不清除已载入 SRSI', KLINE_TF.every(tf => afterSame.srsiOptSource[tf] === 'optimized'));
+
+  // 非默认币对回归：bug 根因是 PWA init 时 cfg.symbol 为默认 BTCUSDT，loadCfg 读 _store.bySymbol[cfg.symbol]
+  // 永远取 BTCUSDT 的配置，忽略 _store.lastSymbol。若用户对非默认币对(如 ETHUSDT)优选 SRSI，刷新后会被
+  // 默认 BTCUSDT 的空配置覆盖，显示「未选」。修复：PWA init 在 loadCfg 前确定实际币对并传入 symOverride。
+  freshStore();
+  const cfgEth = __defaultKConfig(); cfgEth.symbol = 'ETHUSDT';
+  kchartApi.__setCfgForTest(cfgEth);
+  KLINE_TF.forEach(tf => {
+    cfgEth.srsiOptPreview[tf] = { role: 'swing', best: { r: 9, k: 3, d: 9, ub: 92, lb: 8 }, symbol: 'ETHUSDT' };
+    kchartApi.applySrsiOpt(tf);
+  });
+  kchartApi.__persist();
+  kchartApi.__setCfgForTest(__defaultKConfig()); // 模拟刷新：内存重置为默认(默认 symbol=BTCUSDT)
+  kchartApi.loadCfg('ETHUSDT');                  // PWA init 现在会传当前币对
+  const reloadedEth = kchartApi.getConfig();
+  ok('非默认币对刷新: symbol 恢复为 ETHUSDT', reloadedEth.symbol === 'ETHUSDT');
+  ok('非默认币对刷新: 全部周期 srsiOptSource 恢复', KLINE_TF.every(tf => reloadedEth.srsiOptSource[tf] === 'optimized'));
+  const _storeEth = JSON.parse(localStorage.getItem('smartTrader_kchart') || '{}');
+  ok('非默认币对刷新: 默认 BTCUSDT 配置未被污染', !( _storeEth.bySymbol && _storeEth.bySymbol['BTCUSDT'] && _storeEth.bySymbol['BTCUSDT'].srsiOptSource && KLINE_TF.every(tf => _storeEth.bySymbol['BTCUSDT'].srsiOptSource[tf] === 'optimized')));
+
   // SRSI 参数自由填写(数字输入, 不再受下拉预设限制)
   freshStore();
   kchartApi.__setCfgForTest(__defaultKConfig());
@@ -1626,26 +1687,27 @@ console.log('\n[kchart: 主图叠加 alignSeriesToBase]');
   const chips2 = kchartApi.__ovQuickChips(c2);
   ok('ovQuickChips 隐藏项置灰', chips2.length === 2 && chips2.every(x => x.on === false));
 
-  // --- toggleOvQuickTf 状态机（角色保持式）---
+  // --- toggleOvQuickTf：仅切换主图线条显隐，绝不改动叠加/闸门(辅助)角色 ---
   kchartApi.__clearStore();
   const tc = __defaultKConfig();
   tc.symbol = 'BTCUSDT'; tc.ovQuickTfs = []; tc.overlayTfs = {}; tc.srsiAux = {}; tc.ovHide = {};
   kchartApi.__setCfgForTest(tc);
   kchartApi.__toggleOvQuickTf('4h');
   ok('toggle 关→开(叠加)', tc.overlayTfs['4h'] === true && tc.ovQuickTfs.includes('4h'));
-  kchartApi.__toggleOvQuickTf('4h'); // 再点→临时隐藏（记 ov 角色，仍在栏内可恢复）
-  ok('toggle 叠加→隐藏(ov角色)', tc.ovHide['4h'] === 'ov' && tc.overlayTfs['4h'] === true && tc.ovQuickTfs.includes('4h'));
-  kchartApi.__toggleOvQuickTf('4h'); // 再点→恢复叠加
-  ok('toggle 隐藏→恢复叠加', !tc.ovHide['4h'] && tc.overlayTfs['4h'] === true);
+  kchartApi.__toggleOvQuickTf('4h'); // 再点→隐藏主图线条（角色保留）
+  ok('toggle 叠加→隐藏(显隐, 角色不丢)', tc.ovHide['4h'] === true && tc.overlayTfs['4h'] === true && tc.ovQuickTfs.includes('4h'));
+  kchartApi.__toggleOvQuickTf('4h'); // 再点→恢复显示
+  ok('toggle 隐藏→恢复显示', !tc.ovHide['4h'] && tc.overlayTfs['4h'] === true);
   tc.srsiAux['15m'] = true; tc.ovQuickTfs.push('15m');
-  kchartApi.__toggleOvQuickTf('15m'); // 辅助→隐藏（记 aux 角色）
-  ok('toggle 辅助→隐藏(aux角色)', tc.ovHide['15m'] === 'aux' && tc.srsiAux['15m'] === true && tc.ovQuickTfs.includes('15m'));
+  kchartApi.__toggleOvQuickTf('15m'); // 辅助→隐藏主图线条（辅助角色保留）
+  ok('toggle 辅助→隐藏(辅助角色不丢)', tc.ovHide['15m'] === true && tc.srsiAux['15m'] === true && tc.ovQuickTfs.includes('15m'));
+  ok('toggle 辅助隐藏后仍不删 overlayTfs 之外角色(仍在辅助)', tc.srsiAux['15m'] === true);
   kchartApi.__toggleOvQuickTf('15m'); // 恢复仍为辅助（非叠加）
   ok('toggle 恢复后仍为辅助', !tc.ovHide['15m'] && tc.srsiAux['15m'] === true && !tc.overlayTfs['15m']);
 
   // --- ovQuickChips 隐藏项置灰仍在栏 ---
   const cHide = __defaultKConfig();
-  cHide.overlayTfs = { '4h': true }; cHide.ovHide = { '4h': 'ov' };
+  cHide.overlayTfs = { '4h': true }; cHide.ovHide = { '4h': true };
   const chipsHide = kchartApi.__ovQuickChips(cHide);
   ok('ovQuickChips 隐藏项置灰且仍在栏', chipsHide.find(x => x.tf === '4h').on === false && chipsHide.find(x => x.tf === '4h').hidden === true);
 
@@ -1659,17 +1721,961 @@ console.log('\n[kchart: 主图叠加 alignSeriesToBase]');
   const chipsEmpty2 = kchartApi.__ovQuickChips(cEmpty2);
   ok('ovQuickChips 空集兜底 mainTF(5m)', chipsEmpty2.length === 1 && chipsEmpty2[0].tf === '5m');
 
-  // --- normalizeCfg 保留 ovHide ---
-  const old = { symbol: 'BTCUSDT', overlayTfs: { '4h': true }, srsiAux: { '15m': true }, ovHide: { '4h': 'ov' }, klineSel: {}, mainTF: '5m', srsiByTf: buildByTf() };
+  // --- normalizeCfg 保留 ovHide（布尔）---
+  const old = { symbol: 'BTCUSDT', overlayTfs: { '4h': true }, srsiAux: { '15m': true }, ovHide: { '4h': true }, klineSel: {}, mainTF: '5m', srsiByTf: buildByTf() };
   const loaded = kchartApi.__normalizeCfg(old);
   ok('迁移 ovQuickTfs 含 overlay+aux', loaded.ovQuickTfs.includes('4h') && loaded.ovQuickTfs.includes('15m'));
-  ok('normalizeCfg 保留 ovHide', loaded.ovHide['4h'] === 'ov');
+  ok('normalizeCfg 保留 ovHide(布尔)', loaded.ovHide['4h'] === true);
 })();
 
 function buildByTf() {
   const base = __defaultKConfig().srsi;
   const o = {}; KLINE_TF.forEach(tf => { o[tf] = { ...base }; }); return o;
 }
+
+// ============================================================
+//  SRSI 自动交易
+// ============================================================
+console.log('\n[kchart: SRSI 自动交易]');
+{
+  // --- computeDirectionScore 纯函数 ---
+  const opts = { basePct: 10, bonusBig: 3, bonusMid: 2, bonusSmall: 1 };
+  const s0 = computeDirectionScore({ '1h': null, '30m': null, '15m': null }, { '4h': null, '1h': null }, opts);
+  ok('方向无数据 → 0 加成/基准10%', s0.big === false && s0.mid === false && s0.small === false && s0.posPct === 10);
+
+  // --- kdTrendColor 纯函数（主图叠加药丸背景色）---
+  ok('k>d → 淡绿', kdTrendColor(60, 40) === 'rgba(38,166,91,0.22)');
+  ok('k<d → 淡红', kdTrendColor(40, 60) === 'rgba(211,47,47,0.22)');
+  ok('k===d → 透明', kdTrendColor(50, 50) === '');
+  ok('null → 透明', kdTrendColor(null, 50) === '');
+  ok('NaN → 透明', kdTrendColor(NaN, 50) === '');
+  const sAll = computeDirectionScore({ '1h': 'long', '30m': 'long', '15m': 'long' }, { '4h': 'long', '1h': 'long' }, opts);
+  ok('三方向全一致 → +6% (16%)', sAll.big && sAll.mid && sAll.small && sAll.posPct === 16);
+  const sPart = computeDirectionScore({ '1h': 'long', '30m': 'short', '15m': 'long' }, { '4h': 'long', '1h': 'long' }, opts);
+  ok('仅大/小一致 → +4% (14%)', sPart.big && !sPart.mid && sPart.small && sPart.posPct === 14);
+  const sCap = computeDirectionScore({ '1h': 'long', '30m': 'long', '15m': 'long' }, { '4h': 'long', '1h': 'long' }, { basePct: 28, bonusBig: 3, bonusMid: 2, bonusSmall: 1 });
+  ok('仓位封顶 30%', sCap.posPct === 30);
+
+  // --- srsiAutoBandState 边沿（注入 row）---
+  kchartApi.__setCfgForTest(__defaultKConfig());
+  resetSrsiAuto('BTCUSDT');
+  let bs = srsiAutoBandState('BTCUSDT', { k: 95, d: 92 });
+  ok('进上带(K>D)仅准备无信号', bs.band === 'upper' && bs.edge === null);
+  bs = srsiAutoBandState('BTCUSDT', { k: 92, d: 95 });
+  ok('带内D>K→enterUpper', bs.band === 'upper' && bs.edge === 'enterUpper');
+  bs = srsiAutoBandState('BTCUSDT', { k: 94, d: 93 });
+  ok('停留上带 无新边沿', bs.band === 'upper' && bs.edge === null);
+  bs = srsiAutoBandState('BTCUSDT', { k: 50, d: 50 });
+  ok('回中性 无边沿', bs.band === 'neutral' && bs.edge === null);
+  bs = srsiAutoBandState('BTCUSDT', { k: 95, d: 92 });
+  ok('重进上带(K>D)再次仅准备', bs.band === 'upper' && bs.edge === null);
+  bs = srsiAutoBandState('BTCUSDT', { k: 92, d: 95 });
+  ok('重进带后D>K再触发', bs.edge === 'enterUpper');
+  bs = srsiAutoBandState('BTCUSDT', { k: 5, d: 8 });
+  ok('进下带(D>K)仅准备', bs.band === 'lower' && bs.edge === null);
+  bs = srsiAutoBandState('BTCUSDT', { k: 8, d: 5 });
+  ok('带内K>D→enterLower', bs.band === 'lower' && bs.edge === 'enterLower');
+
+  // --- runSrsiAutoTrade 集成（注入 engine/band/dir）---
+  const tfs = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  const cfgAuto = __defaultKConfig();
+  cfgAuto.symbol = 'BTCUSDT'; cfgAuto.srsiAutoOn = true;
+  tfs.forEach(tf => cfgAuto.srsiOptSource[tf] = 'optimized');
+  kchartApi.__setCfgForTest(cfgAuto);
+  resetSrsiAuto('BTCUSDT');
+
+  const mkEngine = (pos, bal = 1000, coin = 0) => {
+    const positions = pos.slice();
+    return {
+      S: { prices: { 'BTCUSDT': { last: 100 } }, pos: positions },
+      getPerpSub: () => ({ id: 'perp', bal, coins: { 'BTCUSDT': coin } }),
+      placeOrder: (o) => { orders.push(o); positions.push({ sym: o.symbol, side: o.side, src: o.src, pnl: 0, entry: 100, qty: 1, amt: o.amt }); },
+      exitPosition: (p, r) => { const i = positions.indexOf(p); if (i >= 0) positions.splice(i, 1); exits.push({ p, r }); }
+    };
+  };
+  let orders = [], exits = [];
+  const kd = { '1h': 'long', '30m': 'long', '15m': 'long' };
+  const sd = { '4h': 'short', '1h': 'short', '30m': 'short' };
+  const bandUp = { edge: 'enterUpper', band: 'upper', k: 95, d: 92 };
+  const bandLow = { edge: 'enterLower', band: 'lower', k: 5, d: 5 };
+
+  // 上带：无多单 → 仅开空(跟随→U本位)，仓位=16%×余额
+  orders = []; exits = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('上带 开空(无多单/U本位)', orders.length === 1 && orders[0].side === 'short' && orders[0].marginMode === 'usdt');
+  ok('上带 空单仓位=16%×余额', close(orders[0].amt, 160, 1e-6));
+  ok('上带 不开多不平仓', exits.length === 0);
+
+  // 上带：有盈利多单 → 平多 + 开空
+  orders = []; exits = [];
+  const longPos = { sym: 'BTCUSDT', side: 'long', pnl: 5, entry: 90, qty: 1, amt: 90, src: 'srsiAuto' };
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([longPos], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('上带 平盈利多单', exits.length === 1 && exits[0].r.reason === 'SRSI自动 上带平多');
+  ok('上带 仍开空', orders.length === 1 && orders[0].side === 'short');
+
+  // 上带：亏损多单 → 仅跳过平仓、仍开空
+  orders = []; exits = [];
+  const lossLong = { sym: 'BTCUSDT', side: 'long', pnl: -5, entry: 110, qty: 1, amt: 110, src: 'srsiAuto' };
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([lossLong], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('上带 亏损多单不平仓', exits.length === 0);
+  ok('上带 亏损多单仍开空', orders.length === 1 && orders[0].side === 'short');
+
+  // 自动可平人工单（默认关）：盈利人工多单不被自动平
+  orders = []; exits = [];
+  const manLong = { sym: 'BTCUSDT', side: 'long', pnl: 5, entry: 90, qty: 1, amt: 90, src: 'manual' };
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([manLong], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('默认 盈利人工多单不被自动平', exits.length === 0 && orders.length === 1 && orders[0].side === 'short');
+
+  // 开关开：盈利人工多单被自动平（仍仅净盈利才平）
+  const cfgClose = __defaultKConfig();
+  cfgClose.symbol = 'BTCUSDT'; cfgClose.srsiAutoOn = true; cfgClose.srsiAutoCloseManual = true;
+  tfs.forEach(tf => cfgClose.srsiOptSource[tf] = 'optimized');
+  kchartApi.__setCfgForTest(cfgClose);
+  resetSrsiAuto('BTCUSDT');
+  orders = []; exits = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([manLong], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('开关开 盈利人工多单被自动平', exits.length === 1 && exits[0].r.reason === 'SRSI自动 上带平多');
+  ok('开关开 仍开空', orders.length === 1 && orders[0].side === 'short');
+  kchartApi.__setCfgForTest(cfgAuto); // 还原，避免影响后续用例
+
+  // 下带：开多(跟随→币本位)，币余额 10
+  orders = []; exits = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([], 0, 10), klineDir: kd, srsiDir: sd, band: bandLow });
+  ok('下带 开多(币本位)', orders.length === 1 && orders[0].side === 'long' && orders[0].marginMode === 'coin');
+
+  // 最多连开同向 3 个：连续 4 次上带，第 4 次不再开（复用同一 engine，真实累计持仓）
+  resetSrsiAuto('BTCUSDT');
+  orders = []; exits = [];
+  const capEng = mkEngine([], 1000, 0);
+  for (let i = 0; i < 4; i++) runSrsiAutoTrade('BTCUSDT', { engine: capEng, klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('连开空最多 3 次', orders.length === 3);
+
+  // 15m 未优选 → 自动交易硬暂停（按需求 #1：15m 未优选不能交易）
+  const cfgPart = __defaultKConfig();
+  cfgPart.symbol = 'BTCUSDT'; cfgPart.srsiAutoOn = true;
+  cfgPart.srsiOptSource = { '5m': 'optimized' }; // 仅 5m 优选，15m 未优选
+  kchartApi.__setCfgForTest(cfgPart);
+  resetSrsiAuto('BTCUSDT');
+  orders = []; exits = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('15m未优选 硬暂停(不开仓)', orders.length === 0);
+
+  // 15m 优选、但 30m/1h/4h 未优选 → 仍开仓，按权重减仓（scale=0.4 → 10%×0.4=4%）
+  const cfgPart2 = __defaultKConfig();
+  cfgPart2.symbol = 'BTCUSDT'; cfgPart2.srsiAutoOn = true;
+  cfgPart2.srsiOptSource = { '15m': 'optimized', '5m': 'optimized' };
+  kchartApi.__setCfgForTest(cfgPart2);
+  resetSrsiAuto('BTCUSDT');
+  orders = []; exits = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine([], 1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('15m优选但高位未优选 仍开空', orders.length === 1 && orders[0].side === 'short');
+  ok('高位未优选 减仓至4%×余额', close(orders[0].amt, 40, 1e-6), 'amt=' + (orders[0] && orders[0].amt));
+
+  // 恢复默认 cfg 避免影响其它用例
+  kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+// ============================================================
+//  bandEdge / klineDirFromCloses / srsiDirFromKD / backtestSrsiAuto
+// ============================================================
+console.log('\n[kchart: bandEdge & 回测]');
+{
+  const E = { upper: 90, lower: 10 };
+  // 进上带(K>D) = 准备，不触发；带内 D>K 交叉才发空头信号
+  let b = bandEdge('neutral', 95, 92, E);
+  ok('bandEdge 进上带(K>D)仅准备无信号', b.band === 'upper' && b.edge === null && b.armed === false);
+  b = bandEdge('upper', 92, 95, E);
+  ok('bandEdge 带内D>K→enterUpper', b.band === 'upper' && b.edge === 'enterUpper' && b.armed === true);
+  b = bandEdge('upper', 92, 95, E, true);
+  ok('bandEdge 停留上带不重复触发', b.edge === null);
+  b = bandEdge('upper', 50, 50, E, true);
+  ok('bandEdge 回中性复位armed', b.band === 'neutral' && b.edge === null && b.armed === false);
+  b = bandEdge('neutral', 95, 92, E);
+  ok('bandEdge 重进上带再次仅准备', b.edge === null);
+  b = bandEdge('upper', 92, 95, E);
+  ok('bandEdge 重进带后D>K再触发', b.edge === 'enterUpper');
+  // 进下带(D>K,即K<D) = 准备；带内 K>D 交叉才发多头信号
+  b = bandEdge('neutral', 5, 8, E);
+  ok('bandEdge 进下带(D>K)仅准备', b.band === 'lower' && b.edge === null && b.armed === false);
+  b = bandEdge('lower', 8, 5, E);
+  ok('bandEdge 带内K>D→enterLower', b.band === 'lower' && b.edge === 'enterLower' && b.armed === true);
+  b = bandEdge('lower', 8, 5, E, true);
+  ok('bandEdge 停留下带不重复触发', b.edge === null);
+  b = bandEdge('lower', 50, 50, E, true);
+  ok('bandEdge 下带回升中性复位', b.band === 'neutral' && b.edge === null && b.armed === false);
+
+  ok('srsiDirFromKD overbought→long', srsiDirFromKD(95, 92, 'overbought') === 'long');
+  ok('srsiDirFromKD oversold→short', srsiDirFromKD(5, 5, 'oversold') === 'short');
+  ok('srsiDirFromKD 中性无向', srsiDirFromKD(50, 50, null) === null);
+
+  const rise = [], fall = [];
+  for (let i = 0; i < 130; i++) rise.push(100 + i);
+  for (let i = 0; i < 130; i++) fall.push(300 - i);
+  ok('klineDirFromCloses 上升→long', klineDirFromCloses(rise) === 'long');
+  ok('klineDirFromCloses 下降→short', klineDirFromCloses(fall) === 'short');
+  ok('klineDirFromCloses 不足120→null', klineDirFromCloses(rise.slice(0, 100)) === null);
+
+  // 反复 V 形（下→上）使 SRSI 在带内产生 K/D 交叉：超卖 K>D→开多、超买 D>K→开空（新闸门=带内交叉）
+  const closes = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) closes.push(140 - i * 4);   // 140→40 下跌
+    for (let i = 0; i < 25; i++) closes.push(40 + i * 4);    // 40→140 上涨
+  }
+  const mk = (arr) => arr.map((c, i) => [i * 900000, c, c, c, c, 0]);
+  const kl = { '15m': mk(closes), '1h': mk(closes), '30m': mk(closes), '4h': mk(closes) };
+  const cfgBt = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoUpper: 80, srsiAutoLower: 20 };
+  const res = backtestSrsiAuto('BTCUSDT', kl, cfgBt, 1000);
+  ok('回测 无错误', !res.error);
+  ok('回测 有开仓', res.trades.some(t => t.action === 'open'));
+  ok('回测 有平仓', res.trades.some(t => t.action.indexOf('close') === 0));
+  ok('回测 含开空', res.shorts >= 1);
+  ok('回测 多单同时持仓不超上限', res.maxOpenLong <= cfgBt.srsiAutoMaxSame);
+  ok('回测 空单同时持仓不超上限', res.maxOpenShort <= cfgBt.srsiAutoMaxSame);
+  ok('回测 含开多', res.longs >= 1);
+  ok('回测 期末权益为有限数', isFinite(res.finalEquity));
+  ok('回测 胜率∈[0,1]', res.winRate >= 0 && res.winRate <= 1);
+  // 成交记录含增强字段（金额/余额/K/D）
+  const openT = res.trades.find(t => t.action === 'open');
+  const closeT = res.trades.find(t => t.action.indexOf('close') === 0);
+  ok('回测 开仓记录含 amt>0', openT && openT.amt > 0);
+  ok('回测 开仓记录含 bal 有限', openT && isFinite(openT.bal));
+  ok('回测 开仓记录含 K/D 数值', openT && isFinite(openT.k) && isFinite(openT.d));
+  ok('回测 平仓记录含 pnl', !!closeT && isFinite(closeT.pnl));
+  ok('回测 平仓记录含 bal', !!closeT && isFinite(closeT.bal));
+  // 全量（非截断 8 笔）：开仓 + 平仓(close*) + 爆仓(liquidate)
+  const nOpen = res.trades.filter(t => t.action === 'open').length;
+  const nLiq = res.trades.filter(t => t.action === 'liquidate').length;
+  ok('回测 成交总条数=开仓+平仓+爆仓', res.trades.length === nOpen + (res.wins + res.losses) + nLiq);
+  // 窗口过滤：只在 windowStart 之后重放成交（修复 24h 预热导致“数据不足”）
+  const winStart = closes.length > 150 ? (150 * 900000 + 1) : 0;
+  const resWin = backtestSrsiAuto('BTCUSDT', kl, cfgBt, 1000, winStart);
+  ok('回测(窗口) 无错误', !resWin.error);
+  ok('回测(窗口) 所有成交在窗口内', resWin.trades.every(t => t.t >= winStart));
+
+  // 解析对象格式（fetchKlinesRange 真实返回）：{opens,highs,lows,closes,vols,times}
+  const parsed = {};
+  for (const tf of ['15m', '1h', '30m', '4h']) {
+    parsed[tf] = { opens: closes.slice(), highs: closes.slice(), lows: closes.slice(), closes: closes.slice(), vols: closes.map(() => 0), times: closes.map((_, i) => i * 900000) };
+  }
+  const res2 = backtestSrsiAuto('BTCUSDT', parsed, cfgBt, 1000);
+  ok('回测(解析对象) 无错误', !res2.error);
+  ok('回测(解析对象) 有开仓', res2.trades.some(t => t.action === 'open'));
+  ok('回测(解析对象) 期末权益有限', isFinite(res2.finalEquity));
+  ok('回测(解析对象) 增强字段齐全', (() => { const o = res2.trades.find(t => t.action === 'open'); return o && isFinite(o.amt) && isFinite(o.bal) && isFinite(o.k); })());
+}
+
+// 成本模型：手续费 / 滑点 / 真实资金费率（与实盘 PaperEngine 同源）
+console.log('\n[kchart: 回测成本模型]');
+{
+  // 反复 V 形（保证多空均会在带内交叉开仓且含可记账平仓）
+  const zz = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) zz.push(140 - i * 4);
+    for (let i = 0; i < 25; i++) zz.push(40 + i * 4);
+  }
+  const mk = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  const cfg = { ...__defaultKConfig(), srsiAutoUpper: 80, srsiAutoLower: 20 };
+  const base = { ...cfg, srsiAutoUseCost: false, srsiAutoFeeRate: 0, srsiAutoSlipBase: 0, srsiAutoUseFunding: false };
+  const r0 = backtestSrsiAuto('BTCUSDT', mk(zz), base, 1000);
+  ok('成本基准 有成交', r0.trades.some(t => t.action === 'open'));
+  const rFee = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfg, srsiAutoFeeRate: 0.001, srsiAutoSlipBase: 0, srsiAutoUseFunding: false }, 1000);
+  ok('成本 手续费>0 使期末权益更低', rFee.finalEquity < r0.finalEquity);
+  ok('成本 totalFee>0', rFee.totalFee > 0);
+  const rSlip = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfg, srsiAutoFeeRate: 0, srsiAutoSlipBase: 0.005, srsiAutoUseFunding: false }, 1000);
+  ok('成本 滑点>0 使期末权益更低', rSlip.finalEquity < r0.finalEquity);
+  ok('成本 totalSlip>0', rSlip.totalSlip > 0);
+  const sideAt = (trades, T) => { let side = null; for (const t of trades) { if (t.t > T) break; if (t.action === 'open') side = t.side; else if (t.action.indexOf('close') === 0) side = null; } return side; };
+  const T = 160 * 900000;
+  const fund = [{ fundingTime: T, fundingRate: 0.0001 }];
+  const rFund = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfg, srsiAutoFeeRate: 0, srsiAutoSlipBase: 0, srsiAutoUseFunding: true }, 1000, null, fund);
+  ok('成本 资金费被计入(≠0)', rFund.totalFunding !== 0);
+  const sideT = sideAt(rFund.trades, T);
+  ok('成本 资金费符号与持仓方向一致', (sideT === 'short' && rFund.totalFunding > 0) || (sideT === 'long' && rFund.totalFunding < 0));
+  const cl = rFee.trades.find(t => t.action.indexOf('close') === 0);
+  ok('成本 平仓记录含 fee/slip/funding 字段', cl && cl.fee != null && cl.slip != null && cl.funding != null);
+  ok('成本 返回含 totalFee/totalSlip/totalFunding', 'totalFee' in rFee && 'totalSlip' in rFee && 'totalFunding' in rFee);
+  // 净盈亏对账：net = 毛利 - 手续费 - 滑点 + 资金费(现金流)
+  const recon = rFee.trades.filter(t => t.action.indexOf('close') === 0).every(t => Math.abs(t.pnl - (t.gross - t.fee - t.slip + t.funding)) < 1e-6);
+  ok('成本 净盈亏=毛利-手续费-滑点+资金费(对账一致)', recon);
+  // 亏损不平仓：含成本时 仅净盈的平仓被记账
+  ok('亏损不平仓 含成本时 已记账平仓均净盈', rFee.trades.filter(t => t.action.indexOf('close') === 0).every(t => t.pnl > 0));
+  // 成本总开关：关闭后完全不计成本
+  const rNo = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfg, srsiAutoUseCost: false }, 1000, null, fund);
+  ok('成本开关 关→无手续费', rNo.totalFee === 0);
+  ok('成本开关 关→无滑点', rNo.totalSlip === 0);
+  ok('成本开关 关→无资金费', rNo.totalFunding === 0);
+  ok('成本开关 关→等同无成本基准', Math.abs(rNo.finalEquity - r0.finalEquity) < 1e-6);
+  ok('成本开关 关→期末权益≥含成本', rNo.finalEquity >= rFee.finalEquity - 1e-6);
+  ok('成本开关 关→记账平仓数≥含成本', rNo.trades.filter(t => t.action.indexOf('close') === 0).length >= rFee.trades.filter(t => t.action.indexOf('close') === 0).length);
+}
+
+//  回测爆仓线（真实交易所 MMR 规则）：高杠杆下价格击穿强平价应被强平并诚实显示
+console.log('\n[kchart: 回测 爆仓线]');
+{
+  // 拉升→顶部回抽(带内 D>K 开空，后被反向击穿)→深跌→底部回抽(K>D 开多抢反弹)→继续暴跌击穿多单强平价→爆仓
+  const closes = [];
+  for (let i = 0; i < 60; i++) closes.push(100 + i * 1.6);          // 100→196 拉升
+  for (let i = 0; i < 16; i++) closes.push(196 - i * 1.3 + (i % 2 ? 6 : 0)); // 顶部回抽(带内 D>K)
+  for (let i = 0; i < 50; i++) closes.push(176 + i * 1.6);          // 续涨(空头被穿透)
+  for (let i = 0; i < 60; i++) closes.push(256 - i * 2.6);          // 256→100 深跌
+  for (let i = 0; i < 16; i++) closes.push(100 + i * 1.3 + (i % 2 ? 6 : 0)); // 底部回抽(带内 K>D→开多)
+  for (let i = 0; i < 50; i++) closes.push(120 - i * 1.4);          // 120→50 暴跌，击穿多单强平价
+  const mk = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  // 高杠杆：多单强平价 ≈ entry*(1-1/lev+mmr)，lev=30 ⇒ 仅需 -3.3% 即爆
+  const cfg = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoLev: 30, srsiAutoUpper: 80, srsiAutoLower: 20, srsiAutoMaxSame: 3 };
+  const res = backtestSrsiAuto('BTCUSDT', mk(closes), cfg, 1000);
+  ok('爆仓 有开仓', res.trades.some(t => t.action === 'open'));
+  ok('爆仓 出现 liquidate 成交', res.trades.some(t => t.action === 'liquidate'));
+  ok('爆仓 计数 ≥ 1', (res.liqCount || 0) >= 1);
+  const liq = res.trades.find(t => t.action === 'liquidate');
+  ok('爆仓 记录含 liqPrice', liq && isFinite(liq.liqPrice) && liq.liqPrice > 0);
+  ok('爆仓 多发生在开仓之后', liq && res.trades.some(t => t.action === 'open' && t.t < liq.t));
+  ok('爆仓 净损失为负(保证金基本归零)', liq && liq.pnl < 0);
+  ok('爆仓 净损失≈-保证金(lev=30 约 -0.88×amt)', liq && Math.abs(liq.pnl + liq.amt * 0.88) < liq.amt * 0.05);
+  ok('爆仓 返回 liqLoss<0', res.liqLoss < 0);
+  // 渲染：含爆仓红条与「爆仓」标记
+  const html = _renderBacktestResult(res, 30);
+  ok('爆仓 渲染含「强平」摘要', html.includes('强平'));
+  ok('爆仓 渲染含「爆仓」标记', html.includes('爆仓'));
+}
+
+// 回测 现货模式（双余额/无杠杆/无爆仓/做空仅卖已有币）
+console.log('\n[kchart: 回测 现货模式]');
+{
+  const zz = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) zz.push(140 - i * 4);
+    for (let i = 0; i < 25; i++) zz.push(40 + i * 4);
+  }
+  const mk = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  const cfg = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoUpper: 80, srsiAutoLower: 20 };
+  // 有币库存：应同时出现开多(买币)与开空(卖币)
+  const res = backtestSrsiAuto('BTCUSDT', mk(zz), cfg, 1000, null, null, { mode: 'spot', spotUsdt: 1000, spotCoin: 5 });
+  ok('现货 模式标记=spot', res.mode === 'spot');
+  ok('现货 无爆仓', (res.liqCount || 0) === 0 && !res.trades.some(t => t.action === 'liquidate'));
+  ok('现货 无资金费', (res.totalFunding || 0) === 0);
+  ok('现货 有开仓', res.trades.some(t => t.action === 'open'));
+  ok('现货 有平仓', res.trades.some(t => t.action.indexOf('close') === 0));
+  ok('现货 含开多(买币)', res.longs >= 1);
+  ok('现货 含开空(卖币)', res.shorts >= 1);
+  ok('现货 初始USDT池已记录', res.spotInitU === 1000);
+  ok('现货 初始币库存已记录', res.spotInitC === 5);
+  ok('现货 期末权益有限', isFinite(res.finalEquity));
+  ok('现货 本金(startVal)=USDT池+币库存×窗口起点价', isFinite(res.principal) && res.principal > 0);
+  ok('现货 收益率有限', isFinite(res.pnlPct));
+  ok('现货 双余额下单记录含 bal', (() => { const o = res.trades.find(t => t.action === 'open'); return o && isFinite(o.bal); })());
+  // 纯空无币库存：short 不应开（现货无借币）
+  const resNo = backtestSrsiAuto('BTCUSDT', mk(zz), cfg, 1000, null, null, { mode: 'spot', spotUsdt: 1000, spotCoin: 0 });
+  ok('现货(无币) 不开空', resNo.shorts === 0);
+  ok('现货(无币) 仍开多', resNo.longs >= 1);
+  ok('现货(无币) 无爆仓', (resNo.liqCount || 0) === 0);
+  // 渲染：现货显示模式徽章与无爆仓
+  const html = _renderBacktestResult(res, 30);
+  ok('现货 渲染含「现货 1x」徽章', html.includes('现货 1x'));
+  ok('现货 渲染不含「强平」爆仓行', !html.includes('强平'));
+  // 期末分离：现金 USDT 与币库存各自记录（不再只归一为单一权益）
+  ok('现货 期末分离-现金USDT 记录', typeof res.finalU === 'number');
+  ok('现货 期末分离-币库存 记录', typeof res.finalC === 'number');
+  ok('现货 期末分离-期末价 记录', typeof res.finalPrice === 'number');
+  ok('现货 期末分离-现金=初始+盈亏(合理范围)', isFinite(res.finalU));
+  ok('现货 期末分离-成交逐笔标 mode', res.trades.every(t => t.marginMode === 'spot'));
+  ok('现货 渲染含模式列表头', html.includes('<th>模式</th>'));
+  ok('现货 渲染含现货模式标签', html.includes('现货'));
+  // 合约模式：逐笔标注 U本位(开空)/币本位(开多)
+  const perpCfg = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoBtMode: 'perp', srsiAutoLev: 5, srsiAutoUpper: 80, srsiAutoLower: 20 };
+  const resPerp = backtestSrsiAuto('BTCUSDT', mk(zz), perpCfg, 1000);
+  ok('合约 成交含 marginMode', resPerp.trades.some(t => t.marginMode === 'usdt' || t.marginMode === 'coin'));
+  ok('合约 开空标 U本位', resPerp.trades.some(t => t.action === 'open' && t.side === 'short' && t.marginMode === 'usdt'));
+  ok('合约 开多标 币本位', resPerp.trades.some(t => t.action === 'open' && t.side === 'long' && t.marginMode === 'coin'));
+  const htmlPerp = _renderBacktestResult(resPerp, 30);
+  ok('合约 渲染含 U本位', htmlPerp.includes('U本位'));
+  ok('合约 渲染含 币本位', htmlPerp.includes('币本位'));
+}
+
+// 回测 双池真实建模（本位下拉框 srsiAutoMode 驱动 marginMode + USDT 池/币库存池）
+console.log('\n[kchart: 回测 双池建模]');
+{
+  const zz = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) zz.push(140 - i * 4);
+    for (let i = 0; i < 25; i++) zz.push(40 + i * 4);
+  }
+  const mk2 = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  const baseBt = (mode) => ({ ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoBtMode: 'perp', srsiAutoLev: 5, srsiAutoMode: mode, srsiAutoUpper: 80, srsiAutoLower: 20 });
+  const P = 1000;
+  const fp = zz[zz.length - 1]; // 期末价 = 末根收盘价
+  // follow：开空→U本位 / 开多→币本位
+  const rF = backtestSrsiAuto('BTCUSDT', mk2(zz), baseBt('follow'), P);
+  ok('双池 follow 有成交', rF.trades.some(t => t.action === 'open'));
+  ok('双池 follow 开空→U本位', rF.trades.some(t => t.action === 'open' && t.side === 'short' && t.marginMode === 'usdt'));
+  ok('双池 follow 开多→币本位', rF.trades.some(t => t.action === 'open' && t.side === 'long' && t.marginMode === 'coin'));
+  ok('双池 follow startVal=本金', Math.abs(rF.principal - P) < 1e-6);
+  ok('双池 follow 期末权益=avail+coinAvail*价', Math.abs(rF.finalEquity - (rF.finalAvail + rF.finalCoinAvail * fp)) < 1e-6);
+  // usdt：全 U 本位，币库存池恒 0（等同旧单池行为，U本位 不受影响）
+  const rU = backtestSrsiAuto('BTCUSDT', mk2(zz), baseBt('usdt'), P);
+  ok('双池 usdt 全部 U本位', rU.trades.filter(t => t.action === 'open').every(t => t.marginMode === 'usdt'));
+  ok('双池 usdt 币库存池恒0', Math.abs(rU.finalCoinAvail) < 1e-9);
+  ok('双池 usdt 期末权益=finalAvail', Math.abs(rU.finalEquity - rU.finalAvail) < 1e-9);
+  ok('双池 usdt startVal=本金', Math.abs(rU.principal - P) < 1e-6);
+  // coin：全币本位，USDT 池恒 0
+  const rC = backtestSrsiAuto('BTCUSDT', mk2(zz), baseBt('coin'), P);
+  ok('双池 coin 全部币本位', rC.trades.filter(t => t.action === 'open').every(t => t.marginMode === 'coin'));
+  ok('双池 coin USDT池恒0', Math.abs(rC.finalAvail) < 1e-9);
+  ok('双池 coin 币库存池>0(双池真实建模)', rC.finalCoinAvail > 0);
+  ok('双池 coin startVal=本金', Math.abs(rC.principal - P) < 1e-6);
+  ok('双池 coin 期末权益=coinAvail*价', Math.abs(rC.finalEquity - rC.finalCoinAvail * fp) < 1e-9);
+  // 资本隔离：三种本位均有限期末权益且 >0
+  ok('双池 三种本位回测均产生有限且正期末权益', [rF, rU, rC].every(r => isFinite(r.finalEquity) && r.finalEquity > 0));
+}
+
+// 回测 现货模式 _getSim 多源合并（主系统 smartTrader / PWA pwa_sim_settings 均可喂给现货回测）
+console.log('\n[kchart: _getSim 多源合并]');
+{
+  if (!globalThis.localStorage) {
+    const _ls = {};
+    globalThis.localStorage = { getItem: (k) => (k in _ls ? _ls[k] : null), setItem: (k, v) => { _ls[k] = String(v); }, removeItem: (k) => { delete _ls[k]; } };
+  }
+  const savedWindowS = globalThis.window;
+  globalThis.window = {}; // 确保 window.S.sim 不干扰（PWA 中 S.sim 为 undefined）
+  // 场景1：仅主系统 smartTrader 持久化中有币库存 → 现货回测应读到
+  globalThis.localStorage.setItem('smartTrader', JSON.stringify({ ver: 1, sim: { spotUsdt: 5000, perpUsdt: 5000, coin: { BTCUSDT: 0.5, ETHUSDT: 1.2 } } }));
+  globalThis.localStorage.removeItem('pwa_sim_settings');
+  const r1 = _getSim();
+  ok('_getSim 主系统 smartTrader 币库存被读取(BTCUSDT)', r1.coin['BTCUSDT'] === 0.5);
+  ok('_getSim 主系统 smartTrader 币库存被读取(ETHUSDT)', r1.coin['ETHUSDT'] === 1.2);
+  ok('_getSim USDT池取首个非零', r1.spotUsdt === 5000);
+  // 场景2：仅 PWA pwa_sim_settings 有币库存
+  globalThis.localStorage.removeItem('smartTrader');
+  globalThis.localStorage.setItem('pwa_sim_settings', JSON.stringify({ spotUsdt: 8000, perpUsdt: 5000, coin: { SOLUSDT: 3 } }));
+  const r2 = _getSim();
+  ok('_getSim PWA pwa_sim_settings 币库存被读取(SOLUSDT)', r2.coin['SOLUSDT'] === 3);
+  // 场景3：两源共存 → 合并（不互相覆盖）
+  globalThis.localStorage.setItem('smartTrader', JSON.stringify({ ver: 1, sim: { spotUsdt: 5000, perpUsdt: 5000, coin: { BTCUSDT: 0.5 } } }));
+  const r3 = _getSim();
+  ok('_getSim 多源合并含 PWA 币(SOLUSDT)', r3.coin['SOLUSDT'] === 3 && r3.coin['BTCUSDT'] === 0.5);
+  // 场景4：window.S.sim 实时态优先（主系统在线状态）
+  globalThis.window = { S: { sim: { spotUsdt: 2000, perpUsdt: 5000, coin: { BTCUSDT: 9 } } } };
+  const r4 = _getSim();
+  ok('_getSim 实时 S.sim 优先(BTCUSDT=9)', r4.coin['BTCUSDT'] === 9);
+  // 清理
+  globalThis.window = savedWindowS;
+  globalThis.localStorage.removeItem('smartTrader');
+  globalThis.localStorage.removeItem('pwa_sim_settings');
+}
+
+// 一致性：实时/回测方向同源（srsiAutoDirs 复用 auxGateDir 口径，且采用 srsiByTf 优选）
+console.log('\n[kchart: 实时/回测方向一致性]');
+{
+  const up = []; for (let i = 0; i < 220; i++) up.push(100 + i * 0.5);
+  const closesByTf = { '15m': up, '30m': up, '1h': up, '4h': up };
+  const cfgDir = __defaultKConfig();
+  const d = srsiAutoDirs(closesByTf, cfgDir);
+  ok('srsiAutoDirs 返回 klineDir/srsiDir 映射', !!d && !!d.klineDir && !!d.srsiDir);
+  ok('srsiAutoDirs 1h 趋势方向=long', d.klineDir['1h'] === 'long');
+  // SRSI 方向为 long/short/null 之一（纯单调序列 SRSI 为中性，允许 null）；不抛错即同源可用
+  const validDir = (x) => x === null || x === 'long' || x === 'short';
+  ok('srsiAutoDirs 4h SRSI 方向合法', validDir(d.srsiDir['4h']));
+  ok('srsiAutoDirs 1h SRSI 方向合法', validDir(d.srsiDir['1h']));
+  // 采用 srsiByTf 优选后仍能稳定出方向（不因配置切换而抛错/破坏结构）
+  const cfgOpt = __defaultKConfig();
+  cfgOpt.srsiByTf = { '4h': { ...cfgOpt.srsi, r: 9, k: 3, d: 9 }, '1h': { ...cfgOpt.srsi, r: 7 } };
+  const d2 = srsiAutoDirs(closesByTf, cfgOpt);
+  ok('srsiAutoDirs(优选) 结构完整', validDir(d2.srsiDir['4h']) && validDir(d2.srsiDir['1h']));
+}
+
+//  fetchKlinesRange 须按 [startTime,endTime] 截断（修复 24h/7d 返回同一整页）
+{
+  const savedFetch = globalThis.fetch, savedApi = globalThis.KCHART_BINANCE_API;
+  try {
+    globalThis.KCHART_BINANCE_API = 'https://test.example.com';
+    const now = Date.now();
+    const N = 1000, step = 900000; // 15m
+    const page = [];
+    for (let i = 0; i < N; i++) {
+      const t = now - (N - 1 - i) * step;
+      const c = 100 + (i % 2 ? 1 : -1) * (i % 20);
+      page.push([t, c, c, c, c, 0]);
+    }
+    globalThis.fetch = async () => ({ ok: true, json: async () => page });
+    const r1 = await fetchKlinesRange('BTCUSDT', '15m', now - 24 * 3600 * 1000, now);
+    const r7 = await fetchKlinesRange('BTCUSDT', '15m', now - 7 * 24 * 3600 * 1000, now);
+    ok('fetchKlinesRange 24h 已截断(<1000)', r1.closes.length < 1000);
+    ok('fetchKlinesRange 7d 已截断(<1000)', r7.closes.length < 1000);
+    ok('fetchKlinesRange 24h≠7d（修复雷同）', r1.closes.length !== r7.closes.length);
+    ok('fetchKlinesRange 7d>24h', r7.closes.length > r1.closes.length);
+    // 窗口边界内：最早一根应 >= startTime
+    ok('fetchKlinesRange 24h 首根在窗口内', r1.times[0] >= now - 24 * 3600 * 1000 - step);
+  } finally {
+    globalThis.fetch = savedFetch;
+    globalThis.KCHART_BINANCE_API = savedApi;
+  }
+}
+
+console.log('\n[kchart: SRSI自动交易 价格注入(修复空数据致 9h 无成交)]');
+{
+  // 回归：buildSrsiOverview 之前未传 priceMap，k/d 恒为 null → 带信号永不触发 → 自动交易 9h 无成交
+  const N = 320;
+  const mk = () => { const a = []; for (let i = 0; i < N; i++) a.push(100 + Math.sin(i / 12) * 12 + i * 0.02); return a; };
+  globalThis.S = { klines: { BTCUSDT: { '5m': mk(), '10m': mk(), '15m': mk(), '30m': mk(), '1h': mk(), '4h': mk() } } };
+  try {
+    const bs = srsiAutoBandState('BTCUSDT');
+    ok('srsiAutoBandState 注入价格后返回有效 k/d', bs.k != null && bs.d != null && isFinite(bs.k) && isFinite(bs.d));
+    const dir = srsiDirOf('BTCUSDT', '4h');
+    ok('srsiDirOf 注入价格后不恒为 null', dir === null || dir === 'long' || dir === 'short');
+  } finally { delete globalThis.S; }
+}
+
+//  10m 自动优选真实管线回放（faithful repro：注入桩→optimize→apply→persist→reload）
+{
+  const TFS = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  kchartApi.__clearStore();
+  const c = __defaultKConfig();
+  c.symbol = 'BTCUSDT';
+  c.srsiAutoOptEnabled = true;
+  c.srsiOptSource = {};
+  kchartApi.__setCfgForTest(c);
+  resetSrsiAuto('BTCUSDT');
+  const mkCloses = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 11) * 15 + i * 0.05); return a; };
+  kchartApi.__setOptFetch(async (sym, tf, days) => {
+    const closes = mkCloses(600);
+    return { closes, opens: closes.slice(), times: closes.map((_, i) => 1e12 + i * 600000), from: 1e12, to: 1e12 + 600 * 600000 };
+  });
+  try {
+    await kchartApi.runSrsiAutoOptimizeAll(false);
+    const applied = kchartApi.__getCfg().srsiOptSource;
+    ok('自动优选管线覆盖 10m', applied['10m'] === 'optimized');
+    ok('自动优选管线覆盖全部 6 周期', TFS.every(tf => applied[tf] === 'optimized'));
+    kchartApi.__persist();
+    kchartApi.__load();
+    const reloaded = kchartApi.__getCfg().srsiOptSource;
+    ok('刷新后 10m 仍为已优选（持久化不丢 10m）', reloaded['10m'] === 'optimized');
+    ok('刷新后全部 6 周期仍为已优选', TFS.every(tf => reloaded[tf] === 'optimized'));
+  } finally {
+    kchartApi.__setOptFetch(null);
+  }
+}
+
+//  10m 优选缺失自愈：用户曾优选过(任一周期标记 optimized)→ 加载时 runSrsiAutoOptimizeAll(false) 补跑缺失周期(含 10m)
+console.log('\n[kchart: 10m 优选缺失自愈]');
+{
+  const TFS = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  kchartApi.__clearStore();
+  const c = __defaultKConfig();
+  c.symbol = 'BTCUSDT';
+  c.srsiAutoOptEnabled = false; // 注意：自愈不应依赖「自动优选总开关」打开
+  c.srsiOptSource = { '5m': 'optimized' }; // 仅曾优选过 5m，10m 缺失
+  kchartApi.__setCfgForTest(c);
+  resetSrsiAuto('BTCUSDT');
+  const mkCloses = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 11) * 15 + i * 0.05); return a; };
+  kchartApi.__setOptFetch(async (sym, tf, days) => {
+    const closes = mkCloses(600);
+    return { closes, opens: closes.slice(), times: closes.map((_, i) => 1e12 + i * 600000), from: 1e12, to: 1e12 + 600 * 600000 };
+  });
+  try {
+    await kchartApi.runSrsiAutoOptimizeAll(false); // force=false：跳过已优化，只补跑缺失（含 10m）
+    const after = kchartApi.__getCfg().srsiOptSource;
+    ok('缺失的 10m 被自愈为 optimized', after['10m'] === 'optimized');
+    ok('已有的 5m 仍保留 optimized', after['5m'] === 'optimized');
+    ok('其余缺失周期一并补齐', TFS.filter(tf => tf !== '5m').every(tf => after[tf] === 'optimized'));
+  } finally {
+    kchartApi.__setOptFetch(null);
+  }
+}
+
+//  回测明细「平多/平空」配色：平(橙)/多(绿)/空(红) 加粗；亏损平含「亏」标记
+console.log('\n[kchart: 回测 平多/平空 配色]');
+{
+  const res = {
+    error: null, pnlPct: 5, finalEquity: 105, principal: 100,
+    winRate: 0.5, wins: 1, losses: 1, longs: 1, shorts: 1, maxDD: 0.1,
+    trades: [
+      { t: Date.now(), action: 'open', side: 'long', price: 100, amt: 10, k: 50, d: 50, bal: 100 },
+      { t: Date.now() + 1, action: 'close', side: 'long', pnl: 5, price: 105, fee: 0.1, slip: 0.1, funding: 0, bal: 105, k: 60, d: 60 },
+      { t: Date.now() + 2, action: 'close', side: 'short', pnl: -3, price: 95, fee: 0.1, slip: 0.1, funding: 0, bal: 102, k: 40, d: 40 }
+    ],
+    totalFee: 0.2, totalSlip: 0.2, totalFunding: 0, equitySeries: [{ eq: 100 }, { eq: 105 }]
+  };
+  const html = _renderBacktestResult(res, 30);
+  ok('盈利平多 含 bt-ping(平)+bt-long(多)', html.includes('bt-ping') && html.includes('bt-long'));
+  ok('亏损平空 含 bt-short(空)', html.includes('bt-short'));
+  ok('亏损平仓 含 bt-loss(亏) 标记', html.includes('bt-loss'));
+  ok('不再出现旧文案 平盈', !html.includes('平盈'));
+  ok('不再出现旧文案 平亏', !html.includes('平亏'));
+}
+
+// 回测 90/180/365 按钮功能有效性：覆盖完整窗口(maxBars 按比例放大) + 各区间独立缓存 + 二次点击复用已缓存 K线
+console.log('\n[kchart: 回测 90/180/365 按钮功能]');
+{
+  kchartApi.__clearStore();
+  const c = __defaultKConfig();
+  c.symbol = 'BTCUSDT';
+  c.srsiAutoUseFunding = false; // 测试不触真网资金费率
+  kchartApi.__setCfgForTest(c);
+  const mk = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 7) * 10 + i * 0.02); return a; };
+  const stepMs = (tf) => tf === '15m' ? 900000 : tf === '30m' ? 1800000 : tf === '1h' ? 3600000 : 14400000;
+  let maxBarsSeen = {};
+  let fetchCalls = 0;
+  const fetchImpl = async (sym, tf, start, end, onP, maxBars) => {
+    fetchCalls++;
+    maxBarsSeen[tf] = (maxBarsSeen[tf] || 0) > maxBars ? maxBarsSeen[tf] : maxBars;
+    const n = Math.max(200, Math.min(maxBars, Math.ceil((end - start) / stepMs(tf)) + 200));
+    const closes = mk(n);
+    return {
+      closes, opens: closes.slice(), highs: closes.map(v => v + 1), lows: closes.map(v => v - 1),
+      vols: closes.map(() => 10), times: closes.map((_, i) => start + i * stepMs(tf))
+    };
+  };
+  kchartApi.__setBacktestFetch(fetchImpl);
+  try {
+    for (const d of [30, 90, 180, 365]) {
+      await kchartApi.runSrsiBacktest(d, { force: true });
+    }
+    const store = kchartApi.__getBtStore();
+    ok('30天结果独立存储', !!store.results['BTCUSDT|30']);
+    ok('90天结果独立存储', !!store.results['BTCUSDT|90']);
+    ok('180天结果独立存储', !!store.results['BTCUSDT|180']);
+    ok('365天结果独立存储', !!store.results['BTCUSDT|365']);
+    ok('30天回测无错误', store.results['BTCUSDT|30'] && !store.results['BTCUSDT|30'].error);
+    ok('90天回测无错误', store.results['BTCUSDT|90'] && !store.results['BTCUSDT|90'].error);
+    ok('180天回测无错误', store.results['BTCUSDT|180'] && !store.results['BTCUSDT|180'].error);
+    ok('365天回测无错误', store.results['BTCUSDT|365'] && !store.results['BTCUSDT|365'].error);
+    ok('不同窗口结果非同一引用', store.results['BTCUSDT|90'] !== store.results['BTCUSDT|365']);
+    ok('回测产出交易记录数组', Array.isArray(store.results['BTCUSDT|365'].trades));
+    ok('一年回测 多单同时持仓不超上限', store.results['BTCUSDT|365'].maxOpenLong <= 3);
+    ok('一年回测 空单同时持仓不超上限', store.results['BTCUSDT|365'].maxOpenShort <= 3);
+    // 关键：15m 一年≈35040根，默认 maxBars=12000 会截断窗口；修复后应≥35000
+    ok('365天 15m maxBars 足够覆盖整窗(≥35000)', (maxBarsSeen['15m'] || 0) >= 35000);
+    ok('180天 15m maxBars 足够覆盖整窗(≥17000)', (maxBarsSeen['15m'] || 0) >= 17000);
+    // 二次点击(非 force)应复用已缓存 K线，不重复拉取
+    const callsAfterFirst = fetchCalls;
+    await kchartApi.runSrsiBacktest(90, { force: false });
+    ok('二次点击复用已缓存K线(不重复拉取)', fetchCalls === callsAfterFirst);
+  } finally {
+     kchartApi.__setBacktestFetch(null);
+   }
+}
+
+console.log('\n[kchart: 清空回测(仅当前币对)]');
+{
+  kchartApi.__clearStore();
+  const c = __defaultKConfig(); c.symbol = 'BTCUSDT';
+  kchartApi.__setCfgForTest(c);
+  const BT_KEY = 'smartTrader_kchart_bt', RAW_KEY = 'smartTrader_kchart_bt_raw', FUND_KEY = 'smartTrader_kchart_bt_fund';
+  // 灌入 BTCUSDT(U本位+币本位) 与 对照 ETHUSDT 的回测数据
+  localStorage.setItem(BT_KEY, JSON.stringify({
+    results: { 'BTCUSDT|30': { x: 1 }, 'BTCUSDT|30|spot': { x: 1 }, 'ETHUSDT|30': { x: 1 } },
+    lastSym: 'BTCUSDT', lastMode: 'perp', lastDays: 30
+  }));
+  localStorage.setItem(RAW_KEY, JSON.stringify({ 'BTCUSDT|30': { k: 1 }, 'ETHUSDT|30': { k: 1 } }));
+  localStorage.setItem(FUND_KEY, JSON.stringify({ 'BTCUSDT|30': [1], 'ETHUSDT|30': [1] }));
+
+  kchartApi.clearBacktestStore('BTCUSDT');
+
+  const bt = JSON.parse(localStorage.getItem(BT_KEY) || '{}');
+  const raw = JSON.parse(localStorage.getItem(RAW_KEY) || '{}');
+  const fund = JSON.parse(localStorage.getItem(FUND_KEY) || '{}');
+  ok('清空回测: BTCUSDT(U本位) 结果键已删', !bt.results['BTCUSDT|30']);
+  ok('清空回测: BTCUSDT(币本位) 结果键已删', !bt.results['BTCUSDT|30|spot']);
+  ok('清空回测: 对照 ETHUSDT 结果保留', !!bt.results['ETHUSDT|30']);
+  ok('清空回测: lastSym 已清空(因等于 BTCUSDT)', bt.lastSym == null);
+  ok('清空回测: raw 中 BTCUSDT 键已删、ETHUSDT 保留', !raw['BTCUSDT|30'] && !!raw['ETHUSDT|30']);
+  ok('清空回测: fund 中 BTCUSDT 键已删、ETHUSDT 保留', !fund['BTCUSDT|30'] && !!fund['ETHUSDT|30']);
+
+  // 误传其它币对不应误删 BTCUSDT
+  localStorage.setItem(BT_KEY, JSON.stringify({ results: { 'ETHUSDT|30': { x: 1 } }, lastSym: 'ETHUSDT', lastMode: 'perp', lastDays: 30 }));
+  localStorage.setItem(RAW_KEY, JSON.stringify({ 'ETHUSDT|30': { k: 1 } }));
+  localStorage.setItem(FUND_KEY, JSON.stringify({ 'ETHUSDT|30': [1] }));
+  kchartApi.clearBacktestStore('BTCUSDT');
+  const bt2 = JSON.parse(localStorage.getItem(BT_KEY) || '{}');
+  ok('清空回测: 无 BTCUSDT 数据时其它币对不受影响', !!bt2.results['ETHUSDT|30']);
+}
+
+// ============================================================
+//  回测 保证金严格记账（本金不超开）+ 开仓上限(U本位/币本位)
+// ============================================================
+console.log('\n[kchart: 回测 保证金严格记账 + 开仓上限]');
+{
+  const buildFetch = () => {
+    const mk = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 7) * 10); return a; };
+    const stepMs = (tf) => tf === '15m' ? 900000 : tf === '30m' ? 1800000 : tf === '1h' ? 3600000 : 14400000;
+    return async (sym, tf, start, end, onP, maxBars) => {
+      const n = Math.max(200, Math.min(maxBars, Math.ceil((end - start) / stepMs(tf)) + 200));
+      const closes = mk(n);
+      return { closes, opens: closes.slice(), highs: closes.map(v => v + 1), lows: closes.map(v => v - 1), vols: closes.map(() => 10), times: closes.map((_, i) => start + i * stepMs(tf)) };
+    };
+  };
+  const runBt = async (mode, cfgPatch, days) => {
+    days = days || 365;
+    kchartApi.__clearStore();
+    const c = __defaultKConfig();
+    c.symbol = 'BTCUSDT';
+    c.srsiAutoUseFunding = false;
+    c.srsiAutoUseCost = false; // 关闭全部成本(费/滑点)以便精确校验余额守恒
+    c.srsiAutoPrincipal = 1000;
+    c.srsiAutoBasePct = 30;
+    c.srsiAutoLev = 2;
+    c.srsiAutoMaxSame = 10;
+    c.srsiAutoUpper = 90;
+    c.srsiAutoLower = 10;
+    Object.assign(c, cfgPatch || {});
+    // 回测测试默认视为「已全部优选」（15m 硬闸门需 15m 优选才会成交）
+    ['5m', '10m', '15m', '30m', '1h', '4h'].forEach(tf => { c.srsiOptSource[tf] = 'optimized'; });
+    kchartApi.__setCfgForTest(c);
+    // 回测配置已解耦到独立 btCfg：把 cfg 中的回测相关字段映射到 btCfg（覆盖默认）
+    const patch = cfgPatch || {};
+    const bt = {
+      accountType: patch.srsiAutoBtMode === 'spot' ? 'spot' : 'perp',
+      principal: c.srsiAutoPrincipal,
+      marginMode: 'follow',
+      coin: patch.srsiAutoBtMode === 'spot' ? (patch.srsiAutoCoin || 10) : 0,
+      useCost: c.srsiAutoUseCost,
+      feePct: 0.045,
+      slipPct: 0.02,
+      pct: c.srsiAutoBasePct,
+      lev: c.srsiAutoLev,
+      maxSame: c.srsiAutoMaxSame,
+      upper: c.srsiAutoUpper,
+      lower: c.srsiAutoLower,
+      capUsdt: patch.srsiAutoOpenCapUsdt || 0,
+      capCoin: patch.srsiAutoOpenCapCoin || 0,
+      floorUsdt: 0,
+      floorCoin: 0,
+      optTfs: ['15m', '30m', '1h', '4h'],
+      optEnabled: false,
+      optIntervalOn: false,
+      optIntervalH: 5,
+      optNoTradeH: 5,
+      w4h: c.srsiAutoW4h,
+      w1h: c.srsiAutoW1h,
+      w30m: c.srsiAutoW30m,
+      collapsed: false
+    };
+    localStorage.setItem('smartTrader_kchart_bt_cfg', JSON.stringify(bt));
+    if (mode === 'spot') localStorage.setItem('pwa_sim_settings', JSON.stringify({ spotUsdt: 1000, coin: {} }));
+    kchartApi.__setBacktestFetch(buildFetch());
+    await kchartApi.runSrsiBacktest(days, { force: true });
+    const res = kchartApi.__getBtStore().results['BTCUSDT|' + days + (bt.accountType === 'spot' ? '|spot' : '')];
+    kchartApi.__setBacktestFetch(null);
+    localStorage.removeItem('smartTrader_kchart_bt_cfg');
+    return res;
+  };
+
+  // 1) 保证金严格记账：任意时刻 自由余额 + 锁仓保证金 ≤ 本金 + 已实现盈亏（不再允许超开）
+  {
+    const res = await runBt('perp', {});
+    ok('保证金记账: 无错误', res && !res.error, res && res.error);
+    const opens = res.trades.filter(t => t.action === 'open');
+    ok('保证金记账: 产生了开仓', opens.length > 0);
+    const live = []; let realized = 0, bad = null;
+    for (const t of res.trades) {
+      if (t.action === 'open') {
+        live.push({ side: t.side, amt: t.amt, entry: t.price });
+      } else if (t.action.indexOf('close') === 0 || t.action === 'liquidate') {
+        // 与回测平仓选择一致：带内平仓=同方向首个盈利单优先；期末强制平仓(close(final))=FIFO
+        let idx = -1;
+        if (t.action === 'close(final)') {
+          for (let j = 0; j < live.length; j++) if (live[j].side === t.side) { idx = j; break; }
+        } else {
+          for (let j = 0; j < live.length; j++) {
+            if (live[j].side !== t.side) continue;
+            const prof = live[j].side === 'long' ? t.price > live[j].entry : t.price < live[j].entry;
+            if (prof) { idx = j; break; }
+          }
+          if (idx < 0) for (let j = 0; j < live.length; j++) if (live[j].side === t.side) { idx = j; break; }
+        }
+        if (idx >= 0) live.splice(idx, 1);
+        realized += (t.pnl || 0);
+      }
+      const sumLocked = live.reduce((a, b) => a + b.amt, 0);
+      if (t.bal < -1e-6) { bad = { negative: t.bal }; break; }
+      const tol = Math.max(1e-3, (1000 + realized) * 1e-9);
+      if (t.bal + sumLocked > 1000 + realized + tol) { bad = { bal: t.bal, sumLocked, realized }; break; }
+    }
+    ok('保证金记账: 自由余额从未为负', bad === null || !bad.negative);
+    ok('保证金记账: 自由余额+锁仓≤本金+已实现(不超开)', bad === null, bad ? JSON.stringify(bad) : '');
+  }
+
+  // 2) U本位开仓上限：capUsdt=150 时所有开仓 ≤150U
+  {
+    const res = await runBt('perp', { srsiAutoOpenCapUsdt: 150 }, 90);
+    const opens = res.trades.filter(t => t.action === 'open');
+    ok('开仓上限U: 产生了开仓', opens.length > 0);
+    ok('开仓上限U: 所有开仓≤150U', opens.every(t => t.amt <= 150 + 1e-6));
+  }
+
+  // 3) 币本位开仓上限(perp 多头=coin 保证金)：capCoin=2 → 每笔 USDT 保证金≤2×price
+  {
+    const capCoin = 2;
+    const res = await runBt('perp', { srsiAutoOpenCapCoin: capCoin }, 90);
+    const opens = res.trades.filter(t => t.action === 'open');
+    ok('开仓上限币: 产生了开仓', opens.length > 0);
+    ok('开仓上限币: 每笔保证金≤capCoin×price', opens.every(t => t.amt <= capCoin * t.price + 1e-6));
+  }
+
+  // 4) 现货币本位开仓上限：capCoin=2 → 每笔 USDT 保证金≤2×price
+  {
+    const capCoin = 2;
+    const res = await runBt('spot', { srsiAutoBtMode: 'spot', srsiAutoOpenCapCoin: capCoin }, 90);
+    const opens = res.trades.filter(t => t.action === 'open');
+    ok('现货开仓上限币: 产生了开仓', opens.length > 0);
+    ok('现货开仓上限币: 每笔保证金≤capCoin×price', opens.every(t => t.amt <= capCoin * t.price + 1e-6));
+  }
+
+  kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+// 实盘自动交易：开仓上限生效（U本位）
+console.log('\n[kchart: 实盘自动交易 开仓上限]');
+{
+  const tfs = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  const cfgAuto = __defaultKConfig();
+  cfgAuto.symbol = 'BTCUSDT'; cfgAuto.srsiAutoOn = true;
+  cfgAuto.srsiAutoBasePct = 30;
+  cfgAuto.srsiAutoOpenCapUsdt = 150;
+  tfs.forEach(tf => cfgAuto.srsiOptSource[tf] = 'optimized');
+  kchartApi.__setCfgForTest(cfgAuto);
+  resetSrsiAuto('BTCUSDT');
+  const orders = [];
+  const mkEngine = (bal = 1000, coin = 0) => ({
+    S: { prices: { 'BTCUSDT': { last: 100 } }, pos: [] },
+    getPerpSub: () => ({ id: 'perp', bal, coins: { 'BTCUSDT': coin } }),
+    placeOrder: (o) => { orders.push(o); },
+    exitPosition: () => {}
+  });
+  const kd = { '1h': 'long', '30m': 'long', '15m': 'long' };
+  const sd = { '4h': 'short', '1h': 'short', '30m': 'short' };
+  const bandUp = { edge: 'enterUpper', band: 'upper', k: 95, d: 92 };
+  orders.length = 0;
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(1000, 0), klineDir: kd, srsiDir: sd, band: bandUp });
+  ok('实盘开仓上限U: 仅开1单', orders.length === 1);
+  ok('实盘开仓上限U: 开仓金额被限制为150U(上限生效)', orders.length === 1 && close(orders[0].amt, 150, 1e-6), 'amt=' + (orders[0] && orders[0].amt));
+  kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+console.log('\n[kchart: 回测条件文本 人类+机器可读]');
+{
+  const cfgT = __defaultKConfig();
+  cfgT.symbol = 'BTCUSDT';
+  cfgT.srsiAutoMode = 'follow';
+  cfgT.srsiAutoUpper = 90; cfgT.srsiAutoLower = 10;
+  cfgT.srsiAutoLev = 5; cfgT.srsiAutoMaxSame = 3;
+  cfgT.srsiAutoBasePct = 10; cfgT.srsiAutoBonusBig = 3; cfgT.srsiAutoBonusMid = 2; cfgT.srsiAutoBonusSmall = 1;
+  cfgT.srsiAutoPrincipal = 1000; cfgT.srsiAutoOptEnabled = true; cfgT.srsiOptSource = { '5m': 'optimized' };
+  kchartApi.__setCfgForTest(cfgT);
+  // 回测条件已解耦到独立 btCfg：单独设置 btCfg（覆盖默认）
+  const btT = {
+    accountType: 'perp', marginMode: 'follow', principal: 1000, coin: 0,
+    useCost: true, feePct: 0.045, slipPct: 0.02, pct: 10, lev: 5, maxSame: 3,
+    upper: 90, lower: 10, capUsdt: 0, capCoin: 0, floorUsdt: 0, floorCoin: 0,
+    optTfs: ['15m', '30m', '1h', '4h'], optEnabled: true, optIntervalOn: false, optIntervalH: 5, optNoTradeH: 5,
+    w4h: 30, w1h: 20, w30m: 10, collapsed: false
+  };
+  localStorage.setItem('smartTrader_kchart_bt_cfg', JSON.stringify(btT));
+  const c = buildBacktestConditions(7);
+  localStorage.removeItem('smartTrader_kchart_bt_cfg');
+  ok('条件文本含 币对', c.text.indexOf('币对：BTCUSDT') >= 0);
+  ok('条件文本含 交易闸门15m', c.text.indexOf('交易闸门15m') >= 0);
+  ok('条件文本含 #4 因子缩放说明', c.text.indexOf('仓位缩放（#4 乘法因子') >= 0 && c.text.indexOf('与自动面板「缩放(#4)」展示同口径') >= 0);
+  ok('条件文本含 SRSI 参数(固定)', c.text.indexOf('SRSI 参数（固定') >= 0);
+  ok('条件文本含 reoptInBacktest 说明', c.text.indexOf('reoptInBacktest: false') >= 0);
+  ok('json.symbol=币对', c.json.symbol === 'BTCUSDT');
+  ok('json.days=7', c.json.days === 7);
+  ok('json.gateTf=15m', c.json.gateTf === '15m');
+  ok('json.sizing.method=#4', c.json.sizing && c.json.sizing.method === '#4');
+  ok('json.sizing.baseTf=15m', c.json.sizing.baseTf === '15m');
+  ok('json.sizing.weights 三周期', c.json.sizing.weights && c.json.sizing.weights['4h'] > 0 && c.json.sizing.weights['1h'] > 0 && c.json.sizing.weights['30m'] > 0);
+  ok('json.reoptInBacktest=false', c.json.reoptInBacktest === false);
+  ok('json.btCfg.marginMode=follow', c.json.btCfg.marginMode === 'follow');
+  ok('json.btCfg.upper=90', c.json.btCfg.upper === 90);
+  ok('json.btCfg.lev=5', c.json.btCfg.lev === 5);
+  ok('json.btCfg.maxSame=3', c.json.btCfg.maxSame === 3);
+  ok('json.btCfg.optEnabled=true', c.json.btCfg.optEnabled === true);
+  ok('json.srsiTfParams 含 15m', !!c.json.srsiTfParams && !!c.json.srsiTfParams['15m'] && c.json.srsiTfParams['15m'].rsiPeriod > 0);
+  ok('json.srsiByTf 存在', !!c.json.srsiByTf && typeof c.json.srsiByTf === 'object');
+  ok('json.srsiOptSource 含 5m=optimized', c.json.srsiOptSource['5m'] === 'optimized');
+  const parsed = JSON.parse(c.text.split('--- 机器可读（复制给 AI 复现）---\n')[1]);
+  ok('机器可读段可 JSON.parse 且字段一致', parsed && parsed.symbol === 'BTCUSDT' && parsed.gateTf === '15m' && parsed.sizing.method === '#4');
+  kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+// resolveEntryBands：0（或 falsy）= 使用 15m 优选带；非 0 = 手动覆盖
+{
+  const base = __defaultKConfig();
+  const s15 = (base.srsiByTf && base.srsiByTf['15m']) || base.srsi;
+  const auto = resolveEntryBands(base);
+  ok('resolveEntryBands 默认0→回退15m优选带', auto.upper === s15.overbought && auto.lower === s15.oversold && auto.auto === true);
+  const ov = Object.assign({}, base, { srsiAutoUpper: 90, srsiAutoLower: 10 });
+  const r2 = resolveEntryBands(ov);
+  ok('resolveEntryBands 手动90/10→不回退', r2.upper === 90 && r2.lower === 10 && r2.auto === false);
+  const mix = Object.assign({}, base, { srsiAutoUpper: 85, srsiAutoLower: 0 });
+  const r3 = resolveEntryBands(mix);
+  ok('resolveEntryBands 混合(上85/下0)', r3.upper === 85 && r3.lower === s15.oversold && r3.auto === true);
+  const no15 = Object.assign({}, base, { srsiByTf: {}, srsi: { overbought: 80, oversold: 20 } });
+  const r4 = resolveEntryBands(no15);
+  ok('resolveEntryBands 无15m→80/20', r4.upper === 80 && r4.lower === 20 && r4.auto === true);
+  kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+// ============================================================
+//  危险信号防爆 / 防爆反手（emaOpp2 + backtestSrsiAuto danger 模式）
+// ============================================================
+console.log('\n[kchart: 危险信号防爆/反手]');
+
+// 纯函数 emaOpp2：≥2 周期(4h/1h/30m) EMA120 趋势与 side 相反 → 危险
+ok('emaOpp2 三反向→危险', emaOpp2('long', { '4h': 'short', '1h': 'short', '30m': 'short' }) === true);
+ok('emaOpp2 两反向→危险', emaOpp2('long', { '4h': 'short', '1h': 'short', '30m': 'long' }) === true);
+ok('emaOpp2 一反向→安全', emaOpp2('long', { '4h': 'short', '1h': 'long', '30m': 'long' }) === false);
+ok('emaOpp2 null不计入反向', emaOpp2('long', { '4h': null, '1h': 'short', '30m': 'long' }) === false);
+ok('emaOpp2 空映射→安全', emaOpp2('long', {}) === false);
+ok('emaOpp2 无 side→安全', emaOpp2(null, { '4h': 'short' }) === false);
+ok('emaOpp2 短反向不计数', emaOpp2('long', { '4h': 'long', '1h': 'long', '30m': 'short' }) === false);
+
+// 合成 K线：15m 2080 根（≈21天），4h/1h/30m 由 15m 按 16/4/2 抽取，保证各周期 EMA120 有足够样本
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const _rng = mulberry32(987654321);
+const _STEP = 15 * 60 * 1000, _baseT = 1600000000000, _n = 2080;
+let _price = 100; const _c15 = [], _t15 = [];
+for (let i = 0; i < _n; i++) { _price *= (1 + (_rng() - 0.5) * 0.012); _c15.push(_price); _t15.push(_baseT + i * _STEP); }
+const _k15 = _c15.map((c, i) => [_t15[i], c, c, c, c, 0]);
+const _k30 = _c15.filter((_, i) => i % 2 === 0).map((c, i) => [_baseT + i * 2 * _STEP, c, c, c, c, 0]);
+const _k1h = _c15.filter((_, i) => i % 4 === 0).map((c, i) => [_baseT + i * 4 * _STEP, c, c, c, c, 0]);
+const _k4h = _c15.filter((_, i) => i % 16 === 0).map((c, i) => [_baseT + i * 16 * _STEP, c, c, c, c, 0]);
+const _klines = { '15m': _k15, '30m': _k30, '1h': _k1h, '4h': _k4h };
+const _bp = { rsiPeriod: 14, kPeriod: 3, dPeriod: 3, overbought: 80, oversold: 20 };
+const _baseCfg = {
+  srsi: _bp, srsiByTf: { '15m': _bp, '4h': _bp, '1h': _bp, '30m': _bp },
+  srsiAutoBtMode: 'perp', srsiAutoLev: 5, srsiAutoMaxSame: 3, srsiAutoBasePct: 10,
+  srsiAutoOpenCapUsdt: 1e9, srsiAutoOpenFloorUsdt: 0, srsiAutoOpenCapCoin: 1e9, srsiAutoOpenFloorCoin: 0,
+  srsiAutoUseCost: false, srsiAutoMarginMode: 'usdt', srsiAutoFeeRate: 0, srsiAutoSlipBase: 0,
+  srsiOptSource: null, srsiBtOptTfs: ['15m', '30m', '1h', '4h']
+};
+function _runDanger(mode) {
+  const cfg = Object.assign({}, _baseCfg, { srsiAutoDanger: mode, srsiAutoReversePct: 0, srsiAutoReverseLev: 0 });
+  return backtestSrsiAuto('BTCUSDT', _klines, cfg, 10000, undefined, [], { mode: 'perp' });
+}
+const _rNone = _runDanger('none'), _rFilter = _runDanger('filter'), _rReverse = _runDanger('reverse');
+ok('none 返回 dangerMode', _rNone.dangerMode === 'none');
+ok('filter 返回 dangerMode', _rFilter.dangerMode === 'filter');
+ok('reverse 返回 dangerMode', _rReverse.dangerMode === 'reverse');
+ok('dangerHits 均为数字≥0', [ _rNone.dangerHits, _rFilter.dangerHits, _rReverse.dangerHits ].every(x => typeof x === 'number' && x >= 0));
+ok('三模式 dangerHits 一致(危险判定独立于模式)', _rNone.dangerHits === _rFilter.dangerHits && _rFilter.dangerHits === _rReverse.dangerHits);
+ok('none 不产生反手单', _rNone.reverseOpens === 0);
+ok('filter 不产生反手单(仅避开)', _rFilter.reverseOpens === 0);
+ok('reverse 反手单≤危险次数', _rReverse.reverseOpens <= _rReverse.dangerHits);
+if (_rReverse.reverseOpens > 0) {
+  const revTrades = _rReverse.trades.filter(t => t.action === 'open' && t.reverse);
+  ok('reverse 开仓 reverse 标记数=反手开单数', revTrades.length === _rReverse.reverseOpens);
+  ok('reverse 反手单与正常单反向(反向类别)', revTrades.every(t => t.reverse === true));
+} else {
+  console.log('  (本随机序列无危险信号触发，跳过反手计数断言)');
+}
+ok('三模式均无 NaN 净盈亏', [_rNone, _rFilter, _rReverse].every(r => isFinite(r.finalEquity) && isFinite(r.pnlPct)));
+// 防爆反手模式：回测报告字段透出（_renderBacktestResult 不崩）
+const _html = _renderBacktestResult(_rReverse);
+ok('回测结果渲染含危险/反手说明', typeof _html === 'string' && _html.indexOf('危险信号触发') >= 0);
+// 条件确认含防爆说明
+const _cond = buildBacktestConditions(_rReverse);
+ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信号防爆') >= 0 && !!_cond.json.btCfg.danger);
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);
