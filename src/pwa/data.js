@@ -184,6 +184,24 @@ export async function refreshKlines(sym) {
     S.indicators[sym][tf] = computeSeries(parsed.closes); // RSI/MACD 子图所需，与主系统一致
     ok++;
   });
+  // 主图原生周/月线（7d→1w, 30d→1M）：根数充足且对齐交易所；SRSI 速览仍用日线 klines['7d']/['30d']（各自 resample）。
+  // nativeMain(kchart.js) 优先读 klinesWeek/klinesMonth，缺失时回退 aggTFData（日线聚合）。
+  try {
+    const wk = await fetchApiData('/api/v3/klines?symbol=' + sym + '&interval=1w&limit=' + (THRESH.KLINE_LIMIT || 150));
+    if (Array.isArray(wk) && wk.length) {
+      if (!S.klinesWeek) S.klinesWeek = {};
+      const p = parseKlines('1w', wk);
+      S.klinesWeek[sym] = { o: p.opens, h: p.highs, l: p.lows, c: p.closes, v: p.vols, t: p.times };
+    }
+  } catch (e) {}
+  try {
+    const mo = await fetchApiData('/api/v3/klines?symbol=' + sym + '&interval=1M&limit=' + (THRESH.KLINE_LIMIT || 150));
+    if (Array.isArray(mo) && mo.length) {
+      if (!S.klinesMonth) S.klinesMonth = {};
+      const p = parseKlines('1M', mo);
+      S.klinesMonth[sym] = { o: p.opens, h: p.highs, l: p.lows, c: p.closes, v: p.vols, t: p.times };
+    }
+  } catch (e) {}
   if (ok === 0) {
     // 所有周期均失败：通常是数据源不可达（端点全部失败或被墙）。
     let reason = '未知错误';

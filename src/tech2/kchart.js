@@ -291,7 +291,7 @@ export function defaultKConfig() {
   };
 }
 
-let cfg = defaultKConfig();
+export let cfg = defaultKConfig();
 
 // ---- 内部状态 ----
 let _cv = null, _ctx = null;
@@ -402,7 +402,7 @@ function readSessionBackup() {
   try { const raw = sessionStorage.getItem(STATE_KEY + ':ss'); if (raw) return JSON.parse(raw); } catch (e) {}
   return null;
 }
-function loadCfg(symOverride) {
+export function loadCfg(symOverride) {
   _store = readStore();
   const sym = symOverride || cfg.symbol || _store.lastSymbol || 'BTCUSDT';
   const base = defaultKConfig();
@@ -422,7 +422,7 @@ function loadCfg(symOverride) {
   normalizeCfg(cfg);
   _store.lastSymbol = sym;
 }
-function persist() {
+export function persist() {
   if (!_store) _store = readStore();
   _store.bySymbol[cfg.symbol] = cfg;
   _store.lastSymbol = cfg.symbol;
@@ -2818,6 +2818,16 @@ export function aggTFData(sym, tf) {
   return { o: O, h: H, l: L, c: C, v: V, t: T };
 }
 
+// 主图专用：7d/30d 优先用原生周/月线（Binance 1w/1M 直拉，根数充足且对齐交易所），
+// 避免日线聚合导致根数过少（500 日线→仅 71 周 / 16 月）。SRSI 速览/纪律分析仍走 getTFData 原始日线（aggTFData），
+// 故此处与 aggTFData 分离：主图用原生，子图价格线/悬浮仍用 aggTFData 以保持与子图 SRSI 对齐。
+export function nativeMain(sym, tf) {
+  const S = globalThis.S || (typeof window !== 'undefined' ? window.S : undefined) || {};
+  if (tf === '7d' && S.klinesWeek && S.klinesWeek[sym]) return S.klinesWeek[sym];
+  if (tf === '30d' && S.klinesMonth && S.klinesMonth[sym]) return S.klinesMonth[sym];
+  return aggTFData(sym, tf);
+}
+
 
 // 全部 KLINE_TF 的收盘序列 map（方向基准/宏观带用，不受勾选影响）
 function allPriceMapOf(sym) {
@@ -2922,7 +2932,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
 }
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
-  const { o, h, l, c, t } = aggTFData(sym, tf);
+  const { o, h, l, c, t } = nativeMain(sym, tf);
   const bars = cfg.bars;
   const n = Math.min(bars, c.length);
   if (n < 2) return false;
@@ -3328,7 +3338,7 @@ function drawHover(ctx, subList, H) {
   const mainBottom = PAD_T + MAIN_H;
   const tf = cfg.mainTF;
   const sym = cfg.symbol;
-  const { o, h, l, c, v, t } = aggTFData(sym, tf);
+  const { o, h, l, c, v, t } = nativeMain(sym, tf);
   const bars = cfg.bars;
   const frac = (lx - PAD_L) / plotW;
   const i = idxFromFrac(frac, c.length, bars);
@@ -4110,7 +4120,7 @@ function panelFromLy(ly, subRegions, mainBottom) {
 
 // 主图 hover 柱信息 (纯数据)
 export function mainHoverAt(frac, sym, tf, bars) {
-  const { o, h, l, c, v, t } = aggTFData(sym, tf);
+  const { o, h, l, c, v, t } = nativeMain(sym, tf);
   const i = idxFromFrac(frac, c.length, bars);
   if (i < 0 || i >= c.length) return null;
   const prev = i > 0 ? c[i - 1] : null;
@@ -5510,15 +5520,15 @@ function _btCfgDefaults() {
     collapsed: true
   };
 }
-let _btCfg = _btCfgDefaults();
-function _btCfgLoad() {
+export let _btCfg = _btCfgDefaults();
+export function _btCfgLoad() {
   try {
     const raw = localStorage.getItem(_BT_CFG_KEY);
     if (raw) _btCfg = Object.assign(_btCfgDefaults(), JSON.parse(raw));
   } catch (e) {}
   return _btCfg;
 }
-function _btCfgSave() {
+export function _btCfgSave() {
   try { localStorage.setItem(_BT_CFG_KEY, JSON.stringify(_btCfg)); } catch (e) {}
 }
 // 将独立的 btCfg 合并进回测用的 config（实盘 srsiAuto* 字段全部被覆盖；srsiByTf/srsiOptSource 保持来自实盘 cfg）

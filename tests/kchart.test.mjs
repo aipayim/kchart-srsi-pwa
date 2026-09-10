@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData } from '../src/tech2/kchart.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -2717,12 +2717,58 @@ if (_rReverse.reverseOpens > 0) {
   ok('aggTFData 30d 聚合为 3 月', m2.c.length === 3);
   delete globalThis.S;
 }
+// ---- nativeMain：主图优先用原生周/月线（7d→1w, 30d→1M），缺失时回退 aggTFData ----
+{
+  const sym = '__native__';
+  // aggTFData 回退（无原生数组时，7d/30d 走日线聚合）
+  globalThis.S = { klines: { [sym]: { '7d': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14], '30d': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30] } },
+    klinesO: {}, klinesH: {}, klinesL: {}, klinesV: {}, klinesT: {} };
+  const fb7 = nativeMain(sym, '7d');
+  ok('nativeMain 无原生→回退 aggTFData(7d 聚合2周)', fb7.c.length === 2);
+  const fb1 = nativeMain(sym, '1d');
+  ok('nativeMain 非7d/30d→原样(aggTFData, 无原生数组)', Array.isArray(fb1.c) && fb1.c.length === 0);
+  // 原生周/月线优先
+  const wk = { o: [1], h: [2], l: [0], c: [1.5], v: [10], t: [100] };
+  const mo = { o: [3], h: [4], l: [2], c: [3.5], v: [20], t: [200] };
+  globalThis.S.klinesWeek = { [sym]: wk };
+  globalThis.S.klinesMonth = { [sym]: mo };
+  ok('nativeMain 7d→原生周线', nativeMain(sym, '7d') === wk);
+  ok('nativeMain 30d→原生月线', nativeMain(sym, '30d') === mo);
+  delete globalThis.S;
+}
 // 防爆反手模式：回测报告字段透出（_renderBacktestResult 不崩）
 const _html = _renderBacktestResult(_rReverse);
 ok('回测结果渲染含危险/反手说明', typeof _html === 'string' && _html.indexOf('危险信号触发') >= 0);
 // 条件确认含防爆说明
 const _cond = buildBacktestConditions(_rReverse);
 ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信号防爆') >= 0 && !!_cond.json.btCfg.danger);
+
+// ---- 防爆仓设置本地持久化闭环（实盘 cfg.srsiAutoDanger + 回测 _btCfg.danger）----
+{
+  const _store = {};
+  const _ls = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+    removeItem: k => { delete _store[k]; }
+  };
+  globalThis.localStorage = _ls;
+  // 实盘：改危险开关→persist→模拟刷新 loadCfg 还原
+  loadCfg('__persist__');
+  cfg.srsiAutoDanger = 'reverse';
+  cfg.srsiAutoReversePct = 25;
+  persist();
+  const raw = JSON.parse(_store['smartTrader_kchart']);
+  ok('实盘危险开关已写入 localStorage', raw.bySymbol.__persist__.srsiAutoDanger === 'reverse' && raw.bySymbol.__persist__.srsiAutoReversePct === 25);
+  loadCfg('__persist__');
+  ok('刷新后实盘危险开关保留', cfg.srsiAutoDanger === 'reverse' && cfg.srsiAutoReversePct === 25);
+  // 回测：改 danger→_btCfgSave→_btCfgLoad 还原
+  _btCfg.danger = 'reverse';
+  _btCfg.reversePct = 40;
+  _btCfgSave();
+  _btCfgLoad();
+  ok('刷新后回测危险开关保留', _btCfg.danger === 'reverse' && _btCfg.reversePct === 40);
+  delete globalThis.localStorage;
+}
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);
