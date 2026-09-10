@@ -8,8 +8,8 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands, kdTrendColor, emaOpp2 } from '../src/tech2/kchart.js';
-import { srsiKD } from '../src/engine/indicators.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData } from '../src/tech2/kchart.js';
+import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
 let passed = 0, failed = 0;
@@ -2670,6 +2670,53 @@ if (_rReverse.reverseOpens > 0) {
   console.log('  (本随机序列无危险信号触发，跳过反手计数断言)');
 }
 ok('三模式均无 NaN 净盈亏', [_rNone, _rFilter, _rReverse].every(r => isFinite(r.finalEquity) && isFinite(r.pnlPct)));
+ok('reverse 反手盈亏字段为有限数字', isFinite(_rReverse.reversePnl));
+if (_rReverse.reverseOpens > 0) {
+  // 反手盈亏 = 所有标记 reverse 的平仓/强平单净盈亏之和（含强平）
+  const revClosePnl = _rReverse.trades
+    .filter(t => t.reverse && typeof t.pnl === 'number')
+    .reduce((s, t) => s + (t.pnl || 0), 0);
+  ok('reverse 反手盈亏=反手平仓净盈亏之和', Math.abs(revClosePnl - _rReverse.reversePnl) < 1e-6);
+} else {
+  ok('reverse 无反手单时反手盈亏=0', _rReverse.reversePnl === 0);
+}
+// ---- aggTFData：7d/30d 主图聚合为真正周/月蜡烛（其余周期原样返回）----
+{
+  const sym = '__agg__';
+  const mkK = (n) => Array.from({ length: n }, (_, i) => [1000 + i, 1001 + i, 999 + i, 1000 + i, i + 1]);
+  // 21 根日线：OHLC 依次递增，验证分组 7 根→1 周
+  const daily = mkK(21);
+  globalThis.S = {
+    klines: { [sym]: { '1d': daily.map(k => k[3]), '7d': daily.map(k => k[3]), '30d': daily.map(k => k[3]) } },
+    klinesO: { [sym]: { '1d': daily.map(k => k[0]), '7d': daily.map(k => k[0]), '30d': daily.map(k => k[0]) } },
+    klinesH: { [sym]: { '1d': daily.map(k => k[1]), '7d': daily.map(k => k[1]), '30d': daily.map(k => k[1]) } },
+    klinesL: { [sym]: { '1d': daily.map(k => k[2]), '7d': daily.map(k => k[2]), '30d': daily.map(k => k[2]) } },
+    klinesV: { [sym]: { '1d': daily.map(k => k[4]), '7d': daily.map(k => k[4]), '30d': daily.map(k => k[4]) } },
+    klinesT: { [sym]: { '1d': daily.map((_, i) => i * 864e5), '7d': daily.map((_, i) => i * 864e5), '30d': daily.map((_, i) => i * 864e5) } }
+  };
+  const d1 = aggTFData(sym, '1d');
+  ok('aggTFData 1d 原样返回', d1.c.length === 21);
+  const w = aggTFData(sym, '7d');
+  ok('aggTFData 7d 聚合为 3 周', w.c.length === 3);
+  ok('aggTFData 7d 周收盘=第7根日线收盘', w.c[0] === 1006 && w.c[2] === 1020);
+  ok('aggTFData 7d 周开=组首开', w.o[0] === 1000);
+  ok('aggTFData 7d 周高=组内最大', w.h[0] === 1007);
+  ok('aggTFData 7d 周低=组内最小', w.l[0] === 999);
+  ok('aggTFData 7d 周量=组内求和', w.v[0] === (1 + 2 + 3 + 4 + 5 + 6 + 7));
+  ok('aggTFData 7d 周时间=组末时间戳', w.t[0] === 6 * 864e5);
+  const m = aggTFData(sym, '30d');
+  ok('aggTFData 30d 不足30根原样返回', m.c.length === 21);
+  const daily30 = mkK(90);
+  globalThis.S.klines[sym]['30d'] = daily30.map(k => k[3]);
+  globalThis.S.klinesO[sym]['30d'] = daily30.map(k => k[0]);
+  globalThis.S.klinesH[sym]['30d'] = daily30.map(k => k[1]);
+  globalThis.S.klinesL[sym]['30d'] = daily30.map(k => k[2]);
+  globalThis.S.klinesV[sym]['30d'] = daily30.map(k => k[4]);
+  globalThis.S.klinesT[sym]['30d'] = daily30.map((_, i) => i * 864e5);
+  const m2 = aggTFData(sym, '30d');
+  ok('aggTFData 30d 聚合为 3 月', m2.c.length === 3);
+  delete globalThis.S;
+}
 // 防爆反手模式：回测报告字段透出（_renderBacktestResult 不崩）
 const _html = _renderBacktestResult(_rReverse);
 ok('回测结果渲染含危险/反手说明', typeof _html === 'string' && _html.indexOf('危险信号触发') >= 0);

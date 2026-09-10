@@ -2792,6 +2792,33 @@ function getTFData(sym, tf) {
   return { o, h, l, c, v, t };
 }
 
+// 主图专用：7d/30d 在存储层是同一份日线数组（timeframe.js 注释说明日线分辨率才能做时长感知），
+// SRSI 速览/纪律分析各自 resample 成周/月。主图若直接画就是和 1d 相同的日线蜡烛。
+// 此函数仅在「主图显示」路径调用，把日线按 7/30 根聚合为真正的周/月蜡烛（OHLC+量+末根时间戳），
+// 不动 getTFData（SRSI 速览、纪律分析、方向判定仍用原始日线，避免双重聚合）。
+export function aggTFData(sym, tf) {
+  const base = getTFData(sym, tf);
+  if (tf !== '7d' && tf !== '30d') return base;
+  const step = tf === '7d' ? 7 : 30;
+  const n = base.c.length;
+  if (n < step) return base;
+  const { o, h, l, c, v, t } = base;
+  const O = [], H = [], L = [], C = [], V = [], T = [];
+  for (let i = 0; i < n; i += step) {
+    const e = Math.min(i + step, n);
+    O.push(o[i]);
+    let hi = -Infinity, lo = Infinity, vol = 0;
+    for (let j = i; j < e; j++) {
+      if (h[j] > hi) hi = h[j];
+      if (l[j] < lo) lo = l[j];
+      vol += (v[j] || 0);
+    }
+    H.push(hi); L.push(lo); C.push(c[e - 1]); V.push(vol); T.push(t[e - 1]);
+  }
+  return { o: O, h: H, l: L, c: C, v: V, t: T };
+}
+
+
 // 全部 KLINE_TF 的收盘序列 map（方向基准/宏观带用，不受勾选影响）
 function allPriceMapOf(sym) {
   const m = {};
@@ -2895,7 +2922,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
 }
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
-  const { o, h, l, c, t } = getTFData(sym, tf);
+  const { o, h, l, c, t } = aggTFData(sym, tf);
   const bars = cfg.bars;
   const n = Math.min(bars, c.length);
   if (n < 2) return false;
@@ -3088,7 +3115,7 @@ function drawSub(ctx, sub, sym, y0) {
   ctx.strokeRect(PAD_L, y0, plotW, SUB_H);
 
   const S = window.S;
-  const price = getTFData(sym, sub.tf || cfg.mainTF).c;
+  const price = aggTFData(sym, sub.tf || cfg.mainTF).c;
 
   if (sub.key === 'rsi') {
     const s = subTf(sym, sub.tf || cfg.mainTF);
@@ -3301,7 +3328,7 @@ function drawHover(ctx, subList, H) {
   const mainBottom = PAD_T + MAIN_H;
   const tf = cfg.mainTF;
   const sym = cfg.symbol;
-  const { o, h, l, c, v, t } = getTFData(sym, tf);
+  const { o, h, l, c, v, t } = aggTFData(sym, tf);
   const bars = cfg.bars;
   const frac = (lx - PAD_L) / plotW;
   const i = idxFromFrac(frac, c.length, bars);
@@ -4083,7 +4110,7 @@ function panelFromLy(ly, subRegions, mainBottom) {
 
 // 主图 hover 柱信息 (纯数据)
 export function mainHoverAt(frac, sym, tf, bars) {
-  const { o, h, l, c, v, t } = getTFData(sym, tf);
+  const { o, h, l, c, v, t } = aggTFData(sym, tf);
   const i = idxFromFrac(frac, c.length, bars);
   if (i < 0 || i >= c.length) return null;
   const prev = i > 0 ? c[i - 1] : null;
@@ -4095,7 +4122,7 @@ export function mainHoverAt(frac, sym, tf, bars) {
 
 // 某个子图在 frac 处的读数 (纯数据)
 export function subHoverAt(frac, sym, tf, key, bars) {
-  const lenBase = getTFData(sym, tf).c.length;
+  const lenBase = aggTFData(sym, tf).c.length;
   const i = idxFromFrac(frac, lenBase, bars);
   const s = subTf(sym, tf);
   const series = s && s.series;
@@ -4112,7 +4139,7 @@ export function subHoverAt(frac, sym, tf, key, bars) {
     };
   }
   if (key === 'srsi') {
-    const price = getTFData(sym, tf).c;
+    const price = aggTFData(sym, tf).c;
     const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars);
     // srsiPanelSeries 把数组切到最后 bars 根(局部索引 0..n-1)，需把绝对索引 i 换算成局部索引
     const off = Math.max(0, price.length - Math.min(bars, price.length));
@@ -5200,7 +5227,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   let peak = startVal, maxDD = 0;
   let totalFee = 0, totalSlip = 0, totalFunding = 0;
   let liqCount = 0, liqLoss = 0;
-  let dangerHits = 0, reverseOpens = 0; // 危险信号触发次数 / 防爆反手开单次数
+  let dangerHits = 0, reverseOpens = 0, reversePnl = 0; // 危险信号触发次数 / 防爆反手开单次数 / 反手单累计盈亏
   const grossPnl = (side, entry, exit, amtUsdt) => (side === 'long' ? (exit - entry) : (entry - exit)) / entry * effLev * amtUsdt;
   for (let i = lo; i < c15.length; i++) {
     const price = c15[i];
@@ -5234,7 +5261,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
         else { coinAvail += marginCoin + (gp - closeFee) / p.liqPrice; }
         totalFee += closeFee;
         liqCount++; liqLoss += pnl;
-         trades.push({ t: t15[i], side: p.side, action: 'liquidate', price: p.liqPrice, gross: gp, fee: (p.openFee || 0) + closeFee, slip: (p.openSlip || 0), funding: p.fundingAcc, pnl, bal: (p.marginMode === 'usdt' ? avail : coinAvail * p.liqPrice), k, d, liq: true, liqPrice: p.liqPrice, amt: p.amtUsdt, lev: p.lev, marginMode: p.marginMode });
+        if (p.reverse) reversePnl += pnl;
+         trades.push({ t: t15[i], side: p.side, action: 'liquidate', price: p.liqPrice, gross: gp, fee: (p.openFee || 0) + closeFee, slip: (p.openSlip || 0), funding: p.fundingAcc, pnl, bal: (p.marginMode === 'usdt' ? avail : coinAvail * p.liqPrice), k, d, liq: true, liqPrice: p.liqPrice, amt: p.amtUsdt, lev: p.lev, marginMode: p.marginMode, reverse: p.reverse });
         positions = positions.filter(x => x !== p);
       }
     }
@@ -5285,7 +5313,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
         if (p.side === 'long') { uBal += p.qty * exitPrice; uBal -= closeFee; coinBal -= p.qty; }
         else { uBal -= p.qty * exitPrice; uBal -= closeFee; coinBal += p.qty; }
         totalFee += closeFee; totalSlip += exitSlipCost;
-        trades.push({ t: t15[i], side: p.side, action: 'close', price: exitPrice, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: uBal, k, d, marginMode: p.marginMode });
+        if (p.reverse) reversePnl += net;
+        trades.push({ t: t15[i], side: p.side, action: 'close', price: exitPrice, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: uBal, k, d, marginMode: p.marginMode, reverse: p.reverse });
         return true;
       }
       if (net <= 0) return false; // 亏损不平仓：净亏则丢弃仓位、不记账（开仓费已在开仓时扣，作为已实现成本保留）
@@ -5293,7 +5322,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       if (p.marginMode === 'usdt') { avail += p.amtUsdt + gp; avail -= closeFee; }
       else { coinAvail += marginCoin + (gp - closeFee) / exitPrice; }
       totalFee += closeFee; totalSlip += exitSlipCost;
-      trades.push({ t: t15[i], side: p.side, action: 'close', price: exitPrice, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: (p.marginMode === 'usdt' ? avail : coinAvail * exitPrice), k, d, marginMode: p.marginMode });
+      if (p.reverse) reversePnl += net;
+      trades.push({ t: t15[i], side: p.side, action: 'close', price: exitPrice, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: (p.marginMode === 'usdt' ? avail : coinAvail * exitPrice), k, d, marginMode: p.marginMode, reverse: p.reverse });
       return true;
     };
     const _netClose = (p, exit) => grossPnl(p.side, p.entry, exit, p.amtUsdt) - (p.openFee || 0) - p.amtUsdt * effLev * feeRate - p.amtUsdt * effLev * slipAt(i) + p.fundingAcc;
@@ -5394,13 +5424,15 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       if (p.side === 'long') { uBal += p.qty * exit; uBal -= closeFee; coinBal -= p.qty; }
       else { uBal -= p.qty * exit; uBal -= closeFee; coinBal += p.qty; }
       totalFee += closeFee; totalSlip += exitSlipCost;
-      trades.push({ t: t15[t15.length - 1], side: p.side, action: 'close(final)', price: exit, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: uBal, k: lk, d: ld, marginMode: p.marginMode });
+      if (p.reverse) reversePnl += net;
+      trades.push({ t: t15[t15.length - 1], side: p.side, action: 'close(final)', price: exit, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: uBal, k: lk, d: ld, marginMode: p.marginMode, reverse: p.reverse });
     } else {
       const marginCoin = p.amtUsdt / p.entry;
       if (p.marginMode === 'usdt') { avail += p.amtUsdt + gp; avail -= closeFee; }
       else { coinAvail += marginCoin + (gp - closeFee) / exit; }
       totalFee += closeFee; totalSlip += exitSlipCost;
-      trades.push({ t: t15[t15.length - 1], side: p.side, action: 'close(final)', price: exit, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: (p.marginMode === 'usdt' ? avail : coinAvail * exit), k: lk, d: ld, marginMode: p.marginMode });
+      if (p.reverse) reversePnl += net;
+      trades.push({ t: t15[t15.length - 1], side: p.side, action: 'close(final)', price: exit, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: (p.marginMode === 'usdt' ? avail : coinAvail * exit), k: lk, d: ld, marginMode: p.marginMode, reverse: p.reverse });
     }
     _endOpen.push({ side: p.side, entry: p.entry, exit, lev: p.lev || effLev, marginMode: p.marginMode, amtUsdt: p.amtUsdt, net, pnlPct });
     positions = positions.filter(x => x !== p);
@@ -5421,7 +5453,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
     equitySeries, totalFee, totalSlip, totalFunding,
     maxOpenLong, maxOpenShort,
     liqCount, liqLoss,
-    dangerHits, reverseOpens, dangerMode: config.srsiAutoDanger || 'none'
+    dangerHits, reverseOpens, reversePnl, dangerMode: config.srsiAutoDanger || 'none'
   };
 }
 
@@ -5637,7 +5669,7 @@ export function _renderBacktestResult(res, days) {
     <div class="kt-auto-row">胜率 ${(res.winRate * 100).toFixed(0)}% (${res.wins}胜/${res.losses}负) ｜ 开多${res.longs}/开空${res.shorts} ｜ 最大回撤 ${(res.maxDD * 100).toFixed(1)}% ｜ 共 ${res.trades.length} 笔 <button id="ktBtExport" class="kt-export-btn">⬇ 导出</button></div>
     <div class="kt-auto-row kt-bt-cost">成本：手续费 <b>${_btMoney(totFee)}</b> ｜ 滑点 <b>${_btMoney(totSlip)}</b> ｜ ${fundTxt} ｜ 净收益 <b class="${cls}">${_btMoney(res.finalEquity - res.principal, true)}</b></div>
     ${(res.liqCount || 0) > 0 ? `<div class="kt-auto-row kt-bt-liq">⚠ 强平 <b>${res.liqCount}</b> 次（价格击穿强平价，保证金基本归零）｜ 爆仓净损失 <b>${_btMoney(res.liqLoss, true)}</b>${res.liqCount ? '（已并入净收益）' : ''}</div>` : ''}
-    ${(res.dangerHits || 0) > 0 ? `<div class="kt-auto-row kt-bt-danger">🚨 危险信号触发 <b>${res.dangerHits}</b> 次｜防爆反手开单 <b>${res.reverseOpens || 0}</b> 笔（防爆模式：${(res.dangerMode === 'reverse' ? '防爆反手' : res.dangerMode === 'filter' ? '预防爆仓' : '关')}）</div>` : ''}
+    ${(res.dangerHits || 0) > 0 ? `<div class="kt-auto-row kt-bt-danger">🚨 危险信号触发 <b>${res.dangerHits}</b> 次｜防爆反手开单 <b>${res.reverseOpens || 0}</b> 笔（防爆模式：${(res.dangerMode === 'reverse' ? '防爆反手' : res.dangerMode === 'filter' ? '预防爆仓' : '关')}）｜反手盈亏 <b class="${(res.reversePnl || 0) >= 0 ? 'kt-pos' : 'kt-neg'}">${_btMoney(res.reversePnl || 0, true)}</b></div>` : ''}
     <div class="kt-bt-scroll"><table class="kt-bt-table">
       <thead><tr><th>时间</th><th>动作</th><th>价格</th><th>金额</th><th>手续费</th><th>滑点</th><th>资金费</th><th>净盈亏</th><th>余额</th><th>K</th><th>D</th><th>模式</th></tr></thead>
       <tbody>${rows}</tbody>
