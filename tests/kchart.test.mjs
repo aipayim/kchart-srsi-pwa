@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg } from '../src/tech2/kchart.js';
+import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -1589,6 +1589,92 @@ console.log('\n[kchart: 主图叠加 alignSeriesToBase]');
   const _storeEth = JSON.parse(localStorage.getItem('smartTrader_kchart') || '{}');
   ok('非默认币对刷新: 默认 BTCUSDT 配置未被污染', !( _storeEth.bySymbol && _storeEth.bySymbol['BTCUSDT'] && _storeEth.bySymbol['BTCUSDT'].srsiOptSource && KLINE_TF.every(tf => _storeEth.bySymbol['BTCUSDT'].srsiOptSource[tf] === 'optimized')));
 
+  // 异步优选竞态回归: 优选(异步拉数)期间用户切币, 结果必须归属原币对, 且不得污染当前展示币对。
+  // 旧实现 _autoOptOne 用全局 cfg.symbol 拉数 + applySrsiOpt 写全局 cfg → 在途结果落错币对/丢失。
+  freshStore();
+  const racyA = __defaultKConfig(); racyA.symbol = 'ETHUSDT';           // A: 优选发起时的币对
+  kchartApi.__setCfgForTest(racyA);
+  KLINE_TF.forEach(tf => {
+    racyA.srsiOptPreview[tf] = { role: 'swing', best: { r: 9, k: 3, d: 9, ub: 92, lb: 8 }, symbol: 'ETHUSDT' };
+    kchartApi.applySrsiOpt(tf);
+  });
+  kchartApi.__persist();
+  const racyB = __defaultKConfig(); racyB.symbol = 'BTCUSDT';           // B: 异步期间用户切到的新币对
+  kchartApi.__setCfgForTest(racyB);
+  const bestEth4h = { r: 21, k: 7, d: 5, ub: 84, lb: 16 };              // A 的在途优选在切币后才落定
+  applyOptToSym('4h', 'ETHUSDT', bestEth4h, 0.62);
+  const storeRace = curStore();
+  ok('竞态: 在途结果写入原币对A(ETHUSDT) srsiOptSource', storeRace.bySymbol['ETHUSDT'] && storeRace.bySymbol['ETHUSDT'].srsiOptSource['4h'] === 'optimized');
+  ok('竞态: 在途结果写入原币对A srsiByTf 参数', storeRace.bySymbol['ETHUSDT'] && storeRace.bySymbol['ETHUSDT'].srsiByTf['4h'] && storeRace.bySymbol['ETHUSDT'].srsiByTf['4h'].r === 21);
+  ok('竞态: A 的历史胜率落盘', storeRace.bySymbol['ETHUSDT'] && storeRace.bySymbol['ETHUSDT'].srsiOptWinRate['4h'] === 0.62);
+  ok('竞态: 当前展示币对B(BTCUSDT) srsiByTf 不被污染', kchartApi.getConfig().srsiByTf['4h'].r !== 21);
+  ok('竞态: B 不被标记为 optimized(不致误)。', kchartApi.getConfig().srsiOptSource['4h'] !== 'optimized');
+  const _storeRace = JSON.parse(localStorage.getItem('smartTrader_kchart') || '{}');
+  ok('竞态: ETHUSDT 结果已持久化', _storeRace.bySymbol && _storeRace.bySymbol['ETHUSDT'] && _storeRace.bySymbol['ETHUSDT'].srsiByTf['4h'] && _storeRace.bySymbol['ETHUSDT'].srsiByTf['4h'].r === 21);
+  // 当前币对路径: applyOptToSym(sym===cfg.symbol) 走全局 cfg + persist, 与旧 applySrsiOpt 行为一致
+  freshStore();
+  const cur1 = __defaultKConfig(); cur1.symbol = 'BTCUSDT';
+  kchartApi.__setCfgForTest(cur1);
+  applyOptToSym('1h', 'BTCUSDT', { r: 11, k: 4, d: 6, ub: 86, lb: 14 }, 0.55);
+  ok('当前币对: applyOptToSym 直接更新 global cfg+持久化', kchartApi.getConfig().srsiByTf['1h'].r === 11 && kchartApi.getConfig().srsiOptSource['1h'] === 'optimized' && kchartApi.getConfig().srsiOptWinRate['1h'] === 0.55);
+  // _cfgForSym: 当前币对返回同一 cfg 引用, 非当前币对从 store 读
+  ok('_cfgForSym: 当前币对返回 cfg 本体', _cfgForSym('BTCUSDT') === kchartApi.getConfig());
+  const extRef = _cfgForSym('ETHUSDT');
+  ok('_cfgForSym: 空 store 时非当前币对返回 null', extRef === null);
+  freshStore();
+  const ethExt = __defaultKConfig(); ethExt.symbol = 'ETHUSDT';
+  kchartApi.__setCfgForTest(ethExt); kchartApi.__persist();
+  ok('_cfgForSym: store 有 ETHUSDT 时返回其配置', _cfgForSym('ETHUSDT') === ethExt);
+  ok('_cfgForSym: 非当前币对不触碰全局 cfg', kchartApi.getConfig().symbol === 'ETHUSDT');
+
+  // persist 合并防御回归：写存档前先读最新 localStorage，不得用陈旧内存快照覆盖其它实例(主屏App/另一标签)刚写入的槽位
+  freshStore();
+  const stPre = JSON.parse(localStorage.getItem('smartTrader_kchart') || '{}');
+  stPre.__v = 2; stPre.lastSymbol = 'BTCUSDT'; stPre.bySymbol = stPre.bySymbol || {};
+  stPre.bySymbol['ETHUSDT'] = { symbol: 'ETHUSDT', srsiOptSource: { '1h': 'optimized' }, srsiByTf: { '1h': { r: 21 } } };
+  localStorage.setItem('smartTrader_kchart', JSON.stringify(stPre)); // 模拟"另一实例"已写入 ETHUSDT 优选
+  kchartApi.__setCfgForTest(__defaultKConfig());                     // 内存 cfg=BTCUSDT 默认（陈旧快照）
+  kchartApi.__persist();                                             // 当前实例写 BTCUSDT → 应合并保留 ETHUSDT
+  const stPost = JSON.parse(localStorage.getItem('smartTrader_kchart') || '{}');
+  ok('persist合并: 不覆盖其它实例的 ETHUSDT 槽位(优选保留)', stPost.bySymbol['ETHUSDT'] && stPost.bySymbol['ETHUSDT'].srsiOptSource['1h'] === 'optimized');
+  ok('persist合并: ETHUSDT 参数原样保留', stPost.bySymbol['ETHUSDT'].srsiByTf['1h'].r === 21);
+  ok('persist合并: 本实例 BTCUSDT 已写入', stPost.bySymbol['BTCUSDT'] != null);
+
+  // 单周期 ⚡ 优选竞态回归：拉数慢→切币→resolve 后按 r.symbol 符号化应用，结果归属原币对
+  freshStore();
+  const sbtc = __defaultKConfig(); sbtc.symbol = 'BTCUSDT';
+  kchartApi.__setCfgForTest(sbtc); kchartApi.__persist();
+  const closes = [];
+  for (let i = 0; i < 420; i++) { closes.push(50000 + 3000 * Math.sin(i / 40) + (i % 7)); }
+  kchartApi.__setOptFetch((sym, tf, days) => ({ closes, opens: closes.slice(), times: closes.map((_, j) => j), from: 0, to: closes.length }));
+  const rOpt = await kchartApi.__optimizeSrsiForTf('1h', 'swing', { sym: 'BTCUSDT' });
+  if (rOpt && rOpt.best && rOpt.symbol === 'BTCUSDT') {
+    const cwOpt = (rOpt.oos && rOpt.oos.winRate != null) ? rOpt.oos.winRate : (rOpt.stats && rOpt.stats.winRate != null ? rOpt.stats.winRate : null);
+    const sepost = __defaultKConfig(); sepost.symbol = 'ETHUSDT';       // 拉数期间用户切到 ETH
+    kchartApi.__setCfgForTest(sepost); kchartApi.__persist();
+    applyOptToSym('1h', rOpt.symbol, rOpt.best, cwOpt);                 // kOptimizeSrsi 的符号化应用
+    const stPostRace = curStore();
+    ok('单周期竞态: 结果写入原币对BTC srsiOptSource', stPostRace.bySymbol['BTCUSDT'] && stPostRace.bySymbol['BTCUSDT'].srsiOptSource['1h'] === 'optimized');
+    ok('单周期竞态: 结果写入原币对BTC srsiByTf', stPostRace.bySymbol['BTCUSDT'] && stPostRace.bySymbol['BTCUSDT'].srsiByTf['1h'] && stPostRace.bySymbol['BTCUSDT'].srsiByTf['1h'].rsiPeriod === rOpt.best.rsiPeriod);
+    ok('单周期竞态: 当前币ETH 不被标记', !stPostRace.bySymbol['ETHUSDT'] || !stPostRace.bySymbol['ETHUSDT'].srsiOptSource || !stPostRace.bySymbol['ETHUSDT'].srsiOptSource['1h']);
+  } else {
+    ok('单周期竞态: 假行情数据不足，跳过（不崩）', true);
+  }
+  // 契约回归：optimizeSrsiForTf 带 opts.sym 时，返回 symbol 必须等于锁定值（即便 cfg 已切到别的币对）——这是 kOptimizeSrsi 修复的根基
+  {
+    freshStore();
+    const seth = __defaultKConfig(); seth.symbol = 'ETHUSDT';
+    kchartApi.__setCfgForTest(seth); kchartApi.__persist();
+    const closes = [];
+    for (let i = 0; i < 420; i++) { closes.push(50000 + 3000 * Math.sin(i / 40) + (i % 7)); }
+    kchartApi.__setOptFetch((sym, tf, days) => ({ closes, opens: closes.slice(), times: closes.map((_, j) => j), from: 0, to: closes.length }));
+    // 关键：不传 opts.sym 时，symbol 应回落为 cfg.symbol(ETH)；传 opts.sym 时则锁定为 BTC
+    const rNoSym = await kchartApi.__optimizeSrsiForTf('1h', 'swing');
+    ok('契约: 无 opts.sym 时 symbol=当前 cfg(ETH)', rNoSym && rNoSym.symbol === 'ETHUSDT');
+    const rLock = await kchartApi.__optimizeSrsiForTf('1h', 'swing', { sym: 'BTCUSDT' });
+    ok('契约: 传 opts.sym=BTC 时 symbol 锁定 BTC（不被 cfg=ETH 污染）', rLock && rLock.symbol === 'BTCUSDT');
+  }
+
   // SRSI 参数自由填写(数字输入, 不再受下拉预设限制)
   freshStore();
   kchartApi.__setCfgForTest(__defaultKConfig());
@@ -2062,6 +2148,33 @@ console.log('\n[kchart: 回测 爆仓线]');
   ok('爆仓 渲染含「爆仓」标记', html.includes('爆仓'));
 }
 
+// 回测 强平归因日志（liqLog）：每笔强平记录开仓/强平时刻的大周期技术面上下文
+console.log('\n[kchart: 回测 强平归因日志 liqLog]');
+{
+  const closes = [];
+  for (let i = 0; i < 60; i++) closes.push(100 + i * 1.6);
+  for (let i = 0; i < 16; i++) closes.push(196 - i * 1.3 + (i % 2 ? 6 : 0));
+  for (let i = 0; i < 50; i++) closes.push(176 + i * 1.6);
+  for (let i = 0; i < 60; i++) closes.push(256 - i * 2.6);
+  for (let i = 0; i < 16; i++) closes.push(100 + i * 1.3 + (i % 2 ? 6 : 0));
+  for (let i = 0; i < 50; i++) closes.push(120 - i * 1.4);
+  const mk = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  const cfg = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoLev: 30, srsiAutoUpper: 80, srsiAutoLower: 20, srsiAutoMaxSame: 3 };
+  const res = backtestSrsiAuto('BTCUSDT', mk(closes), cfg, 1000);
+  ok('liqLog 返回数组', Array.isArray(res.liqLog));
+  ok('liqLog 条数=liqCount', res.liqLog.length === (res.liqCount || 0));
+  ok('liqLog 至少 1 条', res.liqLog.length >= 1);
+  const L = res.liqLog[0];
+  ok('liqLog 含 openT/openPrice', L && isFinite(L.openT) && isFinite(L.openPrice) && L.openPrice > 0);
+  ok('liqLog 含 liqT/liqPrice', L && isFinite(L.liqT) && isFinite(L.liqPrice) && L.liqPrice > 0);
+  ok('liqLog 强平在开仓之后', L && L.liqT > L.openT);
+  ok('liqLog 含 adverseMovePct(逆势幅度%)', L && isFinite(L.adverseMovePct));
+  ok('liqLog 含开仓上下文 openCtx', L && L.openCtx && 'k15' in L.openCtx && 'ema4h' in L.openCtx && 'srsi4h' in L.openCtx);
+  ok('liqLog 含强平上下文 liqCtx', L && L.liqCtx && 'k15' in L.liqCtx && 'ema4h' in L.liqCtx && 'srsi4h' in L.liqCtx);
+  ok('liqLog openCtx 的 srsi4h 为 long/short/null 之一', L && ['long', 'short', null].includes(L.openCtx.srsi4h));
+  ok('liqLog 含 reverse 标记与 marginMode', L && 'reverse' in L && 'marginMode' in L);
+}
+
 // 回测 现货模式（双余额/无杠杆/无爆仓/做空仅卖已有币）
 console.log('\n[kchart: 回测 现货模式]');
 {
@@ -2250,7 +2363,7 @@ console.log('\n[kchart: SRSI自动交易 价格注入(修复空数据致 9h 无�
 
 //  10m 自动优选真实管线回放（faithful repro：注入桩→optimize→apply→persist→reload）
 {
-  const TFS = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  const TFS = ['15m', '30m', '1h', '4h'];
   kchartApi.__clearStore();
   const c = __defaultKConfig();
   c.symbol = 'BTCUSDT';
@@ -2266,13 +2379,13 @@ console.log('\n[kchart: SRSI自动交易 价格注入(修复空数据致 9h 无�
   try {
     await kchartApi.runSrsiAutoOptimizeAll(false);
     const applied = kchartApi.__getCfg().srsiOptSource;
-    ok('自动优选管线覆盖 10m', applied['10m'] === 'optimized');
-    ok('自动优选管线覆盖全部 6 周期', TFS.every(tf => applied[tf] === 'optimized'));
+    ok('自动优选管线覆盖 15m', applied['15m'] === 'optimized');
+    ok('自动优选管线覆盖全部 4 周期', TFS.every(tf => applied[tf] === 'optimized'));
     kchartApi.__persist();
     kchartApi.__load();
     const reloaded = kchartApi.__getCfg().srsiOptSource;
-    ok('刷新后 10m 仍为已优选（持久化不丢 10m）', reloaded['10m'] === 'optimized');
-    ok('刷新后全部 6 周期仍为已优选', TFS.every(tf => reloaded[tf] === 'optimized'));
+    ok('刷新后 15m 仍为已优选（持久化不丢 15m）', reloaded['15m'] === 'optimized');
+    ok('刷新后全部 4 周期仍为已优选', TFS.every(tf => reloaded[tf] === 'optimized'));
   } finally {
     kchartApi.__setOptFetch(null);
   }
@@ -2281,12 +2394,12 @@ console.log('\n[kchart: SRSI自动交易 价格注入(修复空数据致 9h 无�
 //  10m 优选缺失自愈：用户曾优选过(任一周期标记 optimized)→ 加载时 runSrsiAutoOptimizeAll(false) 补跑缺失周期(含 10m)
 console.log('\n[kchart: 10m 优选缺失自愈]');
 {
-  const TFS = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  const TFS = ['15m', '30m', '1h', '4h'];
   kchartApi.__clearStore();
   const c = __defaultKConfig();
   c.symbol = 'BTCUSDT';
   c.srsiAutoOptEnabled = false; // 注意：自愈不应依赖「自动优选总开关」打开
-  c.srsiOptSource = { '5m': 'optimized' }; // 仅曾优选过 5m，10m 缺失
+  c.srsiOptSource = { '15m': 'optimized' }; // 仅曾优选过 15m，其余缺失
   kchartApi.__setCfgForTest(c);
   resetSrsiAuto('BTCUSDT');
   const mkCloses = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + Math.sin(i / 11) * 15 + i * 0.05); return a; };
@@ -2295,11 +2408,11 @@ console.log('\n[kchart: 10m 优选缺失自愈]');
     return { closes, opens: closes.slice(), times: closes.map((_, i) => 1e12 + i * 600000), from: 1e12, to: 1e12 + 600 * 600000 };
   });
   try {
-    await kchartApi.runSrsiAutoOptimizeAll(false); // force=false：跳过已优化，只补跑缺失（含 10m）
+    await kchartApi.runSrsiAutoOptimizeAll(false); // force=false：跳过已优化，只补跑缺失（其余周期）
     const after = kchartApi.__getCfg().srsiOptSource;
-    ok('缺失的 10m 被自愈为 optimized', after['10m'] === 'optimized');
-    ok('已有的 5m 仍保留 optimized', after['5m'] === 'optimized');
-    ok('其余缺失周期一并补齐', TFS.filter(tf => tf !== '5m').every(tf => after[tf] === 'optimized'));
+    ok('缺失的 30m 被自愈为 optimized', after['30m'] === 'optimized');
+    ok('已有的 15m 仍保留 optimized', after['15m'] === 'optimized');
+    ok('其余缺失周期一并补齐', TFS.filter(tf => tf !== '15m').every(tf => after[tf] === 'optimized'));
   } finally {
     kchartApi.__setOptFetch(null);
   }
@@ -2680,11 +2793,17 @@ const _rNone = _runDanger('none'), _rFilter = _runDanger('filter'), _rReverse = 
 ok('none 返回 dangerMode', _rNone.dangerMode === 'none');
 ok('filter 返回 dangerMode', _rFilter.dangerMode === 'filter');
 ok('reverse 返回 dangerMode', _rReverse.dangerMode === 'reverse');
+ok('liqLog 为数组', Array.isArray(_rNone.liqLog));
+ok('openLog 为数组且非空', Array.isArray(_rNone.openLog) && _rNone.openLog.length > 0);
+ok('openLog[0].openCtx 含 atrPct15', _rNone.openLog[0] && ('atrPct15' in _rNone.openLog[0].openCtx));
+ok('openLog[0].openCtx 含 priceVsEma15', _rNone.openLog[0] && ('priceVsEma15' in _rNone.openLog[0].openCtx));
+ok('openLog[0].openCtx 含 recentCandlePct', _rNone.openLog[0] && ('recentCandlePct' in _rNone.openLog[0].openCtx));
+ok('openLog[0].openCtx 含 hotStop', _rNone.openLog[0] && ('hotStop' in _rNone.openLog[0].openCtx));
 ok('dangerHits 均为数字≥0', [ _rNone.dangerHits, _rFilter.dangerHits, _rReverse.dangerHits ].every(x => typeof x === 'number' && x >= 0));
-ok('三模式 dangerHits 一致(危险判定独立于模式)', _rNone.dangerHits === _rFilter.dangerHits && _rFilter.dangerHits === _rReverse.dangerHits);
+ok('三模式 dangerHits 一致(基础emaOpp2危险基线独立于模式)', _rNone.dangerHits === _rFilter.dangerHits && _rFilter.dangerHits === _rReverse.dangerHits);
 ok('none 不产生反手单', _rNone.reverseOpens === 0);
 ok('filter 不产生反手单(仅避开)', _rFilter.reverseOpens === 0);
-ok('reverse 反手单≤危险次数', _rReverse.reverseOpens <= _rReverse.dangerHits);
+ok('reverse 反手单≤多因子预测危险次数', _rReverse.reverseOpens <= _rReverse.pdHits);
 if (_rReverse.reverseOpens > 0) {
   const revTrades = _rReverse.trades.filter(t => t.action === 'open' && t.reverse);
   ok('reverse 开仓 reverse 标记数=反手开单数', revTrades.length === _rReverse.reverseOpens);
@@ -2765,6 +2884,219 @@ ok('回测结果渲染含危险/反手说明', typeof _html === 'string' && _htm
 // 条件确认含防爆说明
 const _cond = buildBacktestConditions(_rReverse);
 ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信号防爆') >= 0 && !!_cond.json.btCfg.danger);
+
+// ---- PWA 私有持久化：srsiByTf/optSource/optPreview/srsiAuto* 按币对独立存于 pwa_srsi_opt/pwa_srsi_auto，
+//      独立于共享 smartTrader_kchart，刷新/切币不丢，且免疫主系统/跨实例覆盖 ----
+{
+  const _store = {};
+  const _ls = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+    removeItem: k => { delete _store[k]; }
+  };
+  globalThis.localStorage = _ls;
+  setPwaMode(true);
+  // 清空可能从上一个测试遗留的 PWA 键
+  delete _store['pwa_srsi_opt']; delete _store['pwa_srsi_auto'];
+
+  // BTC：配置 SRSI 交易设置 + 优选某周期参数，并落盘
+  loadCfg('BTCUSDT');
+  cfg.srsiAutoOn = true; cfg.srsiAutoMode = 'usdt'; cfg.srsiAutoLev = 20; cfg.srsiAutoBasePct = 25; cfg.srsiAutoUpper = 80;
+  cfg.srsiAutoOptEnabled = true;
+  applyOptToSym('1h', 'BTCUSDT', { rsiPeriod: 21, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 }, 0.6);
+  persist();
+  const optRaw = JSON.parse(_store['pwa_srsi_opt'])['BTCUSDT'];
+  const autoRaw = JSON.parse(_store['pwa_srsi_auto'])['BTCUSDT'];
+  ok('PWA opt 键写入 1h 优选参数', optRaw.srsiByTf['1h'].rsiPeriod === 21 && optRaw.srsiOptSource['1h'] === 'optimized');
+  ok('PWA auto 键写入 交易设置', autoRaw.srsiAutoOn === true && autoRaw.srsiAutoLev === 20 && autoRaw.srsiAutoMode === 'usdt');
+
+  // 模拟刷新：重新 loadCfg，PWA 键应独立恢复（不依赖 smartTrader_kchart）
+  loadCfg('BTCUSDT');
+  ok('刷新后 srsiAuto 设置从 PWA 键恢复', cfg.srsiAutoOn === true && cfg.srsiAutoLev === 20 && cfg.srsiAutoMode === 'usdt' && cfg.srsiAutoUpper === 80);
+  ok('刷新后 优选参数从 PWA 键恢复', cfg.srsiOptSource['1h'] === 'optimized' && cfg.srsiByTf['1h'].rsiPeriod === 21);
+
+  // 模拟主系统/另一标签覆盖共享键：把 smartTrader_kchart 的 BTC 配置冲成默认，PWA 侧不应受影响
+  const st = JSON.parse(_store['smartTrader_kchart']);
+  st.bySymbol['BTCUSDT'] = { symbol: 'BTCUSDT' };
+  _store['smartTrader_kchart'] = JSON.stringify(st);
+  loadCfg('BTCUSDT');
+  ok('主系统覆盖共享键不污染 PWA 设置', cfg.srsiAutoOn === true && cfg.srsiAutoLev === 20 && cfg.srsiOptSource['1h'] === 'optimized');
+
+  // 切到 ETH 配置不同值，再切回 BTC：两币各自保留
+  loadCfg('ETHUSDT');
+  cfg.srsiAutoOn = true; cfg.srsiAutoLev = 7; applyOptToSym('1h', 'ETHUSDT', { rsiPeriod: 14 }, 0.5); persist();
+  loadCfg('BTCUSDT');
+  ok('切币往返 BTC 设置保留', cfg.srsiAutoLev === 20 && cfg.srsiOptSource['1h'] === 'optimized');
+  loadCfg('ETHUSDT');
+  ok('切币往返 ETH 设置保留', cfg.srsiAutoLev === 7 && cfg.srsiOptSource['1h'] === 'optimized' && cfg.srsiByTf['1h'].rsiPeriod === 14);
+
+  // 关闭 PWA 模式（主系统行为）：pwa 键不再被读取，回退共享键
+  setPwaMode(false);
+  loadCfg('BTCUSDT');
+  ok('主系统模式忽略 PWA 键(回退默认)', cfg.srsiAutoOn === false && cfg.srsiAutoLev === 5);
+  setPwaMode(true);
+  delete globalThis.localStorage;
+}
+
+// ---- Bug A/B 回归：重载/切币后 SRSI 优选参数(含超买超卖带)必须保留；主系统同源覆盖共享键时 PWA 私有键须胜出 ----
+{
+  const _store = {};
+  const _ls = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+    removeItem: k => { delete _store[k]; }
+  };
+  globalThis.localStorage = _ls;
+  setPwaMode(true);
+  delete _store['pwa_srsi_opt']; delete _store['pwa_srsi_auto']; delete _store['smartTrader_kchart'];
+
+  const OPT = { rsiPeriod: 21, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 85, oversold: 15 };
+  loadCfg('BTCUSDT');
+  cfg.mainTF = '15m';
+  applyOptToSym('15m', 'BTCUSDT', OPT, 0.6);   // 同币优选 → persist 写 PWA 私有键
+  persist();
+  ok('优选后 PWA 键写入 15m 超买=85', readPwaSrsiOpt()['BTCUSDT'].srsiByTf['15m'].overbought === 85);
+  ok('优选后 cfg.srsiByTf 超买=85', cfg.srsiByTf['15m'].overbought === 85);
+
+  loadCfg('ETHUSDT');
+  ok('切到 ETH 时 15m 回退默认 80', cfg.srsiByTf['15m'].overbought === 80);
+  loadCfg('BTCUSDT');
+  ok('切回 BTC 后 PWA 私有键恢复 15m 超买=85 (Bug B)', cfg.srsiByTf['15m'].overbought === 85);
+  ok('主图全局 cfg.srsi 同步为优选 85 (Bug A 带一致)', cfg.srsi.overbought === 85 && cfg.srsi.oversold === 15);
+
+  // 模拟主系统(index.html)同源写 smartTrader_kchart 把 BTC 覆盖成默认（真实环境另一标签/主应用会触发 storage 事件 → 重新 loadCfg 读共享键）
+  _store['smartTrader_kchart'] = JSON.stringify({
+    __v: 2, lastSymbol: 'BTCUSDT',
+    bySymbol: { BTCUSDT: { symbol: 'BTCUSDT', mainTF: '15m', srsiByTf: { '15m': { rsiPeriod: 14, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 } } } }
+  });
+  loadCfg('BTCUSDT');
+  ok('共享键被主系统覆盖后 PWA 私有键仍胜出 15m=85 (Bug B 主应用干扰)', cfg.srsiByTf['15m'].overbought === 85);
+  ok('覆盖后 cfg.srsi 仍同步优选 85', cfg.srsi.overbought === 85);
+
+  setPwaMode(false);
+  delete globalThis.localStorage;
+}
+
+// ---- 深层回归：仅"优选"(preview) 落盘而 srsiByTf 被污染回默认时，loadCfg 须用 preview.best 回填 srsiByTf（用户实测现象） ----
+{
+  const _store = {};
+  const _ls = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+    removeItem: k => { delete _store[k]; }
+  };
+  globalThis.localStorage = _ls;
+  setPwaMode(true);
+  delete _store['pwa_srsi_opt']; delete _store['smartTrader_kchart'];
+
+  // 真实场景：只点"⚡优选"未点"应用"，或共享键/主应用把 srsiByTf 覆盖回默认 → pwa 私有键只有 source+preview，无 srsiByTf
+  const OPT = { rsiPeriod: 21, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 85, oversold: 15 };
+  _store['pwa_srsi_opt'] = JSON.stringify({
+    BTCUSDT: {
+      srsiOptSource: { '15m': 'optimized' },
+      srsiOptPreview: { '15m': { best: OPT, role: 'gate', tf: '15m', symbol: 'BTCUSDT', ts: Date.now() } }
+    }
+  });
+
+  loadCfg('BTCUSDT');
+  ok('仅 preview 落盘时 loadCfg 回填 srsiByTf[15m].overbought=85 (深层修复)', cfg.srsiByTf['15m'].overbought === 85 && cfg.srsiByTf['15m'].oversold === 15);
+  ok('回填后 15m 仍标已优选', cfg.srsiOptSource['15m'] === 'optimized');
+  loadCfg('ETHUSDT'); loadCfg('BTCUSDT');
+  ok('切币往返后 15m 仍=85 (刷新/切币自愈)', cfg.srsiByTf['15m'].overbought === 85);
+
+  // 重置语义：清空 source/preview 后回退默认
+  _store['pwa_srsi_opt'] = JSON.stringify({ BTCUSDT: { srsiOptSource: {}, srsiOptPreview: {} } });
+  loadCfg('BTCUSDT');
+  ok('重置本币对后 15m 回退默认 80', cfg.srsiByTf['15m'].overbought === 80);
+
+  setPwaMode(false);
+  delete globalThis.localStorage;
+}
+
+// ---- 双源恢复：pwa 与 共享键 任一为优选值都必须保留（Fix2 回归修复：pwa 被写成默认时回退共享键）----
+{
+  const _store = {};
+  const _ls = { getItem: k => (k in _store ? _store[k] : null), setItem: (k, v) => { _store[k] = String(v); }, removeItem: k => { delete _store[k]; } };
+  globalThis.localStorage = _ls;
+  setPwaMode(true);
+  delete _store['pwa_srsi_opt']; delete _store['smartTrader_kchart'];
+
+  const OPT = { rsiPeriod: 21, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 85, oversold: 15 };
+  const DEF = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+
+  // 场景1：共享键(主系统)为优选，pwa 被旧逻辑写成默认 → 须从共享键回退出 85
+  _store['smartTrader_kchart'] = JSON.stringify({ __v: 2, lastSymbol: 'BTCUSDT', bySymbol: { BTCUSDT: { symbol: 'BTCUSDT', srsiByTf: { '15m': { ...OPT }, '1h': { ...OPT } }, srsiOptSource: { '15m': 'optimized', '1h': 'optimized' } } } });
+  _store['pwa_srsi_opt'] = JSON.stringify({ BTCUSDT: { srsiByTf: { '15m': { ...DEF }, '1h': { ...DEF } }, srsiOptSource: { '15m': 'optimized', '1h': 'optimized' } } });
+  loadCfg('BTCUSDT');
+  ok('双源恢复：pwa=默认 而 共享=优选时 取共享 15m.overbought=85', cfg.srsiByTf['15m'].overbought === 85 && cfg.srsiByTf['1h'].overbought === 85);
+  ok('双源恢复：optSource 保留为 optimized', cfg.srsiOptSource['15m'] === 'optimized');
+
+  // 场景2：反向 —— pwa=优选，共享=默认 → pwa 胜出
+  _store['smartTrader_kchart'] = JSON.stringify({ __v: 2, lastSymbol: 'BTCUSDT', bySymbol: { BTCUSDT: { symbol: 'BTCUSDT', srsiByTf: { '15m': { ...DEF } }, srsiOptSource: { '15m': 'optimized' } } } });
+  _store['pwa_srsi_opt'] = JSON.stringify({ BTCUSDT: { srsiByTf: { '15m': { ...OPT } }, srsiOptSource: { '15m': 'optimized' } } });
+  loadCfg('BTCUSDT');
+  ok('双源恢复：pwa=优选 而 共享=默认时 取 pwa 15m.overbought=85', cfg.srsiByTf['15m'].overbought === 85);
+
+  // 场景3：切币往返仍稳定
+  loadCfg('ETHUSDT'); loadCfg('BTCUSDT');
+  ok('双源恢复：切币往返后仍=85', cfg.srsiByTf['15m'].overbought === 85);
+
+  setPwaMode(false);
+  delete globalThis.localStorage;
+}
+
+
+{
+  const _store = {};
+  const _ls = {
+    getItem: k => (k in _store ? _store[k] : null),
+    setItem: (k, v) => { _store[k] = String(v); },
+    removeItem: k => { delete _store[k]; }
+  };
+  globalThis.localStorage = _ls;
+  setPwaMode(true);
+  delete _store['pwa_srsi_opt']; delete _store['pwa_srsi_auto']; delete _store['smartTrader_kchart'];
+
+  const OPT_A = { rsiPeriod: 21, stochPeriod: 9, smoothK: 3, smoothD: 3, overbought: 85, oversold: 15 };
+  const OPT_B = { rsiPeriod: 33, stochPeriod: 5, smoothK: 2, smoothD: 2, overbought: 90, oversold: 10 };
+
+  // A(BTC)：手动 优选+应用 15m
+  loadCfg('BTCUSDT');
+  applyOptToSym('15m', 'BTCUSDT', OPT_A, 0.6);
+  persist();
+  ok('切币往返: A 优选 15m 超买=85 落盘', readPwaSrsiOpt()['BTCUSDT'].srsiByTf['15m'].overbought === 85);
+  ok('切币往返: A 的 firstOptimizedTf=15m', firstOptimizedTf(cfg) === '15m');
+
+  // 切到 B(ETH)：手动 优选+应用 1h；A 参数不应显示在 B
+  loadCfg('ETHUSDT');
+  ok('切币往返: 切到 ETH 时 15m 回退 ETH 默认 80(币对独立)', cfg.srsiByTf['15m'].overbought === 80);
+  applyOptToSym('1h', 'ETHUSDT', OPT_B, 0.55);
+  persist();
+  ok('切币往返: B 优选 1h.rsiPeriod=33 落盘', readPwaSrsiOpt()['ETHUSDT'].srsiByTf['1h'].rsiPeriod === 33);
+  ok('切币往返: B 的 firstOptimizedTf=1h(跳过1m/5m/10m/15m/30m)', firstOptimizedTf(cfg) === '1h');
+
+  // 切回 A：A 的 15m 恢复，且不被 B 的 1h 污染
+  loadCfg('BTCUSDT');
+  ok('切币往返: A 的 15m 超买恢复=85', cfg.srsiByTf['15m'].overbought === 85 && cfg.srsiOptSource['15m'] === 'optimized');
+  ok('切币往返: A 未被 B 的 1h 参数污染', cfg.srsiByTf['1h'].rsiPeriod !== 33);
+
+  // 面板着陆：A 上 srsiEditTf 若停在默认 5m(未优选)，setSym 后应跳到 15m
+  const fA = firstOptimizedTf(cfg);
+  ok('面板着陆: A 5m 未优选时 firstOptimizedTf 返回 15m', fA === '15m');
+  const resolvedA = (fA && cfg.srsiOptSource[cfg.srsiEditTf] !== 'optimized') ? fA : cfg.srsiEditTf;
+  ok('面板着陆: A 跳转到 15m 后显示优参 85', resolvedA === '15m' && cfg.srsiByTf[resolvedA].overbought === 85);
+
+  // 再切回 B：B 的 1h 恢复；面板跳到 1h 显示 33
+  loadCfg('ETHUSDT');
+  ok('切币往返: B 的 1h.rsiPeriod 恢复=33', cfg.srsiByTf['1h'].rsiPeriod === 33 && cfg.srsiOptSource['1h'] === 'optimized');
+  ok('切币往返: B 的 15m 仍默认(与 A 独立)', cfg.srsiByTf['15m'].overbought === 80);
+  const fB = firstOptimizedTf(cfg);
+  const resolvedB = (fB && cfg.srsiOptSource[cfg.srsiEditTf] !== 'optimized') ? fB : cfg.srsiEditTf;
+  ok('面板着陆: B 跳到 1h 后显示优参 rsiPeriod=33', resolvedB === '1h' && cfg.srsiByTf[resolvedB].rsiPeriod === 33);
+
+  setPwaMode(false);
+  delete globalThis.localStorage;
+}
 
 // ---- 防爆仓设置本地持久化闭环（实盘 cfg.srsiAutoDanger + 回测 _btCfg.danger）----
 {

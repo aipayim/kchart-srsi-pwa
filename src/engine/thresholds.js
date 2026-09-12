@@ -144,4 +144,15 @@ export const THRESH = {
   HORIZON_VOL_HI_EXIT: 1.5,         // 退出自适应(回固定): ratio ≤ 1.5
   HORIZON_VOL_LO_EXIT: 0.6,         // 退出自适应(回固定): ratio ≥ 0.6
   HORIZON_VOL_CONFIRM: 3,           // 滞回确认帧数(连续满足才切换, 防抖)
+
+  // ---- 危险信号 predictDanger（防爆反手/预防爆仓 多因子，v1.5.11） ----
+  // 综合 4 类因子判定“危险(易爆仓)”：EMA 背离(emaOpp2)、价格偏离(1h/15m EMA)、
+  // 超买超卖极值(K15)、近根振幅。任一因子命中记 1 分，≥ PREDICT_MIN 即判定危险。
+  // 阈值集中此处，便于回测/实盘统一调参；均保守（先不误伤正常单）。
+  PREDICT_EMA1H_PCT: 1.5,          // 现价偏离 1h EMA 绝对值% 阈值
+  PREDICT_EMA15_PCT: 2.0,          // 现价偏离 15m EMA 绝对值% 阈值
+  PREDICT_K15_LONG: 15,            // 多头方向：15m K ≤ 此值视为超卖极值
+  PREDICT_K15_SHORT: 85,           // 空头方向：15m K ≥ 此值视为超买极值
+  PREDICT_CANDLE_PCT: 1.5,         // 近根(1 根 15m)K线振幅% 阈值
+  PREDICT_MIN: 2,                  // 危险判定最少命中因子数(≥2 → danger)
 };

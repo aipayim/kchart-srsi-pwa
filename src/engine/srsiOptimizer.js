@@ -135,7 +135,7 @@ export function optimizeSrsi(closes, opts = {}) {
   const minSamples = opts.minSamples != null ? opts.minSamples : 15;
   const minValSamples = opts.minValSamples != null ? opts.minValSamples : 6;
   const grid = opts.grid || srsiParamGrid(opts.gridOpts);
-  const defaultParams = opts.defaultParams || { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const defaultParams = opts.defaultParams || { rsiPeriod: 14, stochPeriod: 21, smoothK: 5, smoothD: 3, overbought: 80, oversold: 20 };
   const atrPeriod = opts.atrPeriod || 14;
 
   const trainN = Math.max(30, Math.min(closes.length - 1, Math.floor(closes.length * split)));
@@ -160,13 +160,13 @@ export function optimizeSrsi(closes, opts = {}) {
     return scoreSrsiParams(sub, p, { ...opts, k, d, atr, role });
   };
 
-  // 选优口径：在「全样本」上取累计收益(EV)最优（与 PDF 手册验收口径一致，手册参数即全窗口数据最优）。
-  // 训练/验证切分仍用于 decision 护栏（见下方 valObj），但参数选择不再用训练段（避免与手册/全窗口最优分叉）。
+  // 选优口径（walk-forward，防过拟合）：在「训练段」上取累计收益(EV)最优，
+  // 验证段仅作护栏(decision)，不直接参与参数选择（避免全窗口最优造成的过拟合虚高）。
   let best = null, bestObj = -Infinity;
   for (const p of grid) {
-    const sf = scoreOn(p, 0, closes.length);
-    if (sf.signals < minSamples) continue;
-    const obj = role === 'gate' ? sf.rate : sf.ev;
+    const st = scoreOn(p, 0, train.length);
+    if (st.signals < minSamples) continue;
+    const obj = role === 'gate' ? st.rate : st.ev;
     if (obj <= 0) continue;
     if (obj > bestObj) { bestObj = obj; best = p; }
   }
@@ -328,33 +328,37 @@ export function selectBandChampion(closes, opens, opts = {}) {
   const grid = opts.grid || srsiParamGrid(opts.gridOpts);
   const minN = opts.minN != null ? opts.minN : 40;
   if (!Array.isArray(closes) || closes.length < 60) return null;
+  const split = opts.split != null ? opts.split : 0.6;
   const n = closes.length;
-  const mid = Math.floor(n / 2);
-  const full = (p) => scoreBandSegment(closes, opens, p);
-  const half = (p, which) => scoreBandSegment(
-    which === 'h1' ? closes.slice(0, mid) : closes.slice(mid),
-    which === 'h1' ? opens.slice(0, mid) : opens.slice(mid),
-    p
-  );
+  const trainN = Math.max(30, Math.min(n - 1, Math.floor(n * split)));
+  if (trainN < 30 || n - trainN < 10) return null;
+  const trainStats = (p) => scoreBandSegment(closes.slice(0, trainN), opens.slice(0, trainN), p).stats;
+  const valStats = (p) => scoreBandSegment(closes.slice(trainN), opens.slice(trainN), p).stats;
   const cands = [];
   for (const p of grid) {
-    const s = full(p).stats;
-    cands.push({ p, s });
+    const s = trainStats(p);
+    cands.push({ p, train: s });
   }
-  // 排序 (t↓, EV↓, n↓)
-  cands.sort((a, b) => (b.s.t - a.s.t) || (b.s.ev - a.s.ev) || (b.s.n - a.s.n));
+  // 排序（训练段 t↓, 训练段 EV↓, n↓）
+  cands.sort((a, b) => (b.train.t - a.train.t) || (b.train.ev - a.train.ev) || (b.train.n - a.train.n));
+  // walk-forward：训练段最优，且验证段均值收益>0 才采纳；否则回退训练段达标的最高 t 候选
+  let chosen = null, fb = null;
   for (const c of cands) {
-    if (c.s.n < minN) continue;
-    const h1 = half(c.p, 'h1');
-    const h2 = half(c.p, 'h2');
-    if (!(h1.stats.avg > 0 && h2.stats.avg > 0)) continue;
-    const nb = bandNeighborTPos(closes, opens, c.p); // 报告项：avg>0 占比，非门槛
-    return { params: c.p, stats: c.s, filters: { nPass: true, twoHalf: { h1: h1.stats.avg, h2: h2.stats.avg }, nbRatio: nb.ratio, nbReportOnly: true }, candidates: cands };
+    if (c.train.n < minN) continue;
+    if (!fb) fb = c;
+    const v = valStats(c.p);
+    if (v.avg > 0) { chosen = { c, val: v }; break; }
   }
-  for (const c of cands) if (c.s.n >= minN) {
-    return { params: c.p, stats: c.s, filters: { nPass: true, twoHalf: null, nbRatio: null, fallback: true }, candidates: cands };
-  }
-  return null;
+  if (!chosen && !fb) return null;
+  const isFallback = !chosen;
+  const pick = chosen ? chosen.c : fb;
+  const v = chosen ? chosen.val : valStats(pick.p);
+  const nb = bandNeighborTPos(closes, opens, pick.p); // 报告项，非门槛
+  return {
+    params: pick.p, stats: pick.train,
+    filters: { nPass: true, twoHalf: { h1: pick.train.avg, h2: v.avg }, nbRatio: nb.ratio, nbReportOnly: true, walkForward: true, fallback: isFallback },
+    candidates: cands
+  };
 }
 
 // swing 优选（band 离场）。冠军由 selectBandChampion（规范引擎：t↓ 排序 + 两门槛顺序过滤）选出，
@@ -380,16 +384,16 @@ export function optimizeSrsiBand(closes, opens, opts = {}) {
   const defTrain = seg(defaultParams, 0, trainN);
   const defVal = seg(defaultParams, trainN, closes.length - trainN);
 
-  // 并列对照口径（不参与选择，仅供面板展示）：EV 最优 / 胜率最优
+  // 并列对照口径（不参与选择，仅供面板展示）：EV 最优 / 胜率最优 —— 同样走训练段，避免全样本过拟合虚高
   let bestEv = null, bestEvVal = -Infinity;
   for (const p of grid) {
-    const s = seg(p, 0, closes.length);
+    const s = seg(p, 0, trainN);
     if (s.n < 15 || s.stats.ev <= 0) continue;
     if (s.stats.ev > bestEvVal) { bestEvVal = s.stats.ev; bestEv = p; }
   }
   let bestWin = null, bestWinRate = -1, bestWinEv = -Infinity;
   for (const p of grid) {
-    const s = seg(p, 0, closes.length);
+    const s = seg(p, 0, trainN);
     if (s.n < 15 || s.stats.ev <= 0) continue;
     if (s.stats.winRate > bestWinRate || (s.stats.winRate === bestWinRate && s.stats.ev > bestWinEv)) {
       bestWinRate = s.stats.winRate; bestWinEv = s.stats.ev; bestWin = p;
@@ -517,15 +521,23 @@ export function optimizeGateBand({ closesT, opensT, timesT, closesG, opensG, tim
   const grid = opts.grid || GATE_PARAMS_GRID;
   const defaultParams = opts.defaultParams || { rsiPeriod: 14, stochPeriod: 9, smoothK: 2, smoothD: 3, overbought: 90, oversold: 10, thr: 10 };
   const results = [];
+  const oosFolds = opts.rollingFolds != null ? opts.rollingFolds : 5;
   for (const pGate of grid) {
     const g = gateCore(pGate, closesT, opensT, timesT, targetMs, gateMs, closesG, timesG, downstream, pGate.thr);
     results.push({ params: pGate, stats: g.stats, admitted: g.trades.length });
   }
-  // 主选优口径（手册规格）：评分 = 被放行子集均值收益(EV)；选 argmax(EV | n(kept)≥30, 平手→n 大)
+  // 主选优口径（walk-forward 防过拟合）：优先用滚动样本外(OOS)均值收益(EV) 作为选优目标，
+  // OOS 数据不足(段数/样本不够)时回退全样本 EV。
+  const oosOf = (pGate) => {
+    const o = rollingGateOos(closesT, opensT, timesT, targetMs, gateMs, pGate, closesG, timesG, downstream, oosFolds);
+    return (o && o.stats && o.stats.n >= 30) ? o.stats : null;
+  };
   let best = null, bestObj = -Infinity, bestN = -1;
   for (const r of results) {
     if (r.stats.n < 30) continue;
-    if (r.stats.ev > bestObj || (r.stats.ev === bestObj && r.stats.n > bestN)) { bestObj = r.stats.ev; best = r; bestN = r.stats.n; }
+    const o = oosOf(r.params);
+    const obj = o ? o.ev : r.stats.ev;
+    if (obj > bestObj || (obj === bestObj && r.stats.n > bestN)) { bestObj = obj; best = r; bestN = r.stats.n; }
   }
   if (!best) best = results.find(r => r.params.rsiPeriod === 14 && r.params.stochPeriod === 9 && r.params.thr === 10) || results[0];
   // EV 口径最优（对照显示）
@@ -546,8 +558,7 @@ export function optimizeGateBand({ closesT, opensT, timesT, closesG, opensG, tim
     }
   }
 
-  // 滚动样本外(walk-forward)交叉验证（仅作对照展示，不参与选择）
-  const oosFolds = opts.rollingFolds != null ? opts.rollingFolds : 5;
+  // 滚动样本外(walk-forward)交叉验证（对照展示；主选优已改用 OOS，见上）
   const oos = rollingGateOos(closesT, opensT, timesT, targetMs, gateMs, best.params, closesG, timesG, downstream, oosFolds);
   const oosDef = rollingGateOos(closesT, opensT, timesT, targetMs, gateMs, defaultParams, closesG, timesG, downstream, oosFolds);
   const oosEv = oos && oos.stats ? oos.stats.ev : 0;

@@ -4,7 +4,7 @@ import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈
 import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
-import { APP_BUILD_TIME } from '../version.generated.js';
+import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
 // 开发模式下自动注销残留 Service Worker（dev SW 缓存会导致浏览器长期跑旧代码，Ctrl+Shift+R 不清 SW 缓存）。
@@ -111,7 +111,19 @@ globalThis.kSetMainOverlay = (on) => api.setMainOverlay(on);
 globalThis.kSetMainOverlayTf = (tf, on) => api.setMainOverlayTf(tf, on);
 globalThis.kCopyCfgToAll = () => api.copyCfgToAll();
 globalThis.kResetSymbolCfg = () => api.resetSymbolCfg();
-globalThis.kOptimizeSrsi = (tf, role) => api.optimizeSrsiForTf(tf, role).then(r => { if (r && r.best) api.applySrsiOpt(tf); return r; });
+globalThis.kOptimizeSrsi = (tf, role) => {
+  const sym = api.getConfig().symbol;   // 调用瞬间锁定目标币对：避免慢拉数期间切币导致 sym 被捕获成当前币对
+  return api.optimizeSrsiForTf(tf, role, { sym }).then(r => {
+    // 优选失败(fallback 默认 best) 时不覆写：保留用户既有优选参数，避免被默认参数污染
+    if (r && r.best && r.decision !== 'fallback') {
+      const cw = (r.oos && r.oos.winRate != null) ? r.oos.winRate : (r.stats && r.stats.winRate != null ? r.stats.winRate : null);
+      api.applyOptToSym(tf, sym, r.best, cw);   // 始终写回锁定的原币对，不污染/丢失当前展示币对
+    } else if (!r || !r.best || r.decision === 'fallback') {
+      console.log('[SRSI-OPT-SKIP] tf=' + tf + ' decision=' + (r && r.decision) + ' best=' + JSON.stringify(r && r.best) + '（优选未产出有效参数，保留既有参数）');
+    }
+    return r;
+  });
+};
 globalThis.kApplySrsiOpt = (tf) => api.applySrsiOpt(tf);
 globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
 globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
@@ -167,8 +179,10 @@ const APP_VER = APP_BUILD_TIME || 'dev';
 const VER_KEY = 'kchartVer';
 const FORCE_CLEAR_FLAG = 'sw_force_clear';
 
-// 版本门控：新构建发布后首次启动自动清干净旧缓存，确保加载的是最新资源
-// （防止 SW 卡在旧版导致 HTML/JS 错位、按钮消失）。仅清缓存，不重载（当前已是最新 JS）。
+// 版本门控：新构建发布后首次启动自动清干净旧缓存，并确保加载的是最新资源
+// （防止 SW/边缘缓存卡在旧版导致 HTML/JS 错位、按钮消失）。
+// 关键修复：版本不一致时不再「只清缓存不重载」（旧 JS 仍驻留），而是带随构建唯一的 _swclear
+// 参数强制重定向，绕过 Cloudflare/浏览器边缘缓存拿到最新 HTML+JS（含本修复），杜绝「部署了用户却还在跑旧包」。
 async function applyVersionGate() {
   try {
     // 上一轮点「刷新」遗留的双保险标记：新页面启动再清一次，确保无残留
@@ -177,10 +191,30 @@ async function applyVersionGate() {
       await forceClearCaches();
     }
     const seen = localStorage.getItem(VER_KEY);
-    if (seen && seen !== APP_VER) {
+    localStorage.setItem(VER_KEY, APP_VER); // 先记录当前版本，避免重定向后死循环
+    if (seen && seen !== APP_VER && !window.location.search.includes('_swclear')) {
+      // 新版本已部署：先清掉旧 SW/缓存，再带 _swclear 重定向强制拉取最新 HTML+JS
       await forceClearCaches();
+      const url = new URL(window.location.href);
+      url.searchParams.set('_swclear', APP_VER);
+      window.location.replace(url.pathname + url.search);
+      return; // 让新页面接管，下面不再执行
     }
-    localStorage.setItem(VER_KEY, APP_VER);
+  } catch (e) { /* 忽略 */ }
+}
+
+// PWA 页面右下角构建版本徽章：用户可直观确认自己是否在最新构建（排查「部署了却没生效」）
+function showVersionBadge() {
+  try {
+    let b = document.getElementById('kchartVerBadge');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'kchartVerBadge';
+      b.style.cssText = 'position:fixed;right:8px;bottom:6px;z-index:60;font:11px/1.4 monospace;color:#9aa;background:rgba(0,0,0,.45);padding:2px 6px;border-radius:6px;pointer-events:none;white-space:nowrap';
+      document.body.appendChild(b);
+    }
+    b.textContent = `v${APP_VERSION} · ${APP_BUILD_TIME.slice(0, 10)}`;
+    b.title = `构建时间 ${APP_BUILD_TIME}`;
   } catch (e) { /* 忽略 */ }
 }
 
@@ -265,6 +299,7 @@ function setupInstallPrompt() {
 async function loadSymbol(sym) {
   sym = normalize(sym) || 'BTCUSDT';
   curSym = sym;
+  try { localStorage.setItem('pwa_last_sym', sym); } catch (e) {}   // 记住真正在用的币对，供下次启动恢复
   if (symInput) symInput.value = sym;
   api.setSymbol(sym);                 // 设置 cfg.symbol 并先渲染（显示"等待数据"）
   setFresh('加载中…');
@@ -302,8 +337,11 @@ async function init() {
   // 先执行版本门控：若部署了新版本，自动清掉旧 SW/缓存，确保下面渲染的是最新资源
   await applyVersionGate().catch(() => {});
   api.init();                         // 绑定 canvas + 事件
-  curSym = symList[symList.length - 1] || 'BTCUSDT';  // 回到上次使用的币对（loadCfg 前确定，确保恢复的是该币对配置）
-  api.loadCfg(curSym);                // 从 smartTrader_kchart 恢复 K线/SRSI 持久化配置（含各周期优选参数），必须在渲染与切币对之前
+  api.setPwaMode(true);              // 启用 PWA 私有持久化键（srsiByTf/optSource/optPreview/srsiAuto* 按币对独立于共享 smartTrader_kchart）
+  let lastSym = null;
+  try { lastSym = localStorage.getItem('pwa_last_sym'); } catch (e) {}
+  curSym = lastSym || symList[symList.length - 1] || 'BTCUSDT';  // 优先回到真正上次使用的币对
+  api.loadCfg(curSym);                // 从 PWA 私有键(优先)+smartTrader_kchart 恢复 K线/SRSI 持久化配置（含各周期优选参数），必须在渲染与切币对之前
   api.renderControls();               // 渲染 TF 按钮/预设/子图/SRSI 参数
   if (symBtn) symBtn.addEventListener('click', () => addSymbol(symInput.value));
   const refreshBtn = document.getElementById('pwaRefreshBtn');
@@ -322,10 +360,11 @@ async function init() {
   applyZoom();
   if (symInput) symInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSymbol(symInput.value); });
   setupInstallPrompt();
+  showVersionBadge();
   renderSymList();
   initPwaTrade();
   initLocalLoop();
-  loadSymbol(symList[symList.length - 1] || 'BTCUSDT');   // 回到上次使用的币对
+  loadSymbol(curSym);   // 回到上次使用的币对（curSym 已含 pwa_last_sym 优先逻辑）
   setInterval(tickPrice, PRICE_REFRESH_MS);
   setInterval(tickKlines, KLINE_REFRESH_MS);
 }
@@ -459,7 +498,7 @@ globalThis.pwaSimReset = function pwaSimReset() {
 };
 // 清空全部 PWA 本地持久化（交易对列表 / 模拟设置 / 纸面账户 / K线参数 / 缩放 / 版本标记），用于彻底重置
 globalThis.pwaClearAll = function pwaClearAll() {
-  const keys = ['pwa_syms', 'pwa_sim_settings', 'pwa_paper_state', 'smartTrader_kchart', 'pwa_zoom', 'kchartVer'];
+  const keys = ['pwa_syms', 'pwa_sim_settings', 'pwa_paper_state', 'smartTrader_kchart', 'pwa_zoom', 'kchartVer', 'pwa_srsi_opt', 'pwa_srsi_auto', 'pwa_last_sym'];
   keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
   try { sessionStorage.removeItem('sw_force_clear'); } catch (e) {}
   if (confirm('确定清空所有本地设置并刷新？此操作不可撤销。')) {
