@@ -52,8 +52,12 @@ async function loadBars(sym, tf, startTime, endTime, maxBars) {
   return { t: k.times, o: k.opens, h: k.highs, l: k.lows, c: k.closes };
 }
 async function loadFunding(sym, startTime) {
-  const rows = await fetchFundingRate(sym, startTime, Date.now());
-  return (rows || []).map(r => [r.fundingTime, r.fundingRate]);
+  // fapi 双域名（fapi.binance.com / fapi.binance.vision）均不可达时降级为空：
+  // funding 缺失 → z=null → combo 退化为 momo/breakout（与现货口径一致，信号仍有效）
+  try {
+    const rows = await fetchFundingRate(sym, startTime, Date.now());
+    return (rows || []).map(r => [r.fundingTime, r.fundingRate]);
+  } catch (e) { return []; }
 }
 
 // —— 渲染辅助 ——
