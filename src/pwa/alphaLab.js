@@ -175,6 +175,13 @@ function selfCheckUI() {
 export function initAlphaLab() {
   const box = $('alphaLab');
   if (!box) return;
+  // 折叠初态：默认收起（kchart.html 初始 closed）；展开过的用户记忆在 localStorage
+  const wrap = document.getElementById('alphaLabWrap');
+  if (wrap && localStorage.getItem('pwa_alpha_open') === '1') wrap.classList.remove('closed');
+  window.__alphaLabHead = () => {
+    const w = document.getElementById('alphaLabWrap');
+    if (w) localStorage.setItem('pwa_alpha_open', w.classList.contains('closed') ? '0' : '1');
+  };
   box.innerHTML = `
     <div class="alpha-row">
       <input id="alphaSym" placeholder="BTCUSDT" value="BTCUSDT" size="9" />
@@ -183,12 +190,12 @@ export function initAlphaLab() {
       <label>目标波动 <input id="alphaVt" type="number" min="10" max="50" step="5" value="30" style="width:4em" />%</label>
       <label>杠杆(永续) <input id="alphaLev" type="number" min="1" max="5" value="3" style="width:3em" /></label>
       <button id="alphaRun">▶ 运行回测</button>
-      <button id="alphaSelfBtn">🧪 自检</button>
+      <button id="alphaSelfBtn" title="验证浏览器内策略核心与 Node 权威回测框架逐位一致（2 个合成用例 Δ=0），用于确认线上代码未跑偏">🧪 自检</button>
     </div>
-    <div id="alphaOut" class="alpha-out"><div class="alpha-note">combo 策略（carry0.5+breakout0.3+momo0.2）：核心与 Node 回测框架<b>逐位一致</b>（GOAL4 验证）。先点「自检」确认本机核心完好。</div></div>
+    <div id="alphaOut" class="alpha-out"><div class="alpha-note">combo 策略（carry0.5+breakout0.3+momo0.2）：核心与 Node 回测框架<b>逐位一致</b>（GOAL4 验证）。<b>应用到实盘 = 下方「启动 Paper 实盘模拟」</b>（60s 确定性重放同源核心，模拟真实持仓/权益；真实资金交易本系统不开放）。默认参数为 GOAL2-4 稳健区间代表值，非逐币最优。</div></div>
     <div id="alphaSelf"></div>
     <div class="alpha-row" style="margin-top:.5em">
-      <button id="alphaPaperStart">📡 启动 Paper 实盘模拟</button>
+      <button id="alphaPaperStart" title="启动模拟实盘：以面板参数每 60s 重算同源核心，模拟真实持仓/权益/爆仓（不接真实资金）">📡 启动 Paper 实盘模拟</button>
       <button id="alphaPaperStop" style="display:none">⏹ 停止</button>
       <span id="alphaPaperCfg" class="alpha-note"></span>
     </div>
