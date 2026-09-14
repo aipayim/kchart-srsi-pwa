@@ -4,6 +4,7 @@
 //           现货模式 longOnly + 无资金费现金流（funding 仅作信号输入）；vol-target 需 720 根 1h 预热。
 import { runBacktest, annualized, maxDD, sharpeDaily } from './alphaCore.js';
 import { fetchKlinesRange, fetchFundingRate } from './data.js';
+import { APP_VERSION } from '../version.generated.js';
 
 const PAPER_KEY = 'pwa_alpha_paper';
 const HOUR = 3600e3, DAY = 86400e3;
@@ -147,7 +148,7 @@ function exportAlphaReport() {
     '- 生成时间：' + new Date().toLocaleString(),
     '- 币对：' + sym + ' ｜ 模式：' + (isSpot ? '现货只多' : '永续多空(现货价源+funding流)') + ' ｜ 杠杆上限：' + (isSpot ? '1x' : lev + 'x'),
     '- 数据：' + bars + ' 根 1h K线（' + fmtT(t0) + ' ~ ' + fmtT(t1) + '，' + days.toFixed(0) + ' 天）+ 1d 收盘（动量/突破）+ funding ' + fundingN + ' 条',
-    '- 版本：' + (typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'dev'), '',
+    '- 版本：' + APP_VERSION + '（alphaCore=Node 权威框架逐位对齐副本）', '',
     '## 一、策略条件（信号→仓位）',
     '- 目标权重 w = 0.5×carry(z) + 0.3×breakout(1d) + 0.2×momo(1d)，clamp [-1,1]' + (isSpot ? '，longOnly(w≥0)' : ''),
     '- 波动率目标：' + (vt * 100).toFixed(0) + '% 年化（rolling ' + 720 + 'h σ 缩放，cap ' + (isSpot ? '1.0' : '1.5') + '×）；资金费：' + (fundingN ? '计入学费情绪 z + 永续现金流' : '不可达，carry 腿=0（降级）'),

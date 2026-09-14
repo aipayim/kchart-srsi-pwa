@@ -99,7 +99,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
       const cost = turnover * equity * (FEE + SLIP);
       equity -= cost; fees += cost;
       if (openTrade) trades.push({ ...openTrade, tOut: t[i + 1], pOut: o[i + 1], pnlPct: (equity - openTrade.eqIn) / openTrade.eqIn * 100, eqOut: equity, reason: '翻转' });
-      openTrade = posW === 0 ? null : { tIn: t[i + 1], side: w > 0 ? '多' : '空', w, pIn: o[i + 1], eqIn: equity };
+      openTrade = posW === 0 ? null : { tIn: t[i + 1], side: w > 0 ? '多' : (w < 0 ? '空' : '平'), w, pIn: o[i + 1], eqIn: equity };
       posW = w; posEntry = o[i + 1]; liqPrice = null;
     }
     eqs.push(equity); ts.push(t[i]); ws.push(w);
