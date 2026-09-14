@@ -435,6 +435,7 @@ async function tickLive() {
       await eng.placeOrder({ symbol: sym, side: target > 0 ? 'long' : 'short', amt: Math.abs(target) * perp.bal, lev: 1, marginMode: 'usdt', sub: perp.id, ai: false, sig: '[Alpha组合]', src: 'alpha' });
       liveW = target;
     }
-    _liveLog(`调仓 → 目标 ${(target * 100).toFixed(0)}% @ $${price.toFixed(0)}`);
+    _liveLog(`调仓 → 目标 ${(target * 100).toFixed(0)}% @ ${price.toFixed(0)}`);
+    try { window.__alphaLiveW = target; (window.__alphaLiveMarks = window.__alphaLiveMarks || []).push({ t: Date.now(), dir: target }); } catch (e) {}
   } catch (e) { _liveLog('tick 失败：' + e.message); }
 }

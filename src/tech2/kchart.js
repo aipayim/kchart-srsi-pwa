@@ -281,6 +281,7 @@ export function defaultKConfig() {
     subOrder: ['rsi', 'srsi', 'macd'],   // 子图顺序（拖拽换序）
     // ---- SRSI 自动交易 ----
     srsiAutoOn: false,          // SRSI 自动交易总开关
+    srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
     srsiAutoMode: 'follow',     // 本位：follow=跟随快捷交易(开空U本位/开多币本位) / usdt / coin
     srsiAutoUpper: 0,           // 上限带（0=使用 15m 优选带）
     srsiAutoLower: 0,           // 下限带（0=使用 15m 优选带）
@@ -399,6 +400,7 @@ function normalizeCfg(c) {
   if (typeof c.alphaSignalOn !== 'boolean') c.alphaSignalOn = false; // Alpha(combo) 买卖信号主图叠加开关（PWA，默认关）
   // ---- SRSI 自动交易配置兜底 ----
   if (typeof c.srsiAutoOn !== 'boolean') c.srsiAutoOn = false;
+  if (typeof c.srsiAutoApplyBt !== 'boolean') c.srsiAutoApplyBt = false;
   if (!['follow', 'usdt', 'coin'].includes(c.srsiAutoMode)) c.srsiAutoMode = 'follow';
   if (c.srsiAutoUpper !== 0 && (typeof c.srsiAutoUpper !== 'number' || !(c.srsiAutoUpper >= 50 && c.srsiAutoUpper <= 100))) c.srsiAutoUpper = 90;
   if (c.srsiAutoLower !== 0 && (typeof c.srsiAutoLower !== 'number' || !(c.srsiAutoLower >= 0 && c.srsiAutoLower <= 50))) c.srsiAutoLower = 10;
@@ -3298,6 +3300,45 @@ function drawMain(ctx, sym, tf, H) {
     }
   }
 
+  // GOAL9：实时交易信号标记（应用回测参数勾选时）——SRSI 自动交易开/平 + alphaLive 调仓，与实盘一一对应
+  if (cfg.srsiAutoApplyBt && typeof window !== 'undefined') {
+    ctx.save();
+    const LT = window.__srsiLiveTrades || [];
+    let lp = 0;
+    const tEnd = t[t.length - 1] || 0;
+    for (const tr of LT) {
+      if (!tr || !Number.isFinite(tr.t) || tr.t < t[0] - 3600e3 * 48) continue;
+      // 实时标记：总是画在最新 bar 右侧时间轴附近（时间→索引，超过窗口画在右缘）
+      let idx = t.length - 1;
+      for (let m2 = t.length - 1; m2 >= start; m2--) { if (t[m2] <= tr.t) { idx = m2; break; } }
+      if (idx < start) idx = start;
+      const x = X(Math.min(idx, start + n - 1)), y = Y(c[Math.min(idx, c.length - 1)] || c[c.length - 1]);
+      if (tr.action === 'open') {
+        ctx.fillStyle = tr.side === 'long' ? '#2ecc71' : '#ff6b6b';
+        ctx.fillRect(x - 4, tr.side === 'long' ? y + 16 : y - 22, 8, 6);
+      } else {
+        ctx.fillStyle = '#8899aa';
+        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
+      }
+      lp++;
+    }
+    const AM = window.__alphaLiveMarks || [];
+    for (const m3 of AM) {
+      if (!m3 || !Number.isFinite(m3.t) || m3.t < t[0]) continue;
+      const x = X(start + n - 1), y = Y(c[c.length - 1] || 0);
+      ctx.fillStyle = m3.dir > 0 ? 'rgba(46,204,113,.8)' : m3.dir < 0 ? 'rgba(255,107,107,.8)' : '#8899aa';
+      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 8, y - 4); ctx.lineTo(x + 8, y + 4); ctx.closePath(); ctx.fill();
+      break;
+    }
+    if (lp || AM.length) {
+      ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#2ecc71'; ctx.textAlign = 'right';
+      const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
+      ctx.fillText('组合实盘 ON · α' + (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '% · SRSI信号' + lp, W - PAD_R - 4, PAD_T + 40);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
   // SRSI 回测信号标记（GOAL8，_btCfg.btMarks 默认关=零绘制）：把最近一次 SRSI 回测的逐笔开/平/爆仓标在主图，
   // 与 α 信号共存。数据源 window.__srsiBtTrades（runSrsiBacktest 结果，无前视重放）。时间→主图 bar：二分找 last idx ≤ trade.t
   if (typeof _btCfg !== 'undefined' && _btCfg.btMarks && typeof window !== 'undefined' && window.__srsiBtTrades && window.__srsiBtSym === sym) {
@@ -4640,7 +4681,28 @@ export function setSrsiAutoOn(on) {
   if (typeof document !== 'undefined') {
     const aEl = document.getElementById('ktSrsiAuto');
     if (aEl) aEl.checked = cfg.srsiAutoOn;
+  const abEl = bar.querySelector('#ktSrsiApplyBt');
+  if (abEl) abEl.checked = !!cfg.srsiAutoApplyBt;
   }
+}
+// GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）
+export function applyBtSnapshot(bt, eff) {
+  if (!bt) return false;
+  try {
+    if (eff && eff.srsiByTf) cfg.srsiByTf = JSON.parse(JSON.stringify(eff.srsiByTf));
+    if (eff && eff.srsi) cfg.srsi = { ...cfg.srsi, ...eff.srsi };
+    cfg.srsiOptSource = cfg.srsiOptSource || {};
+    ['15m', '30m', '1h', '4h'].forEach(tf => { if (cfg.srsiByTf && cfg.srsiByTf[tf]) cfg.srsiOptSource[tf] = 'optimized'; });
+    const nums = { lev: 'srsiAutoLev', pct: 'srsiAutoBasePct', maxSame: 'srsiAutoMaxSame', upper: 'srsiAutoUpper', lower: 'srsiAutoLower', reversePct: 'srsiAutoReversePct', reverseLev: 'srsiAutoReverseLev', revConfirm: 'srsiAutoRevConfirm', stopPct: 'srsiAutoStopPct', adaptiveLevMin: 'srsiAutoAdaptiveLevMin', atrStopMult: 'srsiAutoAtrStopMult', capUsdt: 'srsiAutoOpenCapUsdt', capCoin: 'srsiAutoOpenCapCoin' };
+    for (const [k, ck] of Object.entries(nums)) if (typeof bt[k] === 'number' && isFinite(bt[k])) cfg[ck] = bt[k];
+    const bools = { hotStop: 'srsiAutoHotStop', adaptiveLev: 'srsiAutoAdaptiveLev', atrStop: 'srsiAutoAtrStop' };
+    for (const [k, ck] of Object.entries(bools)) if (typeof bt[k] === 'boolean') cfg[ck] = bt[k];
+    if (typeof bt.danger === 'string') cfg.srsiAutoDangerAlarm = bt.danger !== 'none';
+    cfg.srsiAutoBtSnapAt = Date.now();
+    persist();
+    renderSrsiAutoPanel();
+    return true;
+  } catch (e) { return false; }
 }
 export function setTradeConfig(c) {
   if (c) {
@@ -4702,6 +4764,7 @@ function renderQuickTrade() {
     </div>
     <div class="kt-row kt-auto">
       <label class="kt-toggle"><input id="ktSrsiAuto" type="checkbox"/>SRSI自动永续合约</label>
+      <label class="kt-mini" title="GOAL9：勾选后，回测设置里跑完回测会自动把回测参数（SRSI 周期参数+杠杆/仓位/带/防爆等）应用到实盘自动交易，免逐项手配；主图同步显示实时交易信号（与实盘交易一一对应）"><input id="ktSrsiApplyBt" type="checkbox"/>应用回测参数</label>
       <label class="kt-toggle">本位
         <select id="ktSrsiMode">
           <option value="follow">跟随</option>
@@ -4844,6 +4907,15 @@ function renderQuickTrade() {
       persist();
       if (!cfg.srsiAutoOn) resetSrsiAuto(cfg.symbol);
       renderSrsiAutoPanel();
+    });
+    // GOAL9：应用回测参数开关；勾选时若已有回测快照则立即应用
+    b.querySelector('#ktSrsiApplyBt').addEventListener('change', () => {
+      cfg.srsiAutoApplyBt = b.querySelector('#ktSrsiApplyBt').checked;
+      persist();
+      if (cfg.srsiAutoApplyBt && typeof window !== 'undefined' && window.__srsiBtEff) {
+        applyBtSnapshot(_btCfgLoad(), window.__srsiBtEff);
+        renderQuickTrade();
+      }
     });
     b.querySelector('#ktSrsiMode').addEventListener('change', () => { cfg.srsiAutoMode = b.querySelector('#ktSrsiMode').value; persist(); });
     const _clampNum = (n, lo, hi, def) => { n = +n; if (!isFinite(n)) n = def; return Math.max(lo, Math.min(hi, Math.round(n))); };
@@ -5604,6 +5676,7 @@ export function runSrsiAutoTrade(sym, inj) {
     else amt = Math.min(amt, capUsdt, capCoin * price);
     if (amt <= 0) return;
     const _order = engine.placeOrder({ symbol: sym, side, lev: useLev, amt, marginMode: mm, reinvest: false, src: 'srsiAuto', reverse: isRev, sub: sub.id });
+    try { if (typeof window !== 'undefined' && _order) { (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), side, action: 'open', price, rev: isRev }); } } catch (e) {}
     if (cfg.srsiAutoAtrStop && _order && _order.extra && _order.extra.positionIndex != null) {
       const _pos = engine.S.pos[_order.extra.positionIndex];
       if (_pos) _pos.stopPx = protectiveStopPrice(_pos.entry, side, _atrPctNow, cfg.srsiAutoAtrStopMult);
@@ -5653,11 +5726,11 @@ export function runSrsiAutoTrade(sym, inj) {
     // 平盈利多单；多单亏损时仅跳过平仓（不操作），空单照开
     // srsiAutoCloseManual 关：仅平自动单；开：盈利的反向人工单也可被自动平（仍仅净盈利才平）
     const longPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'long' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-    if (longPos && longPos.pnl > 0) engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' });
+    if (longPos && longPos.pnl > 0) engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
     _attemptOpen('short');
   } else if (_canTrade && bs.edge === 'enterLower') {
     const shortPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'short' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-    if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' });
+    if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
     _attemptOpen('long');
   }
   // 宽保护性止损(ATR)：持仓的 stopPx 被突破即平仓（落于爆仓线内侧，截真趋势破位）。默认关。
@@ -5665,7 +5738,7 @@ export function runSrsiAutoTrade(sym, inj) {
     for (const p of (engine.S.pos || []).slice()) {
       if (p.sym !== sym || p.src !== 'srsiAuto' || p.stopPx == null) continue;
       const _hit = p.side === 'long' ? price <= p.stopPx : price >= p.stopPx;
-      if (_hit) engine.exitPosition(p, { reason: 'SRSI自动 宽止损(ATR)' });
+      if (_hit) engine.exitPosition(p, { reason: 'SRSI自动 宽止损(ATR)' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
     }
   }
   // SRSI 信号出口（实验旋钮，默认关）：中轨离场 + 超时离场——给亏损单"认输出口"。
@@ -6781,6 +6854,13 @@ export async function runSrsiBacktest(days, opts) {
     const res = backtestSrsiAuto(sym, kl, effConfig, principal, startMs, fund, btOpts);
     res.optLeak = _leak || null;
     _btLastDays = days;
+    // GOAL9：暴露回测参数快照 + 勾选「应用回测参数」时自动应用到实盘自动交易
+    try {
+      if (typeof window !== 'undefined') window.__srsiBtEff = effConfig;
+      if (typeof window !== 'undefined' && cfg.srsiAutoApplyBt && applyBtSnapshot(bt, effConfig) && el) {
+        el.insertAdjacentHTML('beforeend', '<div class="kt-auto-row kt-bt-cost">⚡ 已应用回测参数到实盘自动交易（SRSI 参数/杠杆/仓位/带/防爆等，' + new Date().toLocaleTimeString() + '）</div>');
+      }
+    } catch (e) { /* 忽略 */ }
     // GOAL8：向 Alpha 实验室/主图层暴露已实现日权益（仅平/爆事件，平仓点才无歧义）+ 交易明细（主图标注用）
     try {
       if (typeof window !== 'undefined' && res && res.trades) {
