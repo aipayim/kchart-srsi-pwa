@@ -3289,7 +3289,10 @@ function drawMain(ctx, sym, tf, H) {
       ctx.font = 'bold 11px sans-serif';
       ctx.fillStyle = lw > 0.02 ? '#2ecc71' : lw < -0.02 ? '#ff6b6b' : '#8899aa';
       ctx.textAlign = 'right';
-      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}%`, W - PAD_R - 4, PAD_T + 12);
+      // 更新透明化：信号随 K 线刷新周期重算（默认 60s），显示数据年龄避免误以为逐 tick 实时
+      const ageS = Math.max(0, Math.round((Date.now() - (A.updatedT || 0)) / 1000));
+      const ageTxt = ageS < 60 ? ageS + 's前' : Math.round(ageS / 60) + 'm前';
+      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}% · ${ageTxt}`, W - PAD_R - 4, PAD_T + 12);
       ctx.textAlign = 'left';
       ctx.restore();
     }
@@ -4768,6 +4771,7 @@ function renderQuickTrade() {
           <button id="ktBt365d" class="kt-btn kt-bt">1年</button>
         </div>
         <div id="ktSrsiBtResult" class="kt-bt-result"></div>
+        <div id="ktAlphaSlot" class="kt-alpha-slot"></div>
       </div>
     </div>
     <div id="ktPos" class="kt-row kt-pos"></div>`;

@@ -65,6 +65,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
   const eqs = [], ts = [], ws = [];
   let equity = 1, posW = 0, posEntry = 0, liqPrice = null;
   let fees = 0, fundingPaid = 0, liq = 0;
+  const trades = []; let openTrade = null;
   let fIdx = 0; const startT = t[i0];
   for (let i = i0; i <= endI; i++) {
     if (useFunding) {
@@ -77,7 +78,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
     }
     if (posW !== 0 && liqPrice != null) {
       const hit = cfg.h && cfg.l ? (posW > 0 ? cfg.l[i] <= liqPrice : cfg.h[i] >= liqPrice) : (posW > 0 ? c[i] <= liqPrice : c[i] >= liqPrice);
-      if (hit) { equity = 0; liq++; posW = 0; liqPrice = null; eqs.push(equity); ts.push(t[i]); ws.push(0); continue; }
+      if (hit) { equity = 0; liq++; if (openTrade) { trades.push({ ...openTrade, tOut: t[i], pOut: c[i], pnlPct: -100, eqOut: 0, reason: '爆仓' }); openTrade = null; } posW = 0; liqPrice = null; eqs.push(equity); ts.push(t[i]); ws.push(0); continue; }
     }
     if (posW !== 0 && posEntry > 0) {
       equity *= 1 + posW * levCap * (c[i] / posEntry - 1);
@@ -97,9 +98,12 @@ export function runBacktest(bars, bars1d, cfg = {}) {
       const turnover = Math.abs(w - posW) * levCap;
       const cost = turnover * equity * (FEE + SLIP);
       equity -= cost; fees += cost;
+      if (openTrade) trades.push({ ...openTrade, tOut: t[i + 1], pOut: o[i + 1], pnlPct: (equity - openTrade.eqIn) / openTrade.eqIn * 100, eqOut: equity, reason: '翻转' });
+      openTrade = posW === 0 ? null : { tIn: t[i + 1], side: w > 0 ? '多' : '空', w, pIn: o[i + 1], eqIn: equity };
       posW = w; posEntry = o[i + 1]; liqPrice = null;
     }
     eqs.push(equity); ts.push(t[i]); ws.push(w);
   }
-  return { final: eqs[eqs.length - 1], lastW: posW, ws, annRet: annualized(eqs[0], eqs[eqs.length - 1], ts), sharpe: sharpeDaily(eqs, ts), maxDD: maxDD(eqs) * 100, fees, fundingPaid, liq, eqs, ts, nBars: eqs.length };
+  if (openTrade && eqs.length) trades.push({ ...openTrade, tOut: ts[ts.length - 1], pOut: c[endI], pnlPct: (equity - openTrade.eqIn) / openTrade.eqIn * 100, eqOut: equity, reason: '末根估值' });
+  return { final: eqs[eqs.length - 1], lastW: posW, ws, trades, annRet: annualized(eqs[0], eqs[eqs.length - 1], ts), sharpe: sharpeDaily(eqs, ts), maxDD: maxDD(eqs) * 100, fees, fundingPaid, liq, eqs, ts, nBars: eqs.length };
 }

@@ -119,11 +119,52 @@ async function runBacktestUI(sym) {
       <div class="alpha-metrics alpha-oos">OOS（后1/3）：年化 ${oos ? pct(oos.annRet) : '-'} · Sharpe ${oos ? oos.sharpe.toFixed(2) : '-'} · 回撤 ${oos ? oos.maxDD.toFixed(1) + '%' : '-'}　<span class="alpha-note">${warm}</span></div>
       <div class="alpha-note">${fundNote} · 成本 taker 0.045%+滑 0.02% · 信号收盘评估→下一根开盘成交（lag=1，无前视）</div>
       ${deg}
-      <canvas class="alpha-eq" id="alphaEqCv"></canvas>`;
+      <canvas class="alpha-eq" id="alphaEqCv"></canvas>
+      <div class="alpha-row" style="margin-top:.4em"><button id="alphaReport">📄 导出回测报告（人机可读）</button><span class="alpha-note">含：条件/概要/逐笔出入场明细/机器可读 JSON，可发给 AI 复核</span></div>`;
     drawEquity($('alphaEqCv'), r.eqs);
+    _lastBt = { r, sym, mode, vt, lev, days, bars: h1.t.length, t0: r.ts[0], t1: r.ts[r.ts.length - 1], fundingN: funding.length };
+    const rb = $('alphaReport');
+    if (rb) rb.addEventListener('click', () => exportAlphaReport());
   } catch (e) {
     out.innerHTML = `<div class="alpha-err">数据拉取失败：${e.message}（可在「行情数据源」设置代理）</div>`;
   }
+}
+
+// —— GOAL6-反馈：人机可读回测报告（仿 SRSI 自动回测报告结构）——
+let _lastBt = null;
+function exportAlphaReport() {
+  if (!_lastBt) return;
+  const { r, sym, mode, vt, lev, days, bars, t0, t1, fundingN } = _lastBt;
+  const isSpot = mode === 'spot';
+  const wins = r.trades.filter(x => x.pnlPct > 0).length;
+  const losses = r.trades.length - wins;
+  const head = '| 入场时间 | 方向 | 目标权重 | 入价 | 出场时间 | 出价 | 盈亏%(权益) | 出场权益 | 原因 |';
+  const sep = '| --- | --- | --- | --- | --- | --- | --- | --- | --- |';
+  const fmtT = (ms) => new Date(ms).toISOString().slice(0, 16).replace('T', ' ');
+  const rows = r.trades.map(x => `| ${fmtT(x.tIn)} | ${x.side} | ${(x.w * 100).toFixed(1)}% | ${x.pIn.toFixed(2)} | ${fmtT(x.tOut)} | ${x.pOut.toFixed(2)} | ${x.pnlPct >= 0 ? '+' : ''}${x.pnlPct.toFixed(2)}% | ${x.eqOut.toFixed(4)} | ${x.reason} |`).join('\n');
+  const md = [
+    '# Alpha(combo) 回测报告', '',
+    '- 生成时间：' + new Date().toLocaleString(),
+    '- 币对：' + sym + ' ｜ 模式：' + (isSpot ? '现货只多' : '永续多空(现货价源+funding流)') + ' ｜ 杠杆上限：' + (isSpot ? '1x' : lev + 'x'),
+    '- 数据：' + bars + ' 根 1h K线（' + fmtT(t0) + ' ~ ' + fmtT(t1) + '，' + days.toFixed(0) + ' 天）+ 1d 收盘（动量/突破）+ funding ' + fundingN + ' 条',
+    '- 版本：' + (typeof APP_VERSION !== 'undefined' ? APP_VERSION : 'dev'), '',
+    '## 一、策略条件（信号→仓位）',
+    '- 目标权重 w = 0.5×carry(z) + 0.3×breakout(1d) + 0.2×momo(1d)，clamp [-1,1]' + (isSpot ? '，longOnly(w≥0)' : ''),
+    '- 波动率目标：' + (vt * 100).toFixed(0) + '% 年化（rolling ' + 720 + 'h σ 缩放，cap ' + (isSpot ? '1.0' : '1.5') + '×）；资金费：' + (fundingN ? '计入学费情绪 z + 永续现金流' : '不可达，carry 腿=0（降级）'),
+    '- 调仓规则：|w − 当前仓| > 5%（band）→ 下一根开盘成交（lag=1 无前视）；成本 taker 0.045%+滑 0.02%；爆仓 = bar 极值穿越 entry×(1∓(1/lev−MMR))', '',
+    '## 二、结果概要',
+    '- 期末：' + r.final.toFixed(4) + 'x ｜ 年化 ' + (r.annRet * 100).toFixed(1) + '% ｜ Sharpe ' + r.sharpe.toFixed(2) + ' ｜ 最大回撤 ' + r.maxDD.toFixed(1) + '%',
+    '- 交易 ' + r.trades.length + ' 笔（' + wins + '胜/' + losses + '负）｜ 爆仓 ' + r.liq + ' ｜ 成本：学费 ' + (r.fees * 100).toFixed(2) + '% 权益 ｜ 资金费净付 ' + (r.fundingPaid * 100).toFixed(2) + '% 权益', '',
+    '## 三、逐笔交易明细', head, sep, rows || '（无成交——预热段后无信号跨越 band）', '',
+    '## 四、机器可读数据（复制给 AI 复核）',
+    '```json',
+    JSON.stringify({ symbol: sym, mode, params: { band: 0.05, volTarget: vt, levCap: isSpot ? 1 : lev, vtCap: isSpot ? 1.0 : 1.5, longOnly: isSpot, combo: { carry: 0.5, breakout: 0.3, momo: 0.2 } }, summary: { final: r.final, annRet: r.annRet, sharpe: r.sharpe, maxDDPct: r.maxDD, liq: r.liq, feesPctEquity: r.fees, fundingPctEquity: r.fundingPaid, trades: r.trades.length, wins, losses, bars, t0, t1 }, trades: r.trades }, null, 2),
+    '```', '', '--- 报告结束（alphaCore 与 Node 权威框架逐位对齐，GOAL4/5 验证） ---',
+  ].join('\n');
+  const fname = 'alpha-' + sym + '-' + (isSpot ? 'spot' : 'perp') + '-' + Math.round(days) + 'd.txt';
+  const url = URL.createObjectURL(new Blob([md], { type: 'text/plain;charset=utf-8' }));
+  const a = document.createElement('a'); a.href = url; a.download = fname; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 // —— paper：确定性重放（每 tick 用同参 runBacktest 重算 [startT, now]，与回测逐位一致）——
@@ -178,6 +219,19 @@ export function initAlphaLab() {
   // 折叠初态：默认收起（kchart.html 初始 closed）；展开过的用户记忆在 localStorage
   const wrap = document.getElementById('alphaLabWrap');
   if (wrap && localStorage.getItem('pwa_alpha_open') === '1') wrap.classList.remove('closed');
+  // 融合进「回测设置」面板：把整块移入 kt-bt-section 的 ktAlphaSlot（交易条骨架只建一次，幂等）；
+  // 槽不存在（交易条未开/主系统）时留在原位，250ms 兑底重试×20
+  if (wrap) {
+    const mount = () => {
+      const slot = document.getElementById('ktAlphaSlot');
+      if (slot && wrap.parentElement !== slot) slot.appendChild(wrap);
+      return !!(slot && wrap.parentElement === slot);
+    };
+    if (!mount()) {
+      let n = 0;
+      const t = setInterval(() => { if (mount() || ++n > 20) clearInterval(t); }, 250);
+    }
+  }
   window.__alphaLabHead = () => {
     const w = document.getElementById('alphaLabWrap');
     if (w) localStorage.setItem('pwa_alpha_open', w.classList.contains('closed') ? '0' : '1');
