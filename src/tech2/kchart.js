@@ -4941,8 +4941,8 @@ function renderQuickTrade() {
     });
     b.querySelector('#ktBtOptOn').addEventListener('change', () => { _btSet({ optEnabled: b.querySelector('#ktBtOptOn').checked }); });
     // GOAL8：叠加Alpha组合（回测完成后自动算组合行）/主图标注回测信号（重画）
-    b.querySelector('#ktBtAlphaCombo').addEventListener('change', () => { _btSet({ alphaCombo: b.querySelector('#ktBtAlphaCombo').checked }); });
-    b.querySelector('#ktBtMarks').addEventListener('change', () => { _btSet({ btMarks: b.querySelector('#ktBtMarks').checked }); renderKChart(); });
+    b.querySelector('#ktBtAlphaCombo').addEventListener('change', () => { _btSet({ alphaCombo: b.querySelector('#ktBtAlphaCombo').checked }, false); });
+    b.querySelector('#ktBtMarks').addEventListener('change', () => { _btSet({ btMarks: b.querySelector('#ktBtMarks').checked }, false); renderKChart(); });
     b.querySelector('#ktBtOptIntOn').addEventListener('change', () => { _btSet({ optIntervalOn: b.querySelector('#ktBtOptIntOn').checked }); });
     b.querySelector('#ktBtOptInt').addEventListener('input', () => { _btSet({ optIntervalH: _clampNum(b.querySelector('#ktBtOptInt').value, 0.5, 168, 5) }); });
     b.querySelector('#ktBtOptNoTr').addEventListener('input', () => { _btSet({ optNoTradeH: _clampNum(b.querySelector('#ktBtOptNoTr').value, 0.5, 168, 5) }); });
@@ -6756,6 +6756,7 @@ export async function runSrsiBacktest(days, opts) {
         _btFetch(sym, '4h', fetchStart, endMs, null, maxBars)
       ]);
       kl = { '15m': k15, '1h': k1h, '30m': k30, '4h': k4h };
+      try { const _n = (x) => x ? (Array.isArray(x) ? x.length : (x.closes || []).length) : 0; console.log('[BT-FETCH] 15m=' + _n(k15) + ' 1h=' + _n(k1h) + ' 30m=' + _n(k30) + ' 4h=' + _n(k4h)); } catch (e) {}
       _btWriteRaw(sym, days, kl);
     }
     const bt = _btCfgLoad();

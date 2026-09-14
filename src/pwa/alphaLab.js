@@ -357,16 +357,18 @@ export async function updateAlphaSignal(sym, tf, force = false) {
 export async function comboWithSrsi(srsi) {
   const fail = (msg) => ({ html: `<div class="alpha-err">🧪 Alpha 组合计算失败：${msg}</div>`, text: '' });
   try {
-    if (!srsi || !Array.isArray(srsi.bal) || srsi.bal.length < 40) return fail('SRSI 回测数据不足');
+    if (!srsi || !Array.isArray(srsi.bal) || srsi.bal.length < 8) return fail('SRSI 回测数据不足(bal=' + (srsi && srsi.bal ? srsi.bal.length : 'null') + ')');
     const t0 = srsi.bal[0][0], t1 = srsi.bal[srsi.bal.length - 1][0];
     const days = Math.max(2, Math.round((t1 - t0) / DAY) + 1);
     const need = Math.min(60000, days * 24 + 240);
+    // 1d 需保底 370 根（loadBars 门槛 200 + alignClosed/carryZ 预热），短窗口也要拉足年线
+    const dStart = Math.min(t0 - 60 * DAY, t1 - 370 * DAY);
     const [h1, d1] = await Promise.all([
       loadBars(srsi.sym, '1h', t0 - 40 * DAY, t1 + DAY, need),
-      loadBars(srsi.sym, '1d', t0 - 60 * DAY, t1 + DAY, Math.round(need / 24) + 210),
+      loadBars(srsi.sym, '1d', dStart, t1 + DAY, Math.round((t1 - dStart) / 24 / 3600e3) + 260),
     ]);
     let funding = [];
-    try { funding = await loadFunding(srsi.sym, t0 - 100 * DAY); } catch (e) { /* carry 腿 0 */ }
+    try { funding = await loadFunding(srsi.sym, dStart - 100 * DAY); } catch (e) { /* carry 腿 0 */ }
     const r = runBacktest(h1, d1, { start: t0, end: t1 + HOUR, band: 0.05, funding, useFunding: true, levCap: 3, volTarget: 0.3, vtCap: 1.5, longOnly: false });
     if (r.error) return fail(r.error);
     // 两策略日权益对齐（UTC 日索引 + 前值填充）

@@ -226,7 +226,12 @@ export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, 
       + '&endTime=' + end + '&limit=1000';
     let raw;
     try { raw = await fetchApiData(path, 8000); }
-    catch (e) { break; }
+    catch (e) {
+      // GOAL8 健性修复：第一页（尚无数据）失败时重试一次——首请求可能因 DNS/TLS 冷启动超过 8s 超时，
+      // 直接 break 会把整段历史判为空（表现为『15m 数据不足』）；第二页起失败才放弃（已有一段数据）。
+      if (!all.length) { await new Promise(r => setTimeout(r, 600)); try { raw = await fetchApiData(path, 12000); } catch (e2) { break; } }
+      else break;
+    }
     if (!raw || !raw.length) break;
     all = raw.concat(all);             // raw 为本批较早数据，拼到队首
     if (onProgress) onProgress(all.length);
