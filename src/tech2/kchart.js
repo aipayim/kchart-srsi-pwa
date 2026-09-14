@@ -9,6 +9,7 @@ import { fetchKlinesRange, fetchFundingRate } from '../pwa/data.js';
 export { fetchKlinesRange, fetchFundingRate };
 import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
+import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
 import { fundingPayment, FUNDING_HOURS } from '../engine/funding.js';
@@ -292,6 +293,12 @@ export function defaultKConfig() {
     srsiAutoReversePct: 0,      // 反手单仓位%（0=继承正常开仓%）
     srsiAutoReverseLev: 0,      // 反手单杠杆（0=继承正常杠杆）
     srsiAutoDangerAlarm: true,  // 危险信号红色光晕提醒（仅提醒，不触发操作）
+    srsiAutoStopPct: 0,         // 硬止损%(价格逆向达此即平仓；0=关，沿用旧逻辑仅强平)。预防爆仓主力：把 ~14% 强平损失压缩为可控小损
+    srsiAutoAdaptiveLev: false, // 自适应杠杆：波动放大→降杠杆(减少单笔爆仓率)；默认关，开=有效
+    srsiAutoAdaptiveLevMin: 2,  // 自适应杠杆下限(倍数)
+    srsiAutoAtrStop: false,     // 宽保护性止损(ATR 基准)：mult×受监督ATR% 为价格止损(落于爆仓线内侧)；默认关
+    srsiAutoAtrStopMult: 2.0,   // 宽止损倍数(×ATR%)
+    srsiAutoRevConfirm: 3,      // 防爆反手确认阈值%：危险信号触发后，需价格逆向突破此幅度确认趋势破位才开反手(revconf)，避免接飞刀
     srsiAutoCloseManual: false, // 自动可平人工单：关=仅平自动单；开=盈利的反向人工单也可被自动平仓（仍仅净盈利才平）
     srsiAutoBonusBig: 3,        // 大方向一致加成比例（%）—— 仅用于 #2 方向合力展示
     srsiAutoBonusMid: 2,        // 中方向一致加成比例（%）
@@ -393,7 +400,13 @@ function normalizeCfg(c) {
   if (typeof c.srsiAutoLev !== 'number' || !(c.srsiAutoLev >= 1 && c.srsiAutoLev <= 30)) c.srsiAutoLev = 5;
   if (typeof c.srsiAutoBasePct !== 'number' || !(c.srsiAutoBasePct >= 1 && c.srsiAutoBasePct <= 30)) c.srsiAutoBasePct = 10;
   if (typeof c.srsiAutoMaxSame !== 'number' || !(c.srsiAutoMaxSame >= 1 && c.srsiAutoMaxSame <= 10)) c.srsiAutoMaxSame = 3;
-  if (!['none', 'filter', 'reverse'].includes(c.srsiAutoDanger)) c.srsiAutoDanger = 'none';
+  if (!['none', 'filter', 'reverse', 'smart', 'revconf'].includes(c.srsiAutoDanger)) c.srsiAutoDanger = 'none';
+  if (typeof c.srsiAutoStopPct !== 'number' || !(c.srsiAutoStopPct >= 0 && c.srsiAutoStopPct <= 50)) c.srsiAutoStopPct = 0;
+  if (typeof c.srsiAutoAdaptiveLev !== 'boolean') c.srsiAutoAdaptiveLev = false;
+  if (typeof c.srsiAutoAdaptiveLevMin !== 'number' || !(c.srsiAutoAdaptiveLevMin >= 1 && c.srsiAutoAdaptiveLevMin <= 30)) c.srsiAutoAdaptiveLevMin = 2;
+  if (typeof c.srsiAutoAtrStop !== 'boolean') c.srsiAutoAtrStop = false;
+  if (typeof c.srsiAutoAtrStopMult !== 'number' || !(c.srsiAutoAtrStopMult >= 0.1 && c.srsiAutoAtrStopMult <= 20)) c.srsiAutoAtrStopMult = 2.0;
+  if (typeof c.srsiAutoRevConfirm !== 'number' || !(c.srsiAutoRevConfirm >= 0 && c.srsiAutoRevConfirm <= 20)) c.srsiAutoRevConfirm = 3;
   if (typeof c.srsiAutoReversePct !== 'number' || !(c.srsiAutoReversePct >= 0 && c.srsiAutoReversePct <= 100)) c.srsiAutoReversePct = 0;
   if (typeof c.srsiAutoReverseLev !== 'number' || !(c.srsiAutoReverseLev >= 0 && c.srsiAutoReverseLev <= 30)) c.srsiAutoReverseLev = 0;
   if (typeof c.srsiAutoDangerAlarm !== 'boolean') c.srsiAutoDangerAlarm = true;
@@ -4606,12 +4619,21 @@ function renderQuickTrade() {
       <span class="kt-mini">危险信号防爆
         <label><input type="radio" name="ktSrsiDanger" value="none" checked/>关</label>
         <label><input type="radio" name="ktSrsiDanger" value="filter"/>预防爆仓</label>
+        <label><input type="radio" name="ktSrsiDanger" value="smart"/>预防爆仓(智能)</label>
         <label><input type="radio" name="ktSrsiDanger" value="reverse"/>防爆反手</label>
+        <label><input type="radio" name="ktSrsiDanger" value="revconf"/>防爆反手(确认)</label>
       </span>
+      <label class="kt-mini">反手确认%<input id="ktSrsiRevConfirm" class="kt-num" type="number" min="0" max="20" step="0.5"/> (revconf)</label>
       <label class="kt-mini">反手开仓%<input id="ktSrsiRevPct" class="kt-num" type="number" min="0" max="100" step="1"/> (0=同正常)</label>
       <label class="kt-mini">反手杠杆x<input id="ktSrsiRevLev" class="kt-num" type="number" min="0" max="30" step="1"/></label>
       <label class="kt-mini"><input id="ktSrsiDangerAlarm" type="checkbox"/>危险信号红色提醒</label>
       <label class="kt-mini"><input id="ktSrsiHotStop" type="checkbox"/>热停开(1h ATR 放大禁新仓)</label>
+    </div>
+    <div class="kt-row kt-auto-risk">
+      <label class="kt-mini"><input id="ktSrsiAdaptiveLev" type="checkbox"/>自适应杠杆(波动放大降杠杆)</label>
+      <label class="kt-mini">自适应下限x<input id="ktSrsiAdaptiveLevMin" class="kt-num" type="number" min="1" max="30" step="1"/></label>
+      <label class="kt-mini"><input id="ktSrsiAtrStop" type="checkbox"/>宽保护性止损(ATR)</label>
+      <label class="kt-mini">止损倍数×ATR<input id="ktSrsiAtrStopMult" class="kt-num" type="number" min="0.1" max="20" step="0.1"/></label>
     </div>
     <div class="kt-row kt-auto-opt">
       <label class="kt-mini"><input id="ktSrsiOpt" type="checkbox"/>自动优选4周期</label>
@@ -4660,10 +4682,20 @@ function renderQuickTrade() {
             <label><input type="radio" name="btSrsiDanger" value="none" checked/>关</label>
             <label><input type="radio" name="btSrsiDanger" value="filter"/>预防爆仓</label>
             <label><input type="radio" name="btSrsiDanger" value="reverse"/>防爆反手</label>
+            <label><input type="radio" name="btSrsiDanger" value="smart"/>预防爆仓(智能)</label>
+            <label><input type="radio" name="btSrsiDanger" value="revconf"/>防爆反手(确认)</label>
           </span>
           <label class="kt-mini">反手开仓%<input id="btSrsiRevPct" class="kt-num" type="number" min="0" max="100" step="1"/> (0=同正常)</label>
           <label class="kt-mini">反手杠杆x<input id="btSrsiRevLev" class="kt-num" type="number" min="0" max="30" step="1"/></label>
+          <label class="kt-mini">反手确认%<input id="btSrsiRevConfirm" class="kt-num" type="number" min="0" max="20" step="0.5"/> (revconf:价格逆向突破才开反)</label>
+          <label class="kt-mini">硬止损%<input id="btSrsiStop" class="kt-num" type="number" min="0" max="50" step="0.5"/> (0=关；均值回归策略慎用)</label>
           <label class="kt-mini"><input id="ktBtHotStop" type="checkbox"/>热停开(1h ATR 放大禁新仓)</label>
+        </div>
+        <div class="kt-row kt-bt-risk">
+          <label class="kt-mini"><input id="btBtAdaptiveLev" type="checkbox"/>自适应杠杆(波动放大降杠杆)</label>
+          <label class="kt-mini">下限x<input id="btBtAdaptiveLevMin" class="kt-num" type="number" min="1" max="30" step="1"/></label>
+          <label class="kt-mini"><input id="btBtAtrStop" type="checkbox"/>宽保护性止损(ATR)</label>
+          <label class="kt-mini">×ATR<input id="btBtAtrStopMult" class="kt-num" type="number" min="0.1" max="20" step="0.1"/></label>
         </div>
         <div class="kt-row kt-auto-bt-opt">
           <span class="kt-mini">自动优选周期
@@ -4730,8 +4762,14 @@ function renderQuickTrade() {
     }));
     b.querySelector('#ktSrsiRevPct').addEventListener('input', () => { cfg.srsiAutoReversePct = Math.max(0, Math.min(100, +b.querySelector('#ktSrsiRevPct').value || 0)); persist(); });
     b.querySelector('#ktSrsiRevLev').addEventListener('input', () => { cfg.srsiAutoReverseLev = Math.max(0, Math.min(30, +b.querySelector('#ktSrsiRevLev').value || 0)); persist(); });
+    const _revConfEl = b.querySelector('#ktSrsiRevConfirm');
+    if (_revConfEl) _revConfEl.addEventListener('input', () => { cfg.srsiAutoRevConfirm = Math.max(0, Math.min(20, +_revConfEl.value || 0)); persist(); });
     b.querySelector('#ktSrsiDangerAlarm').addEventListener('change', () => { cfg.srsiAutoDangerAlarm = !!b.querySelector('#ktSrsiDangerAlarm').checked; persist(); });
     b.querySelector('#ktSrsiHotStop').addEventListener('change', () => { cfg.srsiAutoHotStop = !!b.querySelector('#ktSrsiHotStop').checked; persist(); });
+    b.querySelector('#ktSrsiAdaptiveLev').addEventListener('change', () => { cfg.srsiAutoAdaptiveLev = !!b.querySelector('#ktSrsiAdaptiveLev').checked; persist(); });
+    b.querySelector('#ktSrsiAdaptiveLevMin').addEventListener('input', () => { cfg.srsiAutoAdaptiveLevMin = _clampNum(b.querySelector('#ktSrsiAdaptiveLevMin').value, 1, 30, 2); persist(); });
+    b.querySelector('#ktSrsiAtrStop').addEventListener('change', () => { cfg.srsiAutoAtrStop = !!b.querySelector('#ktSrsiAtrStop').checked; persist(); });
+    b.querySelector('#ktSrsiAtrStopMult').addEventListener('input', () => { cfg.srsiAutoAtrStopMult = _clampNum(b.querySelector('#ktSrsiAtrStopMult').value, 0.1, 20, 2.0); persist(); });
     b.querySelector('#ktSrsiOpt').addEventListener('change', () => {
       cfg.srsiAutoOptEnabled = b.querySelector('#ktSrsiOpt').checked;
       persist();
@@ -4774,7 +4812,13 @@ function renderQuickTrade() {
     }));
     b.querySelector('#btSrsiRevPct').addEventListener('input', () => { _btSet({ reversePct: Math.max(0, Math.min(100, +b.querySelector('#btSrsiRevPct').value || 0)) }); });
     b.querySelector('#btSrsiRevLev').addEventListener('input', () => { _btSet({ reverseLev: Math.max(0, Math.min(30, +b.querySelector('#btSrsiRevLev').value || 0)) }); });
+    b.querySelector('#btSrsiRevConfirm').addEventListener('input', () => { _btSet({ revConfirm: Math.max(0, Math.min(20, +b.querySelector('#btSrsiRevConfirm').value || 0)) }); });
+    b.querySelector('#btSrsiStop').addEventListener('input', () => { _btSet({ stopPct: Math.max(0, Math.min(50, +b.querySelector('#btSrsiStop').value || 0)) }); });
     b.querySelector('#ktBtHotStop').addEventListener('change', () => { _btSet({ hotStop: b.querySelector('#ktBtHotStop').checked }); });
+    b.querySelector('#btBtAdaptiveLev').addEventListener('change', () => { _btSet({ adaptiveLev: b.querySelector('#btBtAdaptiveLev').checked }); });
+    b.querySelector('#btBtAdaptiveLevMin').addEventListener('input', () => { _btSet({ adaptiveLevMin: _clampNum(b.querySelector('#btBtAdaptiveLevMin').value, 1, 30, 2) }); });
+    b.querySelector('#btBtAtrStop').addEventListener('change', () => { _btSet({ atrStop: b.querySelector('#btBtAtrStop').checked }); });
+    b.querySelector('#btBtAtrStopMult').addEventListener('input', () => { _btSet({ atrStopMult: _clampNum(b.querySelector('#btBtAtrStopMult').value, 0.1, 20, 2.0) }); });
     const _btOptSync = () => {
       const tfs = [];
       if (b.querySelector('#ktBtOpt15').checked) tfs.push('15m');
@@ -4861,12 +4905,19 @@ function renderQuickTrade() {
   if (capCoinEl) capCoinEl.value = cfg.srsiAutoOpenCapCoin;
   const dEl = bar.querySelector('input[name="ktSrsiDanger"][value="' + (cfg.srsiAutoDanger || 'none') + '"]');
   if (dEl) dEl.checked = true;
-  const revPctEl = bar.querySelector('#ktSrsiRevPct'), revLevEl = bar.querySelector('#ktSrsiRevLev'), alarmEl = bar.querySelector('#ktSrsiDangerAlarm');
+  const revPctEl = bar.querySelector('#ktSrsiRevPct'), revLevEl = bar.querySelector('#ktSrsiRevLev'), alarmEl = bar.querySelector('#ktSrsiDangerAlarm'), revConfEl = bar.querySelector('#ktSrsiRevConfirm');
   if (revPctEl) revPctEl.value = cfg.srsiAutoReversePct;
   if (revLevEl) revLevEl.value = cfg.srsiAutoReverseLev;
+  if (revConfEl) revConfEl.value = cfg.srsiAutoRevConfirm;
   if (alarmEl) alarmEl.checked = !!cfg.srsiAutoDangerAlarm;
   const hotStopEl = bar.querySelector('#ktSrsiHotStop');
   if (hotStopEl) hotStopEl.checked = !!cfg.srsiAutoHotStop;
+  const adpLevEl = bar.querySelector('#ktSrsiAdaptiveLev'), adpLevMinEl = bar.querySelector('#ktSrsiAdaptiveLevMin');
+  const atrStopEl = bar.querySelector('#ktSrsiAtrStop'), atrStopMultEl = bar.querySelector('#ktSrsiAtrStopMult');
+  if (adpLevEl) adpLevEl.checked = !!cfg.srsiAutoAdaptiveLev;
+  if (adpLevMinEl) adpLevMinEl.value = cfg.srsiAutoAdaptiveLevMin;
+  if (atrStopEl) atrStopEl.checked = !!cfg.srsiAutoAtrStop;
+  if (atrStopMultEl) atrStopMultEl.value = cfg.srsiAutoAtrStopMult;
   const optEl = bar.querySelector('#ktSrsiOpt'), intEl = bar.querySelector('#ktSrsiOptInt'), noTrEl = bar.querySelector('#ktSrsiOptNoTr');
   if (optEl) optEl.checked = cfg.srsiAutoOptEnabled;
   if (intEl) intEl.value = cfg.srsiAutoOptIntervalH;
@@ -4899,7 +4950,13 @@ function renderQuickTrade() {
   if (dEl2) dEl2.checked = true;
   _btVal('btSrsiRevPct', _btCfg.reversePct);
   _btVal('btSrsiRevLev', _btCfg.reverseLev);
+  _btVal('btSrsiRevConfirm', _btCfg.revConfirm);
+  _btVal('btSrsiStop', _btCfg.stopPct);
   _btChk('ktBtHotStop', _btCfg.hotStop);
+  _btChk('btBtAdaptiveLev', _btCfg.adaptiveLev);
+  _btVal('btBtAdaptiveLevMin', _btCfg.adaptiveLevMin);
+  _btChk('btBtAtrStop', _btCfg.atrStop);
+  _btVal('btBtAtrStopMult', _btCfg.atrStopMult);
   // 回测设置面板收起/展开（默认收起，记忆状态）
   const btBody = bar.querySelector('#ktBtBody'), btTog = bar.querySelector('#ktBtToggle');
   if (btBody) btBody.style.display = _btCfg.collapsed ? 'none' : '';
@@ -5306,10 +5363,21 @@ export function bandEdge(prevBand, k, d, opts, armed = false) {
 export function resolveEntryDecision(side, { danger = false, hotStop = false, dangerMode = 'none' } = {}) {
   // 防爆反手：危险信号命中且模式=reverse → 直接开反方向(反手单)
   if (danger && dangerMode === 'reverse') return { open: true, side: side === 'long' ? 'short' : 'long', rev: true, blockedBy: null };
-  // 预防爆仓：危险信号命中且模式=filter → 避开危险单(不开)
-  if (danger && dangerMode === 'filter') return { open: false, side, rev: false, blockedBy: 'danger' };
+  // 预防爆仓：危险信号命中且模式=filter/smart → 避开危险单(不开)
+  if (danger && (dangerMode === 'filter' || dangerMode === 'smart')) return { open: false, side, rev: false, blockedBy: 'danger' };
   if (hotStop) return { open: false, side, rev: false, blockedBy: 'hotstop' };
   return { open: true, side, rev: false, blockedBy: null };
+}
+
+// 预防爆仓(智能)判定：根据归因(liqStudy)真正区分“会被强平”的开仓——
+// 强平由价格逆向走满 ~1/lev 触发，与 EMA120 背离几乎无关；真正高命中因子是“接飞刀/追涨杀跌”：
+// 价格远离 1h EMA(≥SMART_EMA1H_PCT) 或 近 4 根 15m 累计振幅≥SMART_CANDLE_PCT。
+// ctx: { priceVsEma1h, recentCandlePct }。纯函数，可单测。
+export function smartDanger(ctx) {
+  if (!ctx) return false;
+  if (typeof ctx.priceVsEma1h === 'number' && Math.abs(ctx.priceVsEma1h) >= THRESH.SMART_EMA1H_PCT) return true;
+  if (typeof ctx.recentCandlePct === 'number' && Math.abs(ctx.recentCandlePct) >= THRESH.SMART_CANDLE_PCT) return true;
+  return false;
 }
 
 // 进场触发带解析：upper/lower 为 0（或 falsy）= 使用该周期「15m 优选后的上下限带」
@@ -5402,25 +5470,56 @@ export function runSrsiAutoTrade(sym, inj) {
     // #4 乘法缩放：基准% × (1 ± 合计%)，未优选或反向的周期扣对应权重
     const scale = computeSizeScale(side, srsiDir, _sizeWeights, cfg.srsiOptSource);
     const basePct = isRev && cfg.srsiAutoReversePct > 0 ? cfg.srsiAutoReversePct : cfg.srsiAutoBasePct;
-    const useLev = isRev && cfg.srsiAutoReverseLev > 0 ? cfg.srsiAutoReverseLev : cfg.srsiAutoLev;
+    let useLev = isRev && cfg.srsiAutoReverseLev > 0 ? cfg.srsiAutoReverseLev : cfg.srsiAutoLev;
+    const _atrPctNow = (_atr15last != null && price) ? _atr15last / price * 100 : null;
+    // 自适应杠杆：波动放大(当前ATR%>滚动中位)→降杠杆；平静→回到基准。默认关。
+    if (cfg.srsiAutoAdaptiveLev) {
+      st.atrMed = updateAtrMedian(st.atrMed, _atrPctNow);
+      useLev = adaptiveLeverage({ baseLev: useLev, atrPct: _atrPctNow, medianAtrPct: st.atrMed || _atrPctNow, minLev: cfg.srsiAutoAdaptiveLevMin });
+    }
     let amt = avail * basePct / 100 * scale;
     const capUsdt = cfg.srsiAutoOpenCapUsdt > 0 ? cfg.srsiAutoOpenCapUsdt : Infinity;
     const capCoin = cfg.srsiAutoOpenCapCoin > 0 ? cfg.srsiAutoOpenCapCoin : Infinity;
     if (isCoin) amt = Math.min(amt, capCoin, capUsdt / price);
     else amt = Math.min(amt, capUsdt, capCoin * price);
     if (amt <= 0) return;
-    engine.placeOrder({ symbol: sym, side, lev: useLev, amt, marginMode: mm, reinvest: false, src: 'srsiAuto', reverse: isRev, sub: sub.id });
+    const _order = engine.placeOrder({ symbol: sym, side, lev: useLev, amt, marginMode: mm, reinvest: false, src: 'srsiAuto', reverse: isRev, sub: sub.id });
+    if (cfg.srsiAutoAtrStop && _order && _order.extra && _order.extra.positionIndex != null) {
+      const _pos = engine.S.pos[_order.extra.positionIndex];
+      if (_pos) _pos.stopPx = protectiveStopPrice(_pos.entry, side, _atrPctNow, cfg.srsiAutoAtrStopMult);
+    }
     st.lastTradeTs = Date.now();
   };
   // 危险信号防爆/反手：none=关；filter=避开危险单(沿用 emaOpp2 基线，保持(9)预防爆仓结果不变)；
   // reverse=防爆反手(用更聪明的 predictDanger 多因子信号→自动开反方向)
+  // 防爆反手(确认) 挂单状态：危险触发后记录，价格确认破位才开反手（跨 tick 保留）
+  st.pendingRev = (cfg.srsiAutoDanger === 'revconf') ? (st.pendingRev || { long: null, short: null }) : null;
+  const _resolvePendingRev = () => {
+    if (cfg.srsiAutoDanger !== 'revconf' || !st.pendingRev) return;
+    for (const ps of ['long', 'short']) {
+      const pend = st.pendingRev[ps]; if (!pend) continue;
+      const moved = ps === 'long' ? (price - pend.price) / pend.price * 100 : (pend.price - price) / pend.price * 100; // 危险方向(反向)已走幅度%
+      if (moved >= cfg.srsiAutoRevConfirm) { _tryOpen(ps === 'long' ? 'short' : 'long', true); st.pendingRev[ps] = null; }
+      else if (Date.now() - pend.ts > 50 * 3600 * 1000) st.pendingRev[ps] = null; // 超时(~50h)未确认作废
+    }
+  };
   const _attemptOpen = (side) => {
     const _emaDanger = _danger(side);
     const _pd = predictDanger({ dir: side, k15: bs.k, atrPct15: (_atr15last != null && price) ? _atr15last / price * 100 : null, emaOpp2Weak: _emaDanger, priceVsEma1h: (_e1h != null && _e1h !== 0) ? (price - _e1h) / _e1h * 100 : null, priceVsEma15: (_e15 != null && _e15 !== 0) ? (price - _e15) / _e15 * 100 : null, recentCandlePct: _recentPct });
-    const danger = cfg.srsiAutoDanger === 'reverse' ? _pd.danger : _emaDanger;
+    if (cfg.srsiAutoDanger === 'revconf') {
+      // 危险(EMA120 背离≥2)→挂起等确认；非危险→正常开
+      if (_emaDanger) { st.pendingRev[side] = { price, ts: Date.now() }; return; }
+      const dec = resolveEntryDecision(side, { danger: false, hotStop: cfg.srsiAutoHotStop, dangerMode: 'revconf' });
+      if (!dec.open) return;
+      _tryOpen(dec.side, dec.rev);
+      return;
+    }
+    const danger = cfg.srsiAutoDanger === 'reverse' ? _pd.danger
+      : cfg.srsiAutoDanger === 'smart' ? smartDanger({ priceVsEma1h: (_e1h != null && _e1h !== 0) ? (price - _e1h) / _e1h * 100 : null, recentCandlePct: _recentPct, k15: bs.k, dir: side })
+      : _emaDanger;
     const dec = resolveEntryDecision(side, {
       danger,
-      hotStop: false, // 反手单绕过热停开，由 _tryOpen 内部对普通单施加
+      hotStop: cfg.srsiAutoHotStop,
       dangerMode: cfg.srsiAutoDanger
     });
     if (!dec.open) return;
@@ -5437,6 +5536,15 @@ export function runSrsiAutoTrade(sym, inj) {
     if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' });
     _attemptOpen('long');
   }
+  // 宽保护性止损(ATR)：持仓的 stopPx 被突破即平仓（落于爆仓线内侧，截真趋势破位）。默认关。
+  if (cfg.srsiAutoAtrStop) {
+    for (const p of (engine.S.pos || []).slice()) {
+      if (p.sym !== sym || p.src !== 'srsiAuto' || p.stopPx == null) continue;
+      const _hit = p.side === 'long' ? price <= p.stopPx : price >= p.stopPx;
+      if (_hit) engine.exitPosition(p, { reason: 'SRSI自动 宽止损(ATR)' });
+    }
+  }
+  _resolvePendingRev();
 }
 
 // 自动状态面板渲染（每秒刷新）
@@ -5488,7 +5596,7 @@ export function renderSrsiAutoPanel() {
   const _availOk = sub && ((sub.bal > 0) || ((sub.coins && sub.coins[cfg.symbol] > 0)));
   const _mmOk = aLong < cfg.srsiAutoMaxSame && aShort < cfg.srsiAutoMaxSame;
   const light = (on, t) => `<span class="kt-light ${on ? 'on' : 'off'}">${on ? '●' : '○'} ${t}</span>`;
-    const _dangerLabel = cfg.srsiAutoDanger === 'reverse' ? '防爆反手(模型)' : cfg.srsiAutoDanger === 'filter' ? '预防爆仓' : '防爆关';
+    const _dangerLabel = cfg.srsiAutoDanger === 'reverse' ? '防爆反手(模型)' : cfg.srsiAutoDanger === 'filter' ? '预防爆仓' : cfg.srsiAutoDanger === 'smart' ? '预防爆仓(智能)' : cfg.srsiAutoDanger === 'revconf' ? '防爆反手(确认)' : '防爆关';
   const _dangerOn = cfg.srsiAutoDanger !== 'none';
   const lights = [
     light(!!eng, '引擎'), light(!!sub, '子账户'), light(price != null, '行情'),
@@ -5550,6 +5658,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   const kd1hRows = c1h.length ? buildSrsiOverview(['1h'], p1h, { '1h': c1h }).rows : [];
   const kd30Rows = c30.length ? buildSrsiOverview(['30m'], p30, { '30m': c30 }).rows : [];
   const atr15 = atrClose(c15, 14);
+  const medianAtrPct15 = medianOf(atr15.map((a, idx) => (a != null && c15[idx]) ? a / c15[idx] * 100 : null)) || 0; // 全样本中位 ATR%（自适应杠杆基准）
   const ema15 = ema(c15, 120); // 15m EMA120（≈30h 趋势），供强平归因 priceVsEma
   const ema1h = ema(c1h, 120); // 1h EMA120（≈5d 趋势）
   // v2 热停开：1h ATR > 1.3×sma20(1h ATR) 时禁止新开普通单（反手仍允许）。仅 opts.hotStop 开启时计算，默认不触发。
@@ -5609,9 +5718,13 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   let totalFee = 0, totalSlip = 0, totalFunding = 0;
   let liqCount = 0, liqLoss = 0;
   let dangerHits = 0, reverseOpens = 0, reversePnl = 0, pdHits = 0; // 危险信号触发次数(emaOpp2基线,跨模式一致) / 防爆反手开单次数 / 反手单累计盈亏 / 多因子预测危险次数(供reverse触发)
+  let stopCount = 0, stopLoss = 0; // 硬止损平仓次数/累计盈亏（预防爆仓主力：把 ~14% 强平损失压缩为可控小损）
+  const stopPct = (typeof config.srsiAutoStopPct === 'number' && config.srsiAutoStopPct > 0) ? config.srsiAutoStopPct : 0;
+  const revConfirm = (typeof config.srsiAutoRevConfirm === 'number' && config.srsiAutoRevConfirm > 0) ? config.srsiAutoRevConfirm : 3;
+  const pendingRev = { long: null, short: null }; // revconf：危险信号触发后待价格确认才开的反手挂单
   const liqLog = []; // 强平单归因日志：开仓/强平时刻的技术面上下文（供第三方 AI 找爆仓共同点）
   const openLog = []; // 全部开仓快照（含未爆仓，作对照组）：开仓时技术面上下文 + 是否最终爆仓
-  const grossPnl = (side, entry, exit, amtUsdt) => (side === 'long' ? (exit - entry) : (entry - exit)) / entry * effLev * amtUsdt;
+  const grossPnl = (side, entry, exit, amtUsdt, useLev) => (side === 'long' ? (exit - entry) : (entry - exit)) / entry * (useLev || effLev) * amtUsdt;
   for (let i = lo; i < c15.length; i++) {
     const price = c15[i];
     const k = kd15.k[i], d = kd15.d[i];
@@ -5621,7 +5734,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
         while (fundIdx < fundArr.length && fundArr[fundIdx].fundingTime <= t15[i]) {
           const fr = fundArr[fundIdx]; fundIdx++;
           if (fr.fundingTime > p.openT) {
-            const notional = p.amtUsdt * lev;
+            const notional = p.amtUsdt * (p.lev || lev);
             const pay = fundingPayment({ side: p.side, notional, fundingRate: +fr.fundingRate });
             if (p.marginMode === 'usdt') avail += pay;
             else coinAvail += pay / p.entry;
@@ -5636,8 +5749,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
         if (p.liqPrice == null) continue;
         const hit = p.side === 'long' ? price <= p.liqPrice : price >= p.liqPrice;
         if (!hit) continue;
-        const closeFee = p.amtUsdt * lev * feeRate;
-        const gp = grossPnl(p.side, p.entry, p.liqPrice, p.amtUsdt);
+        const closeFee = p.amtUsdt * (p.lev || lev) * feeRate;
+        const gp = grossPnl(p.side, p.entry, p.liqPrice, p.amtUsdt, p.lev);
         const pnl = gp - closeFee - (p.openFee || 0) - (p.openSlip || 0) + p.fundingAcc;
         const marginCoin = p.amtUsdt / p.entry;
         if (p.marginMode === 'usdt') { avail += p.amtUsdt + gp; avail -= closeFee; }
@@ -5666,6 +5779,32 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
           fundingAcc: p.fundingAcc
         });
          trades.push({ t: t15[i], side: p.side, action: 'liquidate', price: p.liqPrice, gross: gp, fee: (p.openFee || 0) + closeFee, slip: (p.openSlip || 0), funding: p.fundingAcc, pnl, bal: (p.marginMode === 'usdt' ? avail : coinAvail * p.liqPrice), k, d, liq: true, liqPrice: p.liqPrice, amt: p.amtUsdt, lev: p.lev, marginMode: p.marginMode, reverse: p.reverse });
+        positions = positions.filter(x => x !== p);
+      }
+    }
+    // 硬止损：价格逆向达到 stopPct（固定%）或 ATR 宽止损（srsiAutoAtrStop，mult×受监督ATR%）即平仓。
+    // 替代“仅强平”，把 ~14% 强平损失压缩为可控小损。不计入 liquidate（liq 仅指被强平价清零），计入 stopCount/stopLoss 与 reversePnl。
+    if (stopPct > 0 || config.srsiAutoAtrStop) {
+      for (const p of positions.slice()) {
+        if (config.srsiAutoAtrStop && p.stopPx == null) {
+          const curAtrPct = (atr15[i] != null && c15[i]) ? atr15[i] / c15[i] * 100 : 0;
+          p.stopPx = protectiveStopPrice(p.entry, p.side, curAtrPct, config.srsiAutoAtrStopMult);
+        }
+        const stopPrice = p.stopPx != null ? p.stopPx
+          : (stopPct > 0 ? (p.side === 'long' ? p.entry * (1 - stopPct / 100) : p.entry * (1 + stopPct / 100)) : null);
+        if (stopPrice == null) continue;
+        const hit = p.side === 'long' ? price <= stopPrice : price >= stopPrice;
+        if (!hit) continue;
+        const closeFee = p.amtUsdt * (p.lev || lev) * feeRate;
+        const slipCost = p.amtUsdt * (p.lev || effLev) * slipAt(i);
+        const gp = grossPnl(p.side, p.entry, stopPrice, p.amtUsdt, p.lev);
+        const pnl = gp - closeFee - (p.openFee || 0) - (p.openSlip || 0) + p.fundingAcc;
+        if (p.marginMode === 'usdt') { avail += p.amtUsdt + gp; avail -= closeFee; }
+        else { const mc = p.amtUsdt / p.entry; coinAvail += mc + (gp - closeFee) / stopPrice; }
+        totalFee += closeFee; totalSlip += slipCost;
+        stopCount++; stopLoss += pnl;
+        if (p.reverse) reversePnl += pnl;
+        trades.push({ t: t15[i], side: p.side, action: 'stop', price: stopPrice, gross: gp, fee: (p.openFee || 0) + closeFee, slip: slipCost, funding: p.fundingAcc, pnl, bal: (p.marginMode === 'usdt' ? avail : coinAvail * stopPrice), k, d, stop: true, liqPrice: p.liqPrice, amt: p.amtUsdt, lev: p.lev, marginMode: p.marginMode, reverse: p.reverse });
         positions = positions.filter(x => x !== p);
       }
     }
@@ -5705,9 +5844,10 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
     if (_ol > maxOpenLong) maxOpenLong = _ol;
     if (_os > maxOpenShort) maxOpenShort = _os;
     const _settleClose = (p, exitPrice, slip) => {
-      const exitSlipCost = p.amtUsdt * effLev * slip;
-      const closeFee = p.amtUsdt * effLev * feeRate;
-      const gp = grossPnl(p.side, p.entry, exitPrice, p.amtUsdt);
+      const _lev = p.lev || effLev;
+      const exitSlipCost = p.amtUsdt * _lev * slip;
+      const closeFee = p.amtUsdt * _lev * feeRate;
+      const gp = grossPnl(p.side, p.entry, exitPrice, p.amtUsdt, _lev);
       const fee = (p.openFee || 0) + closeFee;
       const slipCost = (p.openSlip || 0) + exitSlipCost;
       const net = gp - fee - slipCost + p.fundingAcc;
@@ -5729,7 +5869,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       trades.push({ t: t15[i], side: p.side, action: 'close', price: exitPrice, gross: gp, fee, slip: slipCost, funding: p.fundingAcc, pnl: net, bal: (p.marginMode === 'usdt' ? avail : coinAvail * exitPrice), k, d, marginMode: p.marginMode, reverse: p.reverse });
       return true;
     };
-    const _netClose = (p, exit) => grossPnl(p.side, p.entry, exit, p.amtUsdt) - (p.openFee || 0) - p.amtUsdt * effLev * feeRate - p.amtUsdt * effLev * slipAt(i) + p.fundingAcc;
+    const _netClose = (p, exit) => grossPnl(p.side, p.entry, exit, p.amtUsdt, p.lev) - (p.openFee || 0) - p.amtUsdt * (p.lev || effLev) * feeRate - p.amtUsdt * (p.lev || effLev) * slipAt(i) + p.fundingAcc;
     const _tryOpen = (side, rev) => {
       if (price == null || !_canTrade) return;
       const isRev = !!rev;
@@ -5796,8 +5936,11 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       amtUsdt = Math.min(amtUsdt, openCapUsdt, openCapCoin * price);
       if (amtUsdt <= 0) return;
       if (config.srsiAutoOpenFloorUsdt > 0 && amtUsdt < config.srsiAutoOpenFloorUsdt) return;
-      const useLev = (isRev && config.srsiAutoReverseLev > 0) ? config.srsiAutoReverseLev : lev;
+      const _atrPctNow = (atr15[i] != null && price) ? atr15[i] / price * 100 : null;
+      const baseLevForOpen = (isRev && config.srsiAutoReverseLev > 0) ? config.srsiAutoReverseLev : lev;
+      const useLev = config.srsiAutoAdaptiveLev ? adaptiveLeverage({ baseLev: baseLevForOpen, atrPct: _atrPctNow, medianAtrPct: medianAtrPct15, minLev: config.srsiAutoAdaptiveLevMin }) : baseLevForOpen;
       const fill = side === 'short' ? price * (1 - slip) : price * (1 + slip);
+      const _stopPx = config.srsiAutoAtrStop ? protectiveStopPrice(fill, side, _atrPctNow, config.srsiAutoAtrStopMult) : null;
       const marginCoin = amtUsdt / fill;
       const openFee = amtUsdt * useLev * feeRate;
       const openSlip = amtUsdt * useLev * slip;
@@ -5805,7 +5948,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       else { coinAvail -= marginCoin; coinAvail -= openFee / fill; }
       totalFee += openFee; totalSlip += openSlip;
       const liqPrice = liquidationPrice({ exchange: 'Binance', side, entry: fill, lev: useLev, notional: amtUsdt * useLev, symbol: sym });
-      positions.push({ side, entry: fill, rawEntry: price, amtUsdt, lev: useLev, openFee, openSlip, fundingAcc: 0, openT: t15[i], src: 'srsiAuto', reverse: isRev, liqPrice, marginMode: mm, openCtx });
+      positions.push({ side, entry: fill, rawEntry: price, amtUsdt, lev: useLev, openFee, openSlip, fundingAcc: 0, openT: t15[i], src: 'srsiAuto', reverse: isRev, liqPrice, stopPx: _stopPx, marginMode: mm, openCtx });
       openLog.push({ openT: t15[i], side, lev: useLev, reverse: isRev, openCtx });
       trades.push({ t: t15[i], side, action: 'open', price: fill, pct: sizePct, lev: useLev, amt: amtUsdt, fee: openFee, slip: openSlip, funding: 0, pnl: null, bal: (mm === 'usdt' ? avail : coinAvail * fill), k, d, liqPrice, marginMode: mm, reverse: isRev });
     };
@@ -5819,14 +5962,33 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       const _pd = predictDanger({ dir: side, k15: k, atrPct15: _atrPct15, emaOpp2Weak: _emaDanger, priceVsEma1h: _pve1h, priceVsEma15: _pve15, recentCandlePct: _recPct });
       if (_emaDanger) dangerHits++;        // 危险统计始终用 emaOpp2 基线，跨模式( none/filter/reverse )一致
       if (_pd.danger) pdHits++;            // 多因子预测危险命中(供 reverse 反手触发)
-      // filter 沿用 emaOpp2 基线(保持(9)预防爆仓结果不变)；reverse 用更聪明的 predictDanger 多因子信号开反方向
-      const danger = config.srsiAutoDanger === 'reverse' ? _pd.danger : _emaDanger;
-      // none=关；filter=避开危险单；reverse=防爆反手(危险→自动开反方向)
-      const dec = resolveEntryDecision(side, { danger, hotStop: false, dangerMode: config.srsiAutoDanger });
+      const mode = config.srsiAutoDanger;
+      // revconf：危险信号(emaOpp2)触发→不立即开反向，先挂起待价格逆向确认破位才开反手(避免接飞刀)
+      if (mode === 'revconf') {
+        if (_emaDanger) { pendingRev[side] = { price: c15[i], idx: i }; return; }
+        // 非危险→正常开
+      }
+      // filter 沿用 emaOpp2 基线(保持(9)预防爆仓结果不变)；reverse 用更聪明的 predictDanger 多因子信号开反方向；
+      // smart 用 smartDanger(接飞刀/追涨杀跌) 判定
+      let danger;
+      if (mode === 'reverse') danger = _pd.danger;
+      else if (mode === 'smart') danger = smartDanger({ priceVsEma1h: _pve1h, recentCandlePct: _recPct, k15: k, dir: side });
+      else danger = _emaDanger;
+      // none=关；filter/smart=避开危险单；reverse=防爆反手(危险→自动开反方向)
+      const dec = resolveEntryDecision(side, { danger, hotStop: false, dangerMode: mode });
       if (!dec.open) return;
       if (dec.rev) reverseOpens++;
       _tryOpen(dec.side, dec.rev);
     };
+    // revconf：每根检查待确认反手挂单——危险触发后价格逆向突破 revConfirm% 即确认破位，开反手
+    if (config.srsiAutoDanger === 'revconf') {
+      for (const ps of ['long', 'short']) {
+        const pend = pendingRev[ps]; if (!pend) continue;
+        const moved = ps === 'long' ? (price - pend.price) / pend.price * 100 : (pend.price - price) / pend.price * 100; // 危险方向(反向)已走幅度%
+        if (moved >= revConfirm) { _tryOpen(ps === 'long' ? 'short' : 'long', true); reverseOpens++; pendingRev[ps] = null; }
+        else if (i - pend.idx > 200) pendingRev[ps] = null; // 超时(~50h)未确认作废
+      }
+    }
     if (_canTrade && be.edge === 'enterUpper') {
       const lp = positions.find(p => p.side === 'long' && _netClose(p, price * (1 - slipAt(i))) > 0);
       if (lp) { const slip = slipAt(i); if (_settleClose(lp, price * (1 - slip), slip)) positions = positions.filter(p => p !== lp); }
@@ -5842,14 +6004,15 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   for (const p of positions.slice()) {
     const price = c15[c15.length - 1]; const slip = slipAt(c15.length - 1);
     const exit = p.side === 'short' ? price * (1 + slip) : price * (1 - slip);
-    const exitSlipCost = p.amtUsdt * effLev * slip;
-    const closeFee = p.amtUsdt * effLev * feeRate;
-    const gp = grossPnl(p.side, p.entry, exit, p.amtUsdt);
+    const _levE = p.lev || effLev;
+    const exitSlipCost = p.amtUsdt * _levE * slip;
+    const closeFee = p.amtUsdt * _levE * feeRate;
+    const gp = grossPnl(p.side, p.entry, exit, p.amtUsdt, _levE);
     const fee = (p.openFee || 0) + closeFee;
     const slipCost = (p.openSlip || 0) + exitSlipCost;
     const net = gp - fee - slipCost + p.fundingAcc;
     const lk = kd15.k[kd15.k.length - 1], ld = kd15.d[kd15.d.length - 1];
-    const pnlPct = p.entry ? (gp / p.entry / effLev) * 100 : 0;
+    const pnlPct = p.entry ? (gp / p.entry / _levE) * 100 : 0;
     if (isSpot) {
       if (p.side === 'long') { uBal += p.qty * exit; uBal -= closeFee; coinBal -= p.qty; }
       else { uBal -= p.qty * exit; uBal -= closeFee; coinBal += p.qty; }
@@ -5886,6 +6049,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
     equitySeries, totalFee, totalSlip, totalFunding,
     maxOpenLong, maxOpenShort,
     liqCount, liqLoss,
+    stopCount, stopLoss,
     liqLog,
     openLog,
     dangerHits, reverseOpens, reversePnl, pdHits, dangerMode: config.srsiAutoDanger || 'none'
@@ -5939,9 +6103,15 @@ function _btCfgDefaults() {
     optIntervalH: 5,
     optNoTradeH: 5,
     w4h: 30, w1h: 20, w30m: 10, // #4 仓位缩放权重（独立于实盘）
-    danger: 'none',          // 危险信号防爆：none=关 / filter=预防爆仓 / reverse=防爆反手
+    danger: 'none',          // 危险信号防爆：none=关 / filter=预防爆仓 / reverse=防爆反手 / smart=预防爆仓(智能接飞刀过滤) / revconf=防爆反手(确认后开反)
     reversePct: 0,           // 反手单仓位%（0=继承正常开仓%）
     reverseLev: 0,           // 反手单杠杆（0=继承正常杠杆）
+    revConfirm: 3,           // 防爆反手确认阈值%：危险触发后价格逆向突破此幅度才开反手(revconf)
+    stopPct: 0,              // 硬止损%：价格逆向达此即平仓(0=关)。均值回归 SRSI 策略慎用——易被正常回撤噪声触发
+    adaptiveLev: false,      // 自适应杠杆：波动放大→降杠杆(减少单笔爆仓率)；默认关，开=有效
+    adaptiveLevMin: 2,       // 自适应杠杆下限(倍数)
+    atrStop: false,          // 宽保护性止损(ATR 基准)：mult×受监督ATR% 为价格止损(落于爆仓线内侧)；默认关
+    atrStopMult: 2.0,        // 宽止损倍数(×ATR%)，默认 2
     hotStop: false,          // 热停开：1h ATR 放大时禁止新开普通单
     collapsed: true
   };
@@ -5978,7 +6148,10 @@ function _btOverlayFor(cfg, bt) {
     srsiAutoUseFunding: true,
     srsiAutoW4h: bt.w4h, srsiAutoW1h: bt.w1h, srsiAutoW30m: bt.w30m,
     srsiBtOptTfs: bt.optTfs,
-    srsiAutoDanger: bt.danger, srsiAutoReversePct: bt.reversePct, srsiAutoReverseLev: bt.reverseLev, srsiAutoHotStop: !!bt.hotStop
+    srsiAutoDanger: bt.danger, srsiAutoReversePct: bt.reversePct, srsiAutoReverseLev: bt.reverseLev, srsiAutoHotStop: !!bt.hotStop,
+    srsiAutoStopPct: bt.stopPct || 0, srsiAutoRevConfirm: bt.revConfirm || 3,
+    srsiAutoAdaptiveLev: !!bt.adaptiveLev, srsiAutoAdaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN,
+    srsiAutoAtrStop: !!bt.atrStop, srsiAutoAtrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT
   });
 }
 _btCfgLoad();
@@ -6106,7 +6279,7 @@ export function _renderBacktestResult(res, days) {
     <div class="kt-auto-row">胜率 ${(res.winRate * 100).toFixed(0)}% (${res.wins}胜/${res.losses}负) ｜ 开多${res.longs}/开空${res.shorts} ｜ 最大回撤 ${(res.maxDD * 100).toFixed(1)}% ｜ 共 ${res.trades.length} 笔 <button id="ktBtExport" class="kt-export-btn">⬇ 导出</button></div>
     <div class="kt-auto-row kt-bt-cost">成本：手续费 <b>${_btMoney(totFee)}</b> ｜ 滑点 <b>${_btMoney(totSlip)}</b> ｜ ${fundTxt} ｜ 净收益 <b class="${cls}">${_btMoney(res.finalEquity - res.principal, true)}</b></div>
     ${(res.liqCount || 0) > 0 ? `<div class="kt-auto-row kt-bt-liq">⚠ 强平 <b>${res.liqCount}</b> 次（价格击穿强平价，保证金基本归零）｜ 爆仓净损失 <b>${_btMoney(res.liqLoss, true)}</b>${res.liqCount ? '（已并入净收益）' : ''}</div>` : ''}
-    ${(res.dangerHits || 0) > 0 ? `<div class="kt-auto-row kt-bt-danger">🚨 危险信号触发 <b>${res.dangerHits}</b> 次｜防爆反手开单 <b>${res.reverseOpens || 0}</b> 笔（防爆模式：${(res.dangerMode === 'reverse' ? '防爆反手' : res.dangerMode === 'filter' ? '预防爆仓' : '关')}）｜反手盈亏 <b class="${(res.reversePnl || 0) >= 0 ? 'kt-pos' : 'kt-neg'}">${_btMoney(res.reversePnl || 0, true)}</b></div>` : ''}
+    ${(res.dangerHits || 0) > 0 ? `<div class="kt-auto-row kt-bt-danger">🚨 危险信号触发 <b>${res.dangerHits}</b> 次｜防爆反手开单 <b>${res.reverseOpens || 0}</b> 笔（防爆模式：${(res.dangerMode === 'reverse' ? '防爆反手' : res.dangerMode === 'filter' ? '预防爆仓' : res.dangerMode === 'smart' ? '预防爆仓(智能)' : res.dangerMode === 'revconf' ? '防爆反手(确认)' : '关')}）｜反手盈亏 <b class="${(res.reversePnl || 0) >= 0 ? 'kt-pos' : 'kt-neg'}">${_btMoney(res.reversePnl || 0, true)}</b>${res.stopCount ? `｜硬止损 <b>${res.stopCount}</b> 笔 <b class="${(res.stopLoss || 0) >= 0 ? 'kt-pos' : 'kt-neg'}">${_btMoney(res.stopLoss || 0, true)}</b>` : ''}</div>` : ''}
     <div class="kt-bt-scroll"><table class="kt-bt-table">
       <thead><tr><th>时间</th><th>动作</th><th>价格</th><th>金额</th><th>手续费</th><th>滑点</th><th>资金费</th><th>净盈亏</th><th>余额</th><th>K</th><th>D</th><th>模式</th></tr></thead>
       <tbody>${rows}</tbody>
@@ -6169,12 +6342,16 @@ export function buildBacktestConditions(days) {
     '15m 交易闸门：15m 未优选 → 自动交易暂停（不触发开仓/平仓）',
     (function () {
       const m = bt.danger || 'none';
-      const lbl = m === 'filter' ? '预防爆仓（避开危险单不开仓）' : m === 'reverse' ? '防爆反手（模型键命中才反手；无键则避开危险单）' : '关';
+      const lbl = m === 'filter' ? '预防爆仓（避开危险单不开仓）' : m === 'reverse' ? '防爆反手（模型键命中才反手；无键则避开危险单）' : m === 'smart' ? '预防爆仓(智能)（接飞刀/追涨杀跌过滤）' : m === 'revconf' ? '防爆反手(确认)（危险后等价格确认破位才开反）' : '关';
       const rp = (bt.reversePct > 0) ? (bt.reversePct + '%') : '（继承正常开仓%）';
       const rl = (bt.reverseLev > 0) ? (bt.reverseLev + 'x') : '（继承正常杠杆）';
-      return '危险信号防爆：' + lbl + (m === 'reverse' ? ('｜反手单仓位 ' + rp + ' / 杠杆 ' + rl) : '') + '（危险判定：4h/1h/30m 的 EMA120 趋势与拟开仓方向背离≥2 个周期）';
+      const _crit = m === 'smart' ? ('（危险判定：接飞刀/追涨杀跌 — 价格偏离1h EMA≥' + THRESH.SMART_EMA1H_PCT + '% 或 15m 近4根振幅≥' + THRESH.SMART_CANDLE_PCT + '% 即判危险，回避顺势单边接刀）')
+        : m === 'revconf' ? ('（危险判定：4h/1h/30m 的 EMA120 趋势背离≥2 个周期 → 挂起，价格再逆向走出 ' + (cfg.srsiAutoRevConfirm || 3) + '% 确认破位才开反手）')
+        : '（危险判定：4h/1h/30m 的 EMA120 趋势与拟开仓方向背离≥2 个周期）';
+      return '危险信号防爆：' + lbl + (m === 'reverse' ? ('｜反手单仓位 ' + rp + ' / 杠杆 ' + rl) : '') + _crit;
     })(),
-    '杠杆：' + lev + 'x',
+    '杠杆：' + lev + 'x' + (bt.adaptiveLev ? ('（自适应杠杆开：波动放大自动降杠杆，下限 ' + (bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN) + 'x）') : ''),
+    (bt.atrStop ? ('宽保护性止损(ATR)：开，止损距离 = ' + (bt.atrStopMult || THRESH.ATR_STOP_MULT) + '×受监督ATR%（落于爆仓线内侧，截真趋势破位）') : '宽保护性止损(ATR)：关'),
     '同方向最多连开：' + bt.maxSame + ' 单',
     (function () {
       const _eb = resolveEntryBands({ srsiAutoUpper: bt.upper, srsiAutoLower: bt.lower, srsiByTf: cfg.srsiByTf, srsi: cfg.srsi });
@@ -6201,7 +6378,8 @@ export function buildBacktestConditions(days) {
       upper: bt.upper, lower: bt.lower, capUsdt: bt.capUsdt, capCoin: bt.capCoin, floorUsdt: bt.floorUsdt, floorCoin: bt.floorCoin,
       useCost: bt.useCost, feePct: bt.feePct, slipPct: bt.slipPct, useFunding: bt.useCost,
       optTfs: autoTfs, optEnabled: bt.optEnabled, optIntervalH: bt.optIntervalH, optIntervalOn: bt.optIntervalOn, optNoTradeH: bt.optNoTradeH,
-      danger: bt.danger || 'none', reversePct: bt.reversePct || 0, reverseLev: bt.reverseLev || 0
+      danger: bt.danger || 'none', reversePct: bt.reversePct || 0, reverseLev: bt.reverseLev || 0,
+      adaptiveLev: !!bt.adaptiveLev, adaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN, atrStop: !!bt.atrStop, atrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT
     },
     srsiTfParams: srsiTfParams,
     srsiByTf: cfg.srsiByTf, srsiOptSource: cfg.srsiOptSource, autoTfs: autoTfs

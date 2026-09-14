@@ -32,6 +32,22 @@
     .pwa-srcerr b{color:#ffd0d0}
     .pwa-srcerr button.pi-btn{background:#ff5252;border:none;color:#1a0606;font-weight:700;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap}
     .pwa-srcerr button.pi-close{margin-left:2px;background:transparent;border:none;color:#ff9a9a;font-size:20px;cursor:pointer;line-height:1;padding:0 4px}
+    /* Alpha 实验室 */
+    .kchart-alphawrap{margin:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);overflow:hidden}
+    .alpha-lab{padding:8px 10px;font-size:12px;color:var(--text)}
+    .alpha-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px}
+    .alpha-row label{font-size:11px;color:var(--text2);display:flex;gap:4px;align-items:center}
+    .alpha-row input,.alpha-row select{background:var(--card2);border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:5px;font-family:inherit;font-size:11px}
+    .alpha-row button{background:var(--accent);border:none;color:#06121f;font-size:11px;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;font-weight:600}
+    .alpha-out{margin:4px 0}
+    .alpha-metrics{margin:4px 0;line-height:1.5}
+    .alpha-metrics b{color:var(--accent)}
+    .alpha-oos{color:var(--text2);font-size:11px}
+    .alpha-note{font-size:10px;color:var(--text2);margin:3px 0}
+    .alpha-err{font-size:11px;color:#ff8a8a;margin:4px 0}
+    .alpha-ok{font-size:11px;color:#7ddc9a;margin:4px 0}
+    .alpha-eq{width:100%;height:110px;margin-top:4px}
+    #alphaLab .alpha-metrics b{color:#4da3ff}
   </style>
 </head>
 <body>
@@ -93,6 +109,10 @@
     <div class="kchart-ovhead" onclick="window.kToggleDisc()">📋 交易纪律分析 <span class="kchart-ovarrow">▾</span></div>
     <div id="kchartDisc" class="kchart-disc"></div>
   </div>
+  <div class="kchart-alphawrap" id="alphaLabWrap">
+    <div class="kchart-ovhead" onclick="this.parentElement.classList.toggle('closed')">🧪 Alpha 实验室（combo 回测 + Paper 实盘模拟 · 同源核心逐位对齐 Node）<span class="kchart-ovarrow">▾</span></div>
+    <div id="alphaLab" class="alpha-lab"></div>
+  </div>
   <div class="kchart-tradebar" id="kchartTradeBar"></div>
   <div class="kchart-maintools" id="kchartMainTools"></div>
   <div class="kchart-box">
@@ -109,11 +129,33 @@
       <div class="setting-row" style="margin-top:6px"><button onclick="pwaSimReset()">重置为默认并重建账户</button></div>
     </div>
   </div>
+  <div class="kchart-settings closed" id="pwaSrcCard">
+    <div class="kchart-ovhead" onclick="document.getElementById('pwaSrcCard').classList.toggle('closed')">⚙ 行情数据源（受限地区填 Binance 镜像/代理）<span class="kchart-ovarrow">▾</span></div>
+    <div class="kchart-settings-body">
+      <div style="font-size:10px;color:var(--text2);margin:2px 0 6px">终端网络不可达 Binance 时，填入一个<b>可达 Binance 的代理/镜像</b>即可在任何地区使用。支持两种写法：<br>
+        反向代理 <code>https://你的代理/binance</code> → 实际请求 <code>代理/api/v3/klines…</code><br>
+        包裹代理 <code>https://代理/?url={url}</code> → 实际请求 <code>代理/?url=编码后的Binance全URL</code></div>
+      <div class="setting-row"><label>代理地址</label><input id="pwaSrcInput" type="text" placeholder="留空 = 直连 Binance 多域名(api/api1/api2/vision)" style="flex:1;min-width:160px"></div>
+      <div class="setting-row"><button id="pwaSrcSave">保存并刷新</button><button id="pwaSrcClear">清除</button><span id="pwaSrcMsg" style="font-size:10px;color:var(--accent)"></span></div>
+    </div>
+  </div>
   <div id="pwaInstall" class="pwa-install" hidden>
     <div class="pi-txt" id="pwaInstallTxt"></div>
     <button id="pwaInstallBtn" class="pi-btn">安装到本机</button>
     <button id="pwaInstallClose" class="pi-close" aria-label="关闭">×</button>
   </div>
+  <script>
+  (function(){
+    var inp=document.getElementById('pwaSrcInput');
+    var msg=document.getElementById('pwaSrcMsg');
+    try{ var v=localStorage.getItem('pwa_binance_proxy'); if(v) inp.value=v; }catch(e){}
+    function reload(){ msg.textContent='已保存，刷新中…'; setTimeout(function(){ location.reload(); }, 300); }
+    function save(){ try{ var val=inp.value.trim(); if(val) localStorage.setItem('pwa_binance_proxy',val); else localStorage.removeItem('pwa_binance_proxy'); reload(); }catch(e){ msg.textContent='保存失败:'+e.message; } }
+    function clr(){ try{ localStorage.removeItem('pwa_binance_proxy'); inp.value=''; reload(); }catch(e){} }
+    document.getElementById('pwaSrcSave').addEventListener('click',save);
+    document.getElementById('pwaSrcClear').addEventListener('click',clr);
+  })();
+  </script>
   <script type="module" src="/src/pwa/kchartApp.js"></script>
 </body>
 </html>

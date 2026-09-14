@@ -61,35 +61,35 @@ export function computeSeries(arr) {
   };
 }
 
-// 数据端点：优先 api.binance.com，失败自动切 data-api.binance.vision（大陆用户/地域受限友好）。
+// 数据端点：第一优先是相对-origin 端点 ''（即当前页面的同源 /api /fapi 路径，
+// 由 Cloudflare Pages Function 代理转发到 Binance——墙内用户浏览器只连已可达的
+// srsi.openapi.im，由 Cloudflare 边缘去拉 Binance，从而任何地区都能拿到数据）。
+// 失败再回退 Binance 直连（api.binance.com / data-api.binance.vision）。
 // 可在加载前设置 window.KCHART_BINANCE_API 强制用单一端点（覆盖下方列表）。
-const BINANCE_ENDPOINTS = ['https://api.binance.com', 'https://data-api.binance.vision'];
-const EP_KEY = 'pwa_binance_endpoint_idx';   // 持久化上次成功端点，避免每次重连都等被墙端点超时
+// group: 'api' → 现货/行情(/api/*) ; 'fapi' → 合约资金费(/fapi/*)。两组都把同源代理放首位。
+// PWA 运行在用户终端，K线拉取是【终端→Binance】直连；Cloudflare Pages 只是下载/更新壳，不中转行情。
+// "任何地区可用"取决于用户终端网络能否到达 Binance；受限地区需用户在 PWA 内填一个【可达 Binance 的
+// 代理/镜像】（持久化到 localStorage pwa_binance_proxy，或加载前设 window.KCHART_BINANCE_API）。
+// 代理 URL 两种写法：反向代理 https://myproxy/binance → <代理>/api/v3/klines...；
+//   包裹代理 https://corsproxy.io/?url={url} → <代理>?url=<encoded 全 URL>。
+// 默认走 Binance 多域名并发竞速（api/api1/api2/data-api.vision），提升不同地区命中率。
+const EP_API = ['https://api.binance.com', 'https://api1.binance.com', 'https://api2.binance.com', 'https://data-api.binance.vision'];
+const EP_FAPI = ['https://fapi.binance.com', 'https://fapi.binance.vision'];
+const PROXY_KEY = 'pwa_binance_proxy';
 
-function endpointList() {
-  const forced = (typeof globalThis !== 'undefined' && globalThis.KCHART_BINANCE_API);
-  return forced ? [forced] : BINANCE_ENDPOINTS;
+function userProxy() {
+  try { if (typeof localStorage !== 'undefined') { const v = localStorage.getItem(PROXY_KEY); if (v) return v; } } catch (e) {}
+  return (typeof globalThis !== 'undefined' && globalThis.KCHART_BINANCE_API) || null;
 }
-
-// 读取持久化的上次成功端点索引（异常/无 localStorage 时安全回退到 0）
-function loadGoodIdx() {
-  try {
-    if (typeof localStorage !== 'undefined') {
-      const v = parseInt(localStorage.getItem(EP_KEY), 10);
-      if (!isNaN(v) && v >= 0 && v < BINANCE_ENDPOINTS.length) return v;
-    }
-  } catch (e) {}
-  return 0;
+function endpointList(group) {
+  const p = userProxy();
+  if (p) return [p];
+  return group === 'fapi' ? EP_FAPI : EP_API;
 }
-function saveGoodIdx(idx) {
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem(EP_KEY, String(idx)); } catch (e) {}
-}
-
-// 上次成功使用的端点索引（模块级缓存；成功后直连，并持久化跨会话）
-let _goodIdx = loadGoodIdx();
-function currentApi() {
-  const list = endpointList();
-  return list[Math.min(_goodIdx, list.length - 1)];
+function buildProxyUrl(base, path, group) {
+  const host = group === 'fapi' ? 'https://fapi.binance.com' : 'https://api.binance.com';
+  if (base.includes('{url}')) return base.replace('{url}', encodeURIComponent(host + path));
+  return base + path;
 }
 
 // 纯函数：把 Binance 原始 klines 解析成 O/H/L/C/V/T
@@ -129,18 +129,17 @@ async function fetchJson(url, timeout = 10000) {
 // 带端点自动切换的数据请求：所有端点并发竞速，取首个成功；全部失败才抛错。
 // 用 Promise.any 而非串行 for：被墙端点会静默挂起，串行会一直等到超时，
 // 并发则可用端点一旦返回即胜出，不再空等被墙的那个（避免页面"回测中"久转）。
-async function fetchApiData(path, timeout = 8000) {
-  const list = endpointList();
+async function fetchApiData(path, group = 'api', timeout = 8000) {
+  const list = endpointList(group);
   if (!list.length) throw new Error('未配置数据端点');
   if (list.length === 1) {
-    try { const d = await fetchJson(list[0] + path, timeout); _goodIdx = 0; saveGoodIdx(0); return d; }
+    try { return await fetchJson(buildProxyUrl(list[0], path, group), timeout); }
     catch (e) { const err = new Error('数据源不可达: ' + (e && e.message)); err.sourceUnreachable = true; throw err; }
   }
-  const attempts = list.map((base, i) => fetchJson(base + path, timeout).then(d => ({ i, d })));
+  // 并发竞速：被墙端点会静默挂起，串行会一直等到超时；并发则可用端点一旦返回即胜出。
+  const attempts = list.map((base, i) => fetchJson(buildProxyUrl(base, path, group), timeout).then(d => ({ i, d })));
   try {
     const first = await Promise.any(attempts);
-    _goodIdx = first.i;              // 缓存当前可用端点，下次优先
-    saveGoodIdx(first.i);            // 持久化，跨会话默认用该端点
     return first.d;
   } catch (agg) {
     const errs = (agg && agg.errors) ? agg.errors : [agg];
@@ -249,26 +248,15 @@ export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, 
 // 拉取真实历史资金费率（Binance U 本位合约 /fapi/v1/fundingRate），用于回测成本还原
 // 返回 [{fundingTime, fundingRate}] 升序；与 PaperEngine 实盘 fundingPayment 共用同一结算口径
 export async function fetchFundingRate(sym, startTime, endTime) {
-  const hosts = ['https://fapi.binance.com', 'https://fapi.binance.vision'];
   const path = '/fapi/v1/fundingRate?symbol=' + sym + '&startTime=' + startTime + '&endTime=' + endTime + '&limit=1000';
-  let lastErr;
-  for (const base of hosts) {
-    try {
-      const ctl = new AbortController();
-      const to = setTimeout(() => ctl.abort(), 8000);
-      const resp = await fetch(base + path, { signal: ctl.signal });
-      clearTimeout(to);
-      if (!resp.ok) continue;
-      const json = await resp.json();
-      if (!Array.isArray(json)) continue;
-      return json
-        .filter(r => r && r.fundingTime != null && r.fundingRate != null)
-        .map(r => ({ fundingTime: +r.fundingTime, fundingRate: +r.fundingRate }))
-        .sort((a, b) => a.fundingTime - b.fundingTime);
-    } catch (e) { lastErr = e; }
-  }
-  if (lastErr) throw lastErr;
-  return [];
+  try {
+    const json = await fetchApiData(path, 'fapi');
+    if (!Array.isArray(json)) return [];
+    return json
+      .filter(r => r && r.fundingTime != null && r.fundingRate != null)
+      .map(r => ({ fundingTime: +r.fundingTime, fundingRate: +r.fundingRate }))
+      .sort((a, b) => a.fundingTime - b.fundingTime);
+  } catch (e) { return []; }
 }
 
 // 拉取最新价/24h 涨跌（Binance /ticker/24hr），写回 globalThis.S.prices[sym]

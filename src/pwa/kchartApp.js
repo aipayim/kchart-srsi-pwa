@@ -4,6 +4,7 @@ import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈
 import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
+import { initAlphaLab } from './alphaLab.js';
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
@@ -364,6 +365,7 @@ async function init() {
   renderSymList();
   initPwaTrade();
   initLocalLoop();
+  initAlphaLab();
   loadSymbol(curSym);   // 回到上次使用的币对（curSym 已含 pwa_last_sym 优先逻辑）
   setInterval(tickPrice, PRICE_REFRESH_MS);
   setInterval(tickKlines, KLINE_REFRESH_MS);
