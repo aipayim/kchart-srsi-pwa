@@ -226,11 +226,13 @@ const _sigCache = { d1: {}, fr: {}, frT: {} };
 export async function updateAlphaSignal(sym, tf, force = false) {
   try {
     const S = globalThis.S;
-    const kl = S && S.klines && S.klines[sym] && S.klines[sym][tf];
-    if (!kl || !kl.t || kl.t.length < 60 || !kl.c || kl.c.length !== kl.t.length) return null;
+    // 与 kchart.js getTFData 同源：PWA 存储为分离数组（S.klinesO/H/L/C/T），非对象
+    const K = (k) => (S && S[k] && S[k][sym] && S[k][sym][tf]) || [];
+    const t = K('klinesT'), c = K('klines'), o = K('klinesO'), h = K('klinesH'), l = K('klinesL');
+    if (t.length < 60 || c.length !== t.length || o.length !== t.length) return null;
     if (!force) {
       const prev = globalThis.__alphaSignals;
-      if (prev && prev.sym === sym && prev.tf === tf && prev.ts === kl.t && Date.now() - prev.updatedT < 30000) return prev;
+      if (prev && prev.sym === sym && prev.tf === tf && prev.ts === t && Date.now() - prev.updatedT < 30000) return prev;
     }
     let d1 = _sigCache.d1[sym];
     if (!d1 || !d1.t || d1.t.length < 30) {
@@ -243,12 +245,12 @@ export async function updateAlphaSignal(sym, tf, force = false) {
       funding = await loadFunding(sym, Date.now() - 100 * DAY);
       _sigCache.fr[sym] = funding; _sigCache.frT[sym] = Date.now();
     }
-    const h1 = { t: kl.t, o: kl.o, h: kl.h, l: kl.l, c: kl.c };
+    const h1 = { t, o, h, l, c };
     const r = runBacktest(h1, d1, {
-      start: kl.t[0], end: kl.t[kl.t.length - 1] + HOUR,
+      start: t[0], end: t[t.length - 1] + HOUR,
       band: 0.05, funding, useFunding: true, levCap: 1, volTarget: 0.30, vtCap: 1.5, longOnly: false,
     });
-    if (!r || r.error || !r.ws || r.ws.length !== kl.t.length) return null;
+    if (!r || r.error || !r.ws || r.ws.length !== t.length) return null;
     const flips = [];
     let posW = 0;
     for (let i = 0; i < r.ws.length - 1; i++) { // 末根为 in-flight：不在未收盘 bar 上决策（无前视）
@@ -259,7 +261,7 @@ export async function updateAlphaSignal(sym, tf, force = false) {
         posW = w;
       }
     }
-    globalThis.__alphaSignals = { sym, tf, ts: kl.t, flips, lastW: posW, updatedT: Date.now() };
+    globalThis.__alphaSignals = { sym, tf, ts: t, flips, lastW: posW, updatedT: Date.now() };
     return globalThis.__alphaSignals;
   } catch (e) { return null; }
 }
