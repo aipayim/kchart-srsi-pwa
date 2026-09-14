@@ -2,7 +2,7 @@
 // 策略核心 = ./alphaCore.js（与 Node 权威框架 goal2-bt.mjs 逐位对齐，见 scripts/goal4-run-align.mjs）
 // 诚实约束：信号在已收盘 bar 收盘评估 → 下一根开盘价成交（lag=1）；taker 0.045%+滑 0.02%；
 //           现货模式 longOnly + 无资金费现金流（funding 仅作信号输入）；vol-target 需 720 根 1h 预热。
-import { runBacktest, annualized, maxDD, sharpeDaily } from './alphaCore.js';
+import { runBacktest, annualized, maxDD, sharpeDaily, combineDaily } from './alphaCore.js';
 import { fetchKlinesRange, fetchFundingRate } from './data.js';
 import { APP_VERSION } from '../version.generated.js';
 
@@ -251,14 +251,37 @@ export function initAlphaLab() {
     <div id="alphaSelf"></div>
     <div class="alpha-row" style="margin-top:.5em">
       <button id="alphaPaperStart" title="启动模拟实盘：以面板参数每 60s 重算同源核心，模拟真实持仓/权益/爆仓（不接真实资金）">📡 启动 Paper 实盘模拟</button>
+      <button id="alphaLiveBtn" title="一键应用组合策略：开启 SRSI 自动交易 + Alpha 组合信号接管 Paper 引擎（每 60s 检查 |Δw|>0.05 调仓，只动 Alpha 子仓）">⚡ 应用组合策略到实盘(paper)</button>
       <button id="alphaPaperStop" style="display:none">⏹ 停止</button>
       <span id="alphaPaperCfg" class="alpha-note"></span>
     </div>
-    <div id="alphaPaperOut"></div>`;
+    <div id="alphaPaperOut"></div>
+    <div id="alphaLiveOut"></div>`;
   $('alphaRun').addEventListener('click', () => runBacktestUI(($('alphaSym').value || 'BTCUSDT').toUpperCase().trim()));
   $('alphaSelfBtn').addEventListener('click', selfCheckUI);
   $('alphaPaperStart').addEventListener('click', startPaper);
   $('alphaPaperStop').addEventListener('click', stopPaper);
+  // GOAL8：应用组合策略按钮 + 恢复运行态
+  const liveBtn = $('alphaLiveBtn');
+  if (liveBtn) {
+    liveBtn.addEventListener('click', () => {
+      if (liveTimer) { stopLive(); liveBtn.textContent = '⚡ 应用组合策略到实盘(paper)'; }
+      else {
+        startPaper();
+        if (window.kchartApi && window.kchartApi.setSrsiAutoOn) window.kchartApi.setSrsiAutoOn(true);
+        startLive();
+        if (liveTimer) liveBtn.textContent = '⏹ 停止组合实盘(SRSI+Alpha)';
+      }
+    });
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem('pwa_alpha_live') || 'null');
+    if (saved && saved.sym) {
+      liveSym = saved.sym;
+      const eng = window.kchartApi && window.kchartApi.getTradeEngine ? window.kchartApi.getTradeEngine() : null;
+      if (eng) { liveTimer = setInterval(tickLive, 60000); if (liveBtn) liveBtn.textContent = '⏹ 停止组合实盘(SRSI+Alpha)'; _liveLog('恢复组合实盘：' + saved.sym); }
+    }
+  } catch (e) { /* ignore */ }
   const cfg = loadPaperCfg();
   if (cfg) { // 恢复 paper 运行态
     $('alphaSym').value = cfg.sym; $('alphaMode').value = cfg.mode;
@@ -267,7 +290,7 @@ export function initAlphaLab() {
     $('alphaPaperStart').style.display = 'none'; $('alphaPaperStop').style.display = '';
     tickPaper(); paperTimer = setInterval(tickPaper, 60000);
   }
-  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck };
+  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck, comboWithSrsi, startLive, stopLive };
   // GOAL6：主图 α 信号 provider —— kchart.js 的「α 信号」chip 开启时调用，
   // 用与回测/paper 同源的 runBacktest 重算当前币/主周期逐根权重并写入 window.__alphaSignals。
   window.__alphaSignalProvider = async () => {
@@ -326,4 +349,90 @@ export async function updateAlphaSignal(sym, tf, force = false) {
     globalThis.__alphaSignals = { sym, tf, ts: t, flips, lastW: posW, updatedT: Date.now() };
     return globalThis.__alphaSignals;
   } catch (e) { return null; }
+}
+
+// ===== GOAL8: SRSI×Alpha 组合（vol 倒数融合）+ 应用组合策略到 Paper =====
+// comboWithSrsi(srsi)：srsi={sym,days,bal:[[t,bal],...]}（kchart.js runSrsiBacktest 暴露的已实现权益事件）。
+// 同窗口重放 Alpha 子账户（perp vt30 L3，与 GOAL7 实验口径一致）→ 两策略日权益对齐 → combineDaily。
+export async function comboWithSrsi(srsi) {
+  const fail = (msg) => ({ html: `<div class="alpha-err">🧪 Alpha 组合计算失败：${msg}</div>`, text: '' });
+  try {
+    if (!srsi || !Array.isArray(srsi.bal) || srsi.bal.length < 40) return fail('SRSI 回测数据不足');
+    const t0 = srsi.bal[0][0], t1 = srsi.bal[srsi.bal.length - 1][0];
+    const days = Math.max(2, Math.round((t1 - t0) / DAY) + 1);
+    const need = Math.min(60000, days * 24 + 240);
+    const [h1, d1] = await Promise.all([
+      loadBars(srsi.sym, '1h', t0 - 40 * DAY, t1 + DAY, need),
+      loadBars(srsi.sym, '1d', t0 - 60 * DAY, t1 + DAY, Math.round(need / 24) + 210),
+    ]);
+    let funding = [];
+    try { funding = await loadFunding(srsi.sym, t0 - 100 * DAY); } catch (e) { /* carry 腿 0 */ }
+    const r = runBacktest(h1, d1, { start: t0, end: t1 + HOUR, band: 0.05, funding, useFunding: true, levCap: 3, volTarget: 0.3, vtCap: 1.5, longOnly: false });
+    if (r.error) return fail(r.error);
+    // 两策略日权益对齐（UTC 日索引 + 前值填充）
+    const evsS = srsi.bal, evsA = r.ts.map((t, i) => [t, r.eqs[i]]);
+    const dailyAlign = (evs, init) => {
+      const m = new Map();
+      for (const [t, v] of evs) { const k = Math.floor(t / DAY); const cur = m.get(k); if (cur == null || t >= cur[1]) m.set(k, [v, t]); }
+      return m;
+    };
+    const mS = dailyAlign(evsS, 1000), mA = dailyAlign(evsA, 1);
+    const keys = [...new Set([...mS.keys(), ...mA.keys()])].sort((a, b) => a - b);
+    const dS = [], dA = [];
+    let vs = 1000, va = 1;
+    for (const k of keys) {
+      const s = mS.get(k), a = mA.get(k);
+      if (s) vs = s[0]; if (a) va = a[0];
+      dS.push(vs); dA.push(va);
+    }
+    const c = combineDaily(dS, dA, 30, 1000, 1);
+    const f2 = (x) => (x >= 0 ? '+' : '') + x.toFixed(1);
+    const html = `<div class="kt-auto-row kt-bt-cost">🧪 <b>Alpha 组合</b>（SRSI + Alpha 子账户，vol 倒数滞后 30d 再平衡）：年化 <b>${f2(c.annPct)}%</b> ｜ Sharpe <b>${c.sharpe.toFixed(2)}</b> ｜ maxDD <b>${c.ddPct.toFixed(1)}%</b> ｜ SRSI 权重均值 <b>${(c.wAvg * 100).toFixed(0)}%</b>（预热期 50/50 · 历史回测非预测 · SRSI 波动大时自动降权，爆仓尾部被限幅）</div>`;
+    const text = `年化 ${f2(c.annPct)}% ｜ Sharpe ${c.sharpe.toFixed(2)} ｜ maxDD ${c.ddPct.toFixed(1)}% ｜ SRSI 权重均值 ${(c.wAvg * 100).toFixed(0)}%（win30 vol 倒数，预热 50/50）`;
+    return { html, text, combo: c };
+  } catch (e) { return fail(e.message); }
+}
+
+// —— alphaLive：把 Alpha 组合信号接入 PaperEngine（60s tick，band 0.05 才调仓，只动 src='alpha' 的仓）——
+let liveTimer = null, liveW = 0, liveSym = '';
+function _liveLog(msg) { try { const el = $('alphaLiveOut'); if (el) el.innerHTML = '<div class="alpha-note">⚡ ' + msg + '</div>' + el.innerHTML.slice(0, 600); } catch (e) { /* ignore */ } console.log('[ALPHA-LIVE] ' + msg); }
+export function startLive() {
+  if (liveTimer) return;
+  const eng = window.kchartApi && window.kchartApi.getTradeEngine ? window.kchartApi.getTradeEngine() : null;
+  if (!eng) { _liveLog('交易引擎未连接（先在交易条启用联动/隔离引擎）'); return; }
+  const sym = ($('alphaSym')?.value || globalThis.__pwa?.curSym || 'BTCUSDT').toUpperCase().trim();
+  liveSym = sym;
+  try { localStorage.setItem('pwa_alpha_live', JSON.stringify({ sym })); } catch (e) { /* ignore */ }
+  liveTimer = setInterval(tickLive, 60000);
+  _liveLog(`组合实盘(paper)已接管 ${sym}：SRSI 自动交易 + Alpha 每 60s 检查（|Δw|>0.05 调仓）`);
+  tickLive();
+}
+export function stopLive() {
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  try { localStorage.removeItem('pwa_alpha_live'); } catch (e) { /* ignore */ }
+  _liveLog('组合实盘已停止（现有 Alpha 仓保留，可手动平仓）');
+}
+async function tickLive() {
+  try {
+    const eng = window.kchartApi && window.kchartApi.getTradeEngine ? window.kchartApi.getTradeEngine() : null;
+    if (!eng || !eng.S) return;
+    const sym = liveSym;
+    const price = eng.S.prices && eng.S.prices[sym] && eng.S.prices[sym].last;
+    if (!price) return;
+    const sig = await updateAlphaSignal(sym, (window.__pwa && window.__pwa.curTf) || '1h', true);
+    if (!sig || !Number.isFinite(sig.lastW)) return;
+    const target = sig.lastW;
+    if (Math.abs(target - liveW) <= 0.05) return;
+    const perp = eng.getPerpSub ? eng.getPerpSub() : null;
+    if (!perp) return;
+    // 平掉旧 Alpha 仓（只动 src==='alpha'，不碰 SRSI/手动仓）
+    const old = (eng.S.pos || []).filter(p => p.sym === sym && p.src === 'alpha');
+    for (const p of old) { try { eng.exitPosition(p, { reason: '[Alpha组合]调仓' }); } catch (e) { /* ignore */ } }
+    liveW = 0;
+    if (Math.abs(target) > 0.05 && perp.bal > 1) {
+      await eng.placeOrder({ symbol: sym, side: target > 0 ? 'long' : 'short', amt: Math.abs(target) * perp.bal, lev: 1, marginMode: 'usdt', sub: perp.id, ai: false, sig: '[Alpha组合]', src: 'alpha' });
+      liveW = target;
+    }
+    _liveLog(`调仓 → 目标 ${(target * 100).toFixed(0)}% @ $${price.toFixed(0)}`);
+  } catch (e) { _liveLog('tick 失败：' + e.message); }
 }

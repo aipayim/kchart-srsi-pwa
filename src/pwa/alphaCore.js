@@ -107,3 +107,27 @@ export function runBacktest(bars, bars1d, cfg = {}) {
   if (openTrade && eqs.length) trades.push({ ...openTrade, tOut: ts[ts.length - 1], pOut: c[endI], pnlPct: (equity - openTrade.eqIn) / openTrade.eqIn * 100, eqOut: equity, reason: '末根估值' });
   return { final: eqs[eqs.length - 1], lastW: posW, ws, trades, annRet: annualized(eqs[0], eqs[eqs.length - 1], ts), sharpe: sharpeDaily(eqs, ts), maxDD: maxDD(eqs) * 100, fees, fundingPaid, liq, eqs, ts, nBars: eqs.length };
 }
+
+// ===== GOAL8: 双策略组合（vol 倒数滞后融合，GOAL7 实验产品化） =====
+// dS/dA = 两策略日权益序列（SRSI 美元口径 / Alpha 倍数口径）；win=融合窗口；init=首日权益基准。
+// 纯滞后：i<win 预热期 50/50；此后 wS = va/(vs+va)（过去 win 个日收益 RMS 的倒数比）。
+export function combineDaily(dS, dA, win = 30, initS = 1000, initA = 1) {
+  const toR = (arr, init) => { const r = []; let prev = init; for (const v of (arr || [])) { const x = Number(v); r.push(Number.isFinite(x) && prev > 0 ? x / prev - 1 : 0); prev = x > 0 ? x : prev; } return r; };
+  const rs = toR(dS, initS), ra = toR(dA, initA);
+  const n = Math.min(rs.length, ra.length);
+  if (n < 2) return { ws: [], daily: [], sharpe: 0, ddPct: 0, annPct: 0, wAvg: 0 };
+  const out = [], ws = [];
+  for (let i = 0; i < n; i++) {
+    if (i < win || win <= 0) { ws.push(0.5); out.push(0.5 * rs[i] + 0.5 * ra[i]); continue; }
+    let vs = 0, va = 0;
+    for (let j = i - win; j < i; j++) { vs += rs[j] ** 2; va += ra[j] ** 2; }
+    vs = Math.sqrt(vs / win) || 1e-9; va = Math.sqrt(va / win) || 1e-9;
+    const w = Math.min(1, Math.max(0, va / (vs + va)));
+    ws.push(w); out.push(w * rs[i] + (1 - w) * ra[i]);
+  }
+  const mu = out.reduce((s, x) => s + x, 0) / n;
+  const sd = Math.sqrt(out.reduce((s, x) => s + (x - mu) ** 2, 0) / (n - 1)) || 1e-12;
+  let e = 1, peak = 1, dd = 0;
+  for (const x of out) { e *= 1 + x; peak = Math.max(peak, e); dd = Math.max(dd, 1 - e / peak); }
+  return { ws, daily: out, sharpe: mu / sd * Math.sqrt(365), ddPct: dd * 100, annPct: (Math.pow(e, 365 / n) - 1) * 100, wAvg: ws.reduce((s, x) => s + x, 0) / n };
+}

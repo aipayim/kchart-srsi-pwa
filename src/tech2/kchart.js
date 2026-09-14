@@ -3298,6 +3298,44 @@ function drawMain(ctx, sym, tf, H) {
     }
   }
 
+  // SRSI 回测信号标记（GOAL8，_btCfg.btMarks 默认关=零绘制）：把最近一次 SRSI 回测的逐笔开/平/爆仓标在主图，
+  // 与 α 信号共存。数据源 window.__srsiBtTrades（runSrsiBacktest 结果，无前视重放）。时间→主图 bar：二分找 last idx ≤ trade.t
+  if (typeof _btCfg !== 'undefined' && _btCfg.btMarks && typeof window !== 'undefined' && window.__srsiBtTrades && window.__srsiBtSym === sym) {
+    const BT = window.__srsiBtTrades;
+    ctx.save();
+    const vEnd2 = start + n;
+    let painted = 0;
+    for (const tr of BT) {
+      if (!tr || !Number.isFinite(tr.t) || tr.t <= t[0]) continue;
+      // 二分：最后一个 t[i] <= tr.t
+      let lo = 0, hi = t.length - 1, idx = -1;
+      while (lo <= hi) { const m = (lo + hi) >> 1; if (t[m] <= tr.t) { idx = m; lo = m + 1; } else hi = m - 1; }
+      if (idx < start || idx >= vEnd2 || idx >= c.length) continue;
+      const x = X(idx), y = Y(c[idx]);
+      const act = tr.action || '';
+      if (act === 'open') {
+        ctx.fillStyle = tr.side === 'long' ? '#2ecc71' : '#ff6b6b';
+        ctx.beginPath();
+        if (tr.side === 'long') { ctx.moveTo(x, y + 7); ctx.lineTo(x - 5, y + 15); ctx.lineTo(x + 5, y + 15); }
+        else { ctx.moveTo(x, y - 7); ctx.lineTo(x - 5, y - 15); ctx.lineTo(x + 5, y - 15); }
+        ctx.closePath(); ctx.fill();
+      } else if (act === 'liquidate') {
+        ctx.strokeStyle = '#222'; ctx.fillStyle = '#222'; ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('×', x - 3, y - 8);
+      } else {
+        ctx.fillStyle = '#8899aa';
+        ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2); ctx.fill();
+      }
+      painted++;
+    }
+    if (painted) {
+      ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#7f8fa6'; ctx.textAlign = 'right';
+      ctx.fillText('SRSI回测信号 ' + painted, W - PAD_R - 4, PAD_T + 26);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
   // 优化预览叠加（optPreviewOn）：以白色虚线画各已优选周期的 K/D + 上下带（不写入配置，便于看图对比）
   if (cfg.optPreviewOn && cfg.srsiOptPreview) {
     const Y0p = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * MAIN_H;
@@ -4520,6 +4558,8 @@ export const kchartApi = {
   setPwaMode,
   isPwaMode,
   openSrsiCardFor,
+  setSrsiAutoOn,
+  getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,
   optimizeSrsiForTf,
   applyOptToSym,
@@ -4590,6 +4630,18 @@ let _arm = { side: null, t: 0 };
 let _armPos = null, _armT = 0;
 
 export function setTradeEngine(e) { _tradeEngine = e; renderQuickTrade(); }
+
+// GOAL8：供 Alpha 实验室「应用组合策略」一键开启 SRSI 自动交易（与手动勾选 ktSrsiAuto 同路径）
+export function setSrsiAutoOn(on) {
+  cfg.srsiAutoOn = !!on;
+  persist();
+  if (!cfg.srsiAutoOn) resetSrsiAuto(cfg.symbol);
+  renderSrsiAutoPanel();
+  if (typeof document !== 'undefined') {
+    const aEl = document.getElementById('ktSrsiAuto');
+    if (aEl) aEl.checked = cfg.srsiAutoOn;
+  }
+}
 export function setTradeConfig(c) {
   if (c) {
     if (typeof c.on === 'boolean') _tradeOn = c.on;
@@ -4757,6 +4809,8 @@ function renderQuickTrade() {
             <label><input type="checkbox" id="ktBtOpt1h"/>1h</label>
             <label><input type="checkbox" id="ktBtOpt4h"/>4h</label>
           </span>
+          <label class="kt-mini"><input id="ktBtAlphaCombo" type="checkbox"/>叠加Alpha组合</label>
+          <label class="kt-mini"><input id="ktBtMarks" type="checkbox"/>主图标注回测信号</label>
           <label class="kt-mini"><input id="ktBtOptOn" type="checkbox"/>自动优选</label>
           <label class="kt-mini"><input id="ktBtOptIntOn" type="checkbox"/>间隔重优选</label>
           <label class="kt-mini">重优选间隔h<input id="ktBtOptInt" class="kt-num" type="number" min="0.5" max="168" step="0.5"/></label>
@@ -4886,6 +4940,9 @@ function renderQuickTrade() {
       if (el) el.addEventListener('change', () => { _btSet({ optTfs: _btOptSync() }, true); });
     });
     b.querySelector('#ktBtOptOn').addEventListener('change', () => { _btSet({ optEnabled: b.querySelector('#ktBtOptOn').checked }); });
+    // GOAL8：叠加Alpha组合（回测完成后自动算组合行）/主图标注回测信号（重画）
+    b.querySelector('#ktBtAlphaCombo').addEventListener('change', () => { _btSet({ alphaCombo: b.querySelector('#ktBtAlphaCombo').checked }); });
+    b.querySelector('#ktBtMarks').addEventListener('change', () => { _btSet({ btMarks: b.querySelector('#ktBtMarks').checked }); renderKChart(); });
     b.querySelector('#ktBtOptIntOn').addEventListener('change', () => { _btSet({ optIntervalOn: b.querySelector('#ktBtOptIntOn').checked }); });
     b.querySelector('#ktBtOptInt').addEventListener('input', () => { _btSet({ optIntervalH: _clampNum(b.querySelector('#ktBtOptInt').value, 0.5, 168, 5) }); });
     b.querySelector('#ktBtOptNoTr').addEventListener('input', () => { _btSet({ optNoTradeH: _clampNum(b.querySelector('#ktBtOptNoTr').value, 0.5, 168, 5) }); });
@@ -4997,6 +5054,8 @@ function renderQuickTrade() {
   _btChk('ktBtOpt1h', _btCfg.optTfs.indexOf('1h') >= 0);
   _btChk('ktBtOpt4h', _btCfg.optTfs.indexOf('4h') >= 0);
   _btChk('ktBtOptOn', _btCfg.optEnabled);
+  _btChk('ktBtAlphaCombo', !!_btCfg.alphaCombo);
+  _btChk('ktBtMarks', !!_btCfg.btMarks);
   _btChk('ktBtOptIntOn', _btCfg.optIntervalOn);
   _btVal('ktBtOptInt', _btCfg.optIntervalH);
   _btVal('ktBtOptNoTr', _btCfg.optNoTradeH);
@@ -6325,6 +6384,7 @@ function _btOverlayFor(cfg, bt) {
 }
 _btCfgLoad();
  let _btLastDays = 7;
+ let _btComboText = ''; // GOAL8：组合行文本（报告导出并入）
  let _btFetchImpl = null; // 测试可注入桩（覆盖 fetchKlinesRange）
  export function __setBacktestFetch(fn) { _btFetchImpl = fn; }
  export function __getBtStore() { try { return JSON.parse(localStorage.getItem(_BT_KEY) || '{}'); } catch { return {}; } }
@@ -6636,6 +6696,7 @@ export function exportBacktestReport(res, days, sym, mode, startMs, endMs) {
     (res.liqCount || 0) > 0 ? ('- ⚠ 强平 ' + res.liqCount + ' 次，净损失 ' + _btMoney(res.liqLoss, true)) : '',
     isSpot ? ('- 现货期末：现金 USDT $' + _btMoney(res.finalU) + ' ｜ ' + sym + '库存 ' + res.finalC + '（≈$' + _btMoney(res.finalC * res.finalPrice) + '）｜ 期末价 $' + _btMoney(res.finalPrice)) : '', '',
     '## 三、交易明细', head, sep, rows || '（无成交）', '',
+    (_btComboText ? ['## 三点五、Alpha 组合（vol 倒数融合，计算见 Alpha 实验室 comboWithSrsi；历史回测非预测）', _btComboText, ''] : []),
     '## 四、强平归因（供第三方 AI 找爆仓信号）',
     '- 强平单数：' + (res.liqLog ? res.liqLog.length : 0) + ' ｜ 全部开仓快照数：' + (res.openLog ? res.openLog.length : 0) + '（对照组：liquidated=false）',
     '- 每笔强平含：开仓时刻 openCtx(k15/d15/srsi4h|1h|30m/ema4h|1h|30m/atrPct15/priceVsEma15|1h/recentCandlePct/hotStop) + 强平时刻 liqCtx + adverseMovePct',
@@ -6719,6 +6780,14 @@ export async function runSrsiBacktest(days, opts) {
     const res = backtestSrsiAuto(sym, kl, effConfig, principal, startMs, fund, btOpts);
     res.optLeak = _leak || null;
     _btLastDays = days;
+    // GOAL8：向 Alpha 实验室/主图层暴露已实现日权益（仅平/爆事件，平仓点才无歧义）+ 交易明细（主图标注用）
+    try {
+      if (typeof window !== 'undefined' && res && res.trades) {
+        window.__srsiBtDaily = { sym, days, bal: res.trades.filter(t => t.action !== 'open' && t.bal != null).map(t => [t.t, t.bal]) };
+        window.__srsiBtTrades = res.trades;
+        window.__srsiBtSym = sym;
+      }
+    } catch (e) { /* 非浏览器环境忽略 */ }
     const store = _btReadStore();
     store.results = store.results || {};
     store.results[sym + '|' + days + (mode === 'spot' ? '|spot' : '')] = res;
@@ -6730,6 +6799,16 @@ export async function runSrsiBacktest(days, opts) {
       el.innerHTML = _renderBacktestResult(res, days);
       const exBtn = el.querySelector('#ktBtExport');
       if (exBtn) exBtn.addEventListener('click', () => exportBacktestReport(res, days, sym, mode, startMs, endMs));
+      // GOAL8：勾选「叠加Alpha组合」→ 回测完成后自动计算组合行（vol 倒数融合，GOAL7 实验）
+      if (typeof window !== 'undefined' && _btCfg.alphaCombo && window.__alphaLab && window.__alphaLab.comboWithSrsi && window.__srsiBtDaily) {
+        const comboEl = document.createElement('div');
+        comboEl.innerHTML = '<div class="kt-auto-row">🧪 Alpha 组合计算中…（拉取 1h 历史重放 Alpha 子账户）</div>';
+        el.appendChild(comboEl);
+        window.__alphaLab.comboWithSrsi(window.__srsiBtDaily).then(r => {
+          if (r && r.html) { comboEl.innerHTML = r.html; _btComboText = r.text || ''; }
+        }).catch(() => { comboEl.innerHTML = '';
+        });
+      }
     }
   } catch (e) {
     const msg = (e && e.message) ? e.message : String(e);
@@ -6748,6 +6827,14 @@ export function renderSavedBacktest() {
   if (store.results[key]) {
     const svRes = store.results[key], svDays = store.lastDays || 1, svSym = store.lastSym || cfg.symbol, svMode = store.lastMode || 'perp';
     const svNow = Date.now(), svEnd = svNow, svStart = svNow - svDays * 24 * 3600 * 1000;
+    // GOAL8：恢复保存结果时同步刷新主图标注/组合数据源
+    try {
+      if (typeof window !== 'undefined' && svRes && svRes.trades) {
+        window.__srsiBtDaily = { sym: svSym, days: svDays, bal: svRes.trades.filter(t => t.action !== 'open' && t.bal != null).map(t => [t.t, t.bal]) };
+        window.__srsiBtTrades = svRes.trades;
+        window.__srsiBtSym = svSym;
+      }
+    } catch (e) { /* 忽略 */ }
     el.innerHTML = _renderBacktestResult(svRes, svDays);
     const exBtn = el.querySelector('#ktBtExport');
     if (exBtn) exBtn.addEventListener('click', () => exportBacktestReport(svRes, svDays, svSym, svMode, svStart, svEnd));
