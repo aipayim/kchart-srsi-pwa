@@ -202,4 +202,60 @@ export function initAlphaLab() {
     tickPaper(); paperTimer = setInterval(tickPaper, 60000);
   }
   window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck };
+  // GOAL6：主图 α 信号 provider —— kchart.js 的「α 信号」chip 开启时调用，
+  // 用与回测/paper 同源的 runBacktest 重算当前币/主周期逐根权重并写入 window.__alphaSignals。
+  window.__alphaSignalProvider = async () => {
+    try {
+      const kApi = globalThis.kchartApi;
+      const kc = kApi && kApi.getConfig ? kApi.getConfig() : null;
+      const sym = String((kc && kc.symbol) || 'BTCUSDT').toUpperCase();
+      await updateAlphaSignal(sym, (kc && kc.mainTF) || '1h');
+    } catch (e) { /* 静默：信号缺失时主图零绘制 */ }
+  };
+}
+
+// ---- GOAL6：主图 α 信号序列（无前视）----
+// 用当前主周期可见 K 线跑同源 runBacktest（含 vol-target），取逐根目标权重 ws；
+// 再按 band 规则重放成交点（|w-posW|>band → 在下一根开盘成交，与回测 fill 语义一致）。
+// 1d 收盘与资金费率按币缓存（d1 拉取一次；funding 6h 刷新），主图切换周期/币种自动重算。
+const _sigCache = { d1: {}, fr: {}, frT: {} };
+export async function updateAlphaSignal(sym, tf, force = false) {
+  try {
+    const S = globalThis.S;
+    const kl = S && S.klines && S.klines[sym] && S.klines[sym][tf];
+    if (!kl || !kl.t || kl.t.length < 60 || !kl.c || kl.c.length !== kl.t.length) return null;
+    if (!force) {
+      const prev = globalThis.__alphaSignals;
+      if (prev && prev.sym === sym && prev.tf === tf && prev.ts === kl.t && Date.now() - prev.updatedT < 30000) return prev;
+    }
+    let d1 = _sigCache.d1[sym];
+    if (!d1 || !d1.t || d1.t.length < 30) {
+      const k = await fetchKlinesRange(sym, '1d', Date.now() - 410 * DAY, Date.now(), null, 500);
+      d1 = { t: k.times, c: k.closes };
+      _sigCache.d1[sym] = d1;
+    }
+    let funding = _sigCache.fr[sym];
+    if (!funding || Date.now() - (_sigCache.frT[sym] || 0) > 6 * HOUR) {
+      funding = await loadFunding(sym, Date.now() - 100 * DAY);
+      _sigCache.fr[sym] = funding; _sigCache.frT[sym] = Date.now();
+    }
+    const h1 = { t: kl.t, o: kl.o, h: kl.h, l: kl.l, c: kl.c };
+    const r = runBacktest(h1, d1, {
+      start: kl.t[0], end: kl.t[kl.t.length - 1] + HOUR,
+      band: 0.05, funding, useFunding: true, levCap: 1, volTarget: 0.30, vtCap: 1.5, longOnly: false,
+    });
+    if (!r || r.error || !r.ws || r.ws.length !== kl.t.length) return null;
+    const flips = [];
+    let posW = 0;
+    for (let i = 0; i < r.ws.length - 1; i++) { // 末根为 in-flight：不在未收盘 bar 上决策（无前视）
+      const w = r.ws[i];
+      if (!Number.isFinite(w)) continue;
+      if (Math.abs(w - posW) > 0.05) {
+        flips.push({ i: Math.min(i + 1, r.ws.length - 1), dir: w > posW ? 1 : -1, w });
+        posW = w;
+      }
+    }
+    globalThis.__alphaSignals = { sym, tf, ts: kl.t, flips, lastW: posW, updatedT: Date.now() };
+    return globalThis.__alphaSignals;
+  } catch (e) { return null; }
 }

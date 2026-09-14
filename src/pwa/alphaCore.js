@@ -62,7 +62,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
   const ad = alignClosed(bars1d.t, 86400e3, t);
   const rets = new Array(n).fill(0);
   for (let i = 1; i < n; i++) rets[i] = Math.log(c[i] / c[i - 1]);
-  const eqs = [], ts = [];
+  const eqs = [], ts = [], ws = [];
   let equity = 1, posW = 0, posEntry = 0, liqPrice = null;
   let fees = 0, fundingPaid = 0, liq = 0;
   let fIdx = 0; const startT = t[i0];
@@ -77,7 +77,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
     }
     if (posW !== 0 && liqPrice != null) {
       const hit = cfg.h && cfg.l ? (posW > 0 ? cfg.l[i] <= liqPrice : cfg.h[i] >= liqPrice) : (posW > 0 ? c[i] <= liqPrice : c[i] >= liqPrice);
-      if (hit) { equity = 0; liq++; posW = 0; liqPrice = null; eqs.push(equity); ts.push(t[i]); continue; }
+      if (hit) { equity = 0; liq++; posW = 0; liqPrice = null; eqs.push(equity); ts.push(t[i]); ws.push(0); continue; }
     }
     if (posW !== 0 && posEntry > 0) {
       equity *= 1 + posW * levCap * (c[i] / posEntry - 1);
@@ -99,7 +99,7 @@ export function runBacktest(bars, bars1d, cfg = {}) {
       equity -= cost; fees += cost;
       posW = w; posEntry = o[i + 1]; liqPrice = null;
     }
-    eqs.push(equity); ts.push(t[i]);
+    eqs.push(equity); ts.push(t[i]); ws.push(w);
   }
-  return { final: eqs[eqs.length - 1], lastW: posW, annRet: annualized(eqs[0], eqs[eqs.length - 1], ts), sharpe: sharpeDaily(eqs, ts), maxDD: maxDD(eqs) * 100, fees, fundingPaid, liq, eqs, ts, nBars: eqs.length };
+  return { final: eqs[eqs.length - 1], lastW: posW, ws, annRet: annualized(eqs[0], eqs[eqs.length - 1], ts), sharpe: sharpeDaily(eqs, ts), maxDD: maxDD(eqs) * 100, fees, fundingPaid, liq, eqs, ts, nBars: eqs.length };
 }

@@ -4,7 +4,7 @@ import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈
 import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
-import { initAlphaLab } from './alphaLab.js';
+import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
@@ -330,6 +330,10 @@ async function tickKlines() {
     setFresh('K线刷新失败: ' + e.message);
     if (e && e.sourceUnreachable) showSrcErr(e.message);
   }
+  try { // GOAL6：主图 α 信号序列随 K 线刷新重算（开关关时不耗时）
+    const kc = api.getConfig();
+    if (kc.alphaSignalOn) await updateAlphaSignal(curSym, kc.mainTF);
+  } catch (e) { /* 静默 */ }
   api.render();
   if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（canvas render 不重建 DOM）
 }

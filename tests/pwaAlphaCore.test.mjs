@@ -52,6 +52,11 @@ count += 2;
 // 6) 确定性：同参重跑 final 逐位一致
 const r2 = runBacktest(fx.h1, fx.d1, { start: fx.h1.t[0], end, band: 0.05, funding: fx.funding, useFunding: false, levCap: 1, volTarget: 0.30, vtCap: 1.0, longOnly: true });
 assert.equal(r2.final, rLO.final, '同参重跑应逐位一致');
+
+// 7b) ws 逐根目标权重（GOAL6 主图 α 信号数据源）：与 eqs 等长且范围合理
+assert.ok(rLO.ws && rLO.ws.length === rLO.eqs.length, `ws 与 eqs 等长（${rLO.ws && rLO.ws.length} vs ${rLO.eqs.length}）`);
+for (const w of rLO.ws) assert.ok(Number.isFinite(w) && Math.abs(w) <= 3, `ws 越界: ${w}`);
+count += rLO.ws.length;
 count++;
 
 // 7) 指标边界：maxDD ∈ [0,100]、annualized 负权益保护
