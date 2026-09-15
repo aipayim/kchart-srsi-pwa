@@ -116,6 +116,7 @@ async function runBacktestUI(sym) {
     const warm = '前 30 天为 vol-target/carry 预热段';
     const deg = funding.length ? '' : '<div class="alpha-err">⚠ 资金费数据不可达（fapi 被墙？）——carry 腿为 0，结果仅 breakout+momo</div>';
     out.innerHTML = `
+      <div class="alpha-note" style="border:1px solid #2ecc71;border-radius:6px;padding:.35em .6em;margin-bottom:.4em"><b>🧭 基石策略 · 参数固化声明</b>：本面板参数为 GOAL2-4 定版（vt30% / levCap3 / band5% / combo 权重 carry0.5+momo0.2+brk0.3）——<b>不参与自动优选</b>（81 组参数网格平台验证 GOAL10，精调无益、优选引入过拟合风险）。其它策略（SRSI 等）为卫星层，需防爆+regime 闸门本地长窗验证后才配资金。</div>
       <div class="alpha-metrics">${fmtMetrics(r, days)}</div>
       <div class="alpha-metrics alpha-oos">OOS（后1/3）：年化 ${oos ? pct(oos.annRet) : '-'} · Sharpe ${oos ? oos.sharpe.toFixed(2) : '-'} · 回撤 ${oos ? oos.maxDD.toFixed(1) + '%' : '-'}　<span class="alpha-note">${warm}</span></div>
       <div class="alpha-note">${fundNote} · 成本 taker 0.045%+滑 0.02% · 信号收盘评估→下一根开盘成交（lag=1，无前视）</div>
@@ -290,7 +291,7 @@ export function initAlphaLab() {
     $('alphaPaperStart').style.display = 'none'; $('alphaPaperStop').style.display = '';
     tickPaper(); paperTimer = setInterval(tickPaper, 60000);
   }
-  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck, comboWithSrsi, startLive, stopLive };
+  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck, comboWithSrsi, startLive, stopLive, isLive: () => !!liveTimer };
   // GOAL6：主图 α 信号 provider —— kchart.js 的「α 信号」chip 开启时调用，
   // 用与回测/paper 同源的 runBacktest 重算当前币/主周期逐根权重并写入 window.__alphaSignals。
   window.__alphaSignalProvider = async () => {

@@ -2462,6 +2462,7 @@ console.log('\n[kchart: 回测 90/180/365 按钮功能]');
     };
   };
   kchartApi.__setBacktestFetch(fetchImpl);
+  _btCfg.btStrategy = 'srsi'; _btCfgSave(); // GOAL12：此用例专测 SRSI 路径存储（默认策略为 alpha）
   try {
     for (const d of [30, 90, 180, 365]) {
       await kchartApi.runSrsiBacktest(d, { force: true });
@@ -2584,7 +2585,8 @@ console.log('\n[kchart: 回测 保证金严格记账 + 开仓上限]');
       w4h: c.srsiAutoW4h,
       w1h: c.srsiAutoW1h,
       w30m: c.srsiAutoW30m,
-      collapsed: false
+      collapsed: false,
+      btStrategy: 'srsi'
     };
     localStorage.setItem('smartTrader_kchart_bt_cfg', JSON.stringify(bt));
     if (mode === 'spot') localStorage.setItem('pwa_sim_settings', JSON.stringify({ spotUsdt: 1000, coin: {} }));
@@ -2790,6 +2792,8 @@ function _runDanger(mode) {
   return backtestSrsiAuto('BTCUSDT', _klines, cfg, 10000, undefined, [], { mode: 'perp' });
 }
 const _rNone = _runDanger('none'), _rFilter = _runDanger('filter'), _rReverse = _runDanger('reverse');
+const _rHotByCfg = backtestSrsiAuto('BTCUSDT', _klines, Object.assign({}, _baseCfg, { srsiAutoDanger: 'none', srsiAutoHotStop: true }), 10000, undefined, [], { mode: 'perp' });
+const _rHotByOpt = backtestSrsiAuto('BTCUSDT', _klines, Object.assign({}, _baseCfg, { srsiAutoDanger: 'none' }), 10000, undefined, [], { mode: 'perp', hotStop: true });
 ok('none 返回 dangerMode', _rNone.dangerMode === 'none');
 ok('filter 返回 dangerMode', _rFilter.dangerMode === 'filter');
 ok('reverse 返回 dangerMode', _rReverse.dangerMode === 'reverse');
@@ -2799,6 +2803,7 @@ ok('openLog[0].openCtx 含 atrPct15', _rNone.openLog[0] && ('atrPct15' in _rNone
 ok('openLog[0].openCtx 含 priceVsEma15', _rNone.openLog[0] && ('priceVsEma15' in _rNone.openLog[0].openCtx));
 ok('openLog[0].openCtx 含 recentCandlePct', _rNone.openLog[0] && ('recentCandlePct' in _rNone.openLog[0].openCtx));
 ok('openLog[0].openCtx 含 hotStop', _rNone.openLog[0] && ('hotStop' in _rNone.openLog[0].openCtx));
+ok('回测 hotStop 配置字段与 opts 接线一致', JSON.stringify(_rHotByCfg.openLog.map(x => x.openCtx.hotStop)) === JSON.stringify(_rHotByOpt.openLog.map(x => x.openCtx.hotStop)));
 ok('dangerHits 均为数字≥0', [ _rNone.dangerHits, _rFilter.dangerHits, _rReverse.dangerHits ].every(x => typeof x === 'number' && x >= 0));
 ok('三模式 dangerHits 一致(基础emaOpp2危险基线独立于模式)', _rNone.dangerHits === _rFilter.dangerHits && _rFilter.dangerHits === _rReverse.dangerHits);
 ok('none 不产生反手单', _rNone.reverseOpens === 0);

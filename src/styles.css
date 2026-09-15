@@ -661,3 +661,7 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .disc-dir-badge.disc-neg{color:#FF5252}
 .disc-dir-badge.disc-neutral{color:var(--text2)}
 
+
+/* GOAL12：策略选择块——每个策略独占一行（Alpha 基石第一） */
+.kt-bt-strategy label, .kt-strats label { display: block; line-height: 2; }
+.kt-bt-strategy, .kt-strats { flex-direction: column; align-items: flex-start; gap: 2px; }

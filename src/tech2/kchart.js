@@ -281,6 +281,7 @@ export function defaultKConfig() {
     subOrder: ['rsi', 'srsi', 'macd'],   // 子图顺序（拖拽换序）
     // ---- SRSI 自动交易 ----
     srsiAutoOn: false,          // SRSI 自动交易总开关
+    btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
     srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
     srsiAutoMode: 'follow',     // 本位：follow=跟随快捷交易(开空U本位/开多币本位) / usdt / coin
     srsiAutoUpper: 0,           // 上限带（0=使用 15m 优选带）
@@ -401,6 +402,7 @@ function normalizeCfg(c) {
   // ---- SRSI 自动交易配置兜底 ----
   if (typeof c.srsiAutoOn !== 'boolean') c.srsiAutoOn = false;
   if (typeof c.srsiAutoApplyBt !== 'boolean') c.srsiAutoApplyBt = false;
+  if (!['alpha', 'srsi', 'combo'].includes(c.btStrategy)) c.btStrategy = 'alpha';
   if (!['follow', 'usdt', 'coin'].includes(c.srsiAutoMode)) c.srsiAutoMode = 'follow';
   if (c.srsiAutoUpper !== 0 && (typeof c.srsiAutoUpper !== 'number' || !(c.srsiAutoUpper >= 50 && c.srsiAutoUpper <= 100))) c.srsiAutoUpper = 90;
   if (c.srsiAutoLower !== 0 && (typeof c.srsiAutoLower !== 'number' || !(c.srsiAutoLower >= 0 && c.srsiAutoLower <= 50))) c.srsiAutoLower = 10;
@@ -4683,6 +4685,8 @@ export function setSrsiAutoOn(on) {
     if (aEl) aEl.checked = cfg.srsiAutoOn;
   const abEl = bar.querySelector('#ktSrsiApplyBt');
   if (abEl) abEl.checked = !!cfg.srsiAutoApplyBt;
+  const alEl = bar.querySelector('#ktAlphaLive');
+  if (alEl) alEl.checked = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
   }
 }
 // GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）
@@ -4763,8 +4767,9 @@ function renderQuickTrade() {
       <button id="ktOrders" class="kt-btn kt-orders"></button>
     </div>
     <div class="kt-row kt-auto">
-      <label class="kt-toggle"><input id="ktSrsiAuto" type="checkbox"/>SRSI自动永续合约</label>
-      <label class="kt-mini" title="GOAL9：勾选后，回测设置里跑完回测会自动把回测参数（SRSI 周期参数+杠杆/仓位/带/防爆等）应用到实盘自动交易，免逐项手配；主图同步显示实时交易信号（与实盘交易一一对应）"><input id="ktSrsiApplyBt" type="checkbox"/>应用回测参数</label>
+      <label class="kt-toggle kt-strat"><input id="ktAlphaLive" type="checkbox"/>Alpha 基石实盘(paper)</label>
+      <label class="kt-toggle kt-strat"><input id="ktSrsiAuto" type="checkbox"/>SRSI 自动永续合约(卫星)</label>
+      <label class="kt-mini kt-strat" title="GOAL9：勾选后，回测设置里跑完回测会自动把回测参数（SRSI 周期参数+杠杆/仓位/带/防爆等）应用到实盘自动交易，免逐项手配；主图同步显示实时交易信号（与实盘交易一一对应）"><input id="ktSrsiApplyBt" type="checkbox"/>SRSI·应用回测参数</label>
       <label class="kt-toggle">本位
         <select id="ktSrsiMode">
           <option value="follow">跟随</option>
@@ -4814,6 +4819,11 @@ function renderQuickTrade() {
     <div class="kt-bt-section">
       <div class="kt-bt-head"><span>回测设置</span><button id="ktBtClear" class="kt-btn kt-bt" type="button">清空回测</button><button id="ktBtToggle" class="kt-btn kt-bt" type="button">▸</button></div>
       <div id="ktBtBody" class="kt-bt-body">
+        <div class="kt-row kt-bt-strategy" title="策略选择：Alpha 为基石策略（GOAL11 长窗验证 2018-2026 跨窗口/跨账户稳定），SRSI 为卫星层（需防爆+regime 闸门验证后配资金）">
+          <label class="kt-strat"><input type="radio" name="ktBtStrat" value="alpha"/>Alpha 实验（基石策略 ★ 参数固化）</label>
+          <label class="kt-strat"><input type="radio" name="ktBtStrat" value="srsi"/>SRSI 策略（15m 自动交易·卫星层）</label>
+          <label class="kt-strat"><input type="radio" name="ktBtStrat" value="combo"/>SRSI + Alpha 组合（vol 倒数 30d 分配）</label>
+        </div>
         <div class="kt-row kt-auto-bt">
           <span class="kt-mini">账户类型
             <select id="ktBtMode" class="kt-sel">
@@ -4872,7 +4882,6 @@ function renderQuickTrade() {
             <label><input type="checkbox" id="ktBtOpt1h"/>1h</label>
             <label><input type="checkbox" id="ktBtOpt4h"/>4h</label>
           </span>
-          <label class="kt-mini"><input id="ktBtAlphaCombo" type="checkbox"/>叠加Alpha组合</label>
           <label class="kt-mini"><input id="ktBtMarks" type="checkbox"/>主图标注回测信号</label>
           <label class="kt-mini"><input id="ktBtOptOn" type="checkbox"/>自动优选</label>
           <label class="kt-mini"><input id="ktBtOptIntOn" type="checkbox"/>间隔重优选</label>
@@ -4907,6 +4916,16 @@ function renderQuickTrade() {
       persist();
       if (!cfg.srsiAutoOn) resetSrsiAuto(cfg.symbol);
       renderSrsiAutoPanel();
+    });
+    // GOAL12：Alpha 基石实盘开关（接 Alpha 实验室 live；仅 PWA 有 alphaLab）
+    b.querySelector('#ktAlphaLive').addEventListener('change', () => {
+      const on = b.querySelector('#ktAlphaLive').checked;
+      if (typeof window === 'undefined' || !window.__alphaLab || !window.__alphaLab.startLive) {
+        b.querySelector('#ktAlphaLive').checked = false;
+        renderTradeLog && renderTradeLog('Alpha 基石实盘仅 PWA（kchart.html）可用：未加载 Alpha 实验室');
+        return;
+      }
+      if (on) window.__alphaLab.startLive(); else window.__alphaLab.stopLive();
     });
     // GOAL9：应用回测参数开关；勾选时若已有回测快照则立即应用
     b.querySelector('#ktSrsiApplyBt').addEventListener('change', () => {
@@ -5012,8 +5031,8 @@ function renderQuickTrade() {
       if (el) el.addEventListener('change', () => { _btSet({ optTfs: _btOptSync() }, true); });
     });
     b.querySelector('#ktBtOptOn').addEventListener('change', () => { _btSet({ optEnabled: b.querySelector('#ktBtOptOn').checked }); });
-    // GOAL8：叠加Alpha组合（回测完成后自动算组合行）/主图标注回测信号（重画）
-    b.querySelector('#ktBtAlphaCombo').addEventListener('change', () => { _btSet({ alphaCombo: b.querySelector('#ktBtAlphaCombo').checked }, false); });
+    // GOAL12：策略选择（alpha 基石第一；srsi；combo=原 alphaCombo 路径）；不自动重跑
+    b.querySelectorAll('input[name=ktBtStrat]').forEach(r => r.addEventListener('change', () => { _btSet({ btStrategy: r.value, alphaCombo: r.value === 'combo' }, false); }));
     b.querySelector('#ktBtMarks').addEventListener('change', () => { _btSet({ btMarks: b.querySelector('#ktBtMarks').checked }, false); renderKChart(); });
     b.querySelector('#ktBtOptIntOn').addEventListener('change', () => { _btSet({ optIntervalOn: b.querySelector('#ktBtOptIntOn').checked }); });
     b.querySelector('#ktBtOptInt').addEventListener('input', () => { _btSet({ optIntervalH: _clampNum(b.querySelector('#ktBtOptInt').value, 0.5, 168, 5) }); });
@@ -5126,7 +5145,7 @@ function renderQuickTrade() {
   _btChk('ktBtOpt1h', _btCfg.optTfs.indexOf('1h') >= 0);
   _btChk('ktBtOpt4h', _btCfg.optTfs.indexOf('4h') >= 0);
   _btChk('ktBtOptOn', _btCfg.optEnabled);
-  _btChk('ktBtAlphaCombo', !!_btCfg.alphaCombo);
+  b.querySelectorAll('input[name=ktBtStrat]').forEach(r => { r.checked = r.value === (_btCfg.btStrategy || 'alpha'); });
   _btChk('ktBtMarks', !!_btCfg.btMarks);
   _btChk('ktBtOptIntOn', _btCfg.optIntervalOn);
   _btVal('ktBtOptInt', _btCfg.optIntervalH);
@@ -6769,6 +6788,7 @@ export function exportBacktestReport(res, days, sym, mode, startMs, endMs) {
     (res.liqCount || 0) > 0 ? ('- ⚠ 强平 ' + res.liqCount + ' 次，净损失 ' + _btMoney(res.liqLoss, true)) : '',
     isSpot ? ('- 现货期末：现金 USDT $' + _btMoney(res.finalU) + ' ｜ ' + sym + '库存 ' + res.finalC + '（≈$' + _btMoney(res.finalC * res.finalPrice) + '）｜ 期末价 $' + _btMoney(res.finalPrice)) : '', '',
     '## 三、交易明细', head, sep, rows || '（无成交）', '',
+    (_btAlphaText ? [_btAlphaText, ''] : []),
     (_btComboText ? ['## 三点五、Alpha 组合（vol 倒数融合，计算见 Alpha 实验室 comboWithSrsi；历史回测非预测）', _btComboText, ''] : []),
     '## 四、强平归因（供第三方 AI 找爆仓信号）',
     '- 强平单数：' + (res.liqLog ? res.liqLog.length : 0) + ' ｜ 全部开仓快照数：' + (res.openLog ? res.openLog.length : 0) + '（对照组：liquidated=false）',
@@ -6805,9 +6825,46 @@ export function exportBacktestReport(res, days, sym, mode, startMs, endMs) {
 }
 
 // 页面回测入口：拉取历史 K线并渲染结果（结果按区间本地持久化、原始K线缓存可覆盖）
+// GOAL12：基石策略（Alpha）单独回测——参数固化为 GOAL2-4 定版（vt30%/L3/band5%/combo 权重 0.5+0.2+0.3，不参与优选）
+export async function runAlphaBacktest(days, opts) {
+  const el = typeof document !== 'undefined' ? document.getElementById('ktSrsiBtResult') : null;
+  const sym = cfg.symbol;
+  const now = Date.now(), endMs = now;
+  const start2 = now - days * 86400e3;
+  try {
+    if (el) el.innerHTML = '<div class="kt-auto-row">Alpha 基石回测中…（拉取 1h/1d 历史）</div>';
+    const need1h = Math.ceil(days * 24) + 240, need1d = Math.ceil(days) + 260;
+    const [k1h, k1d] = await Promise.all([
+      _btFetch(sym, '1h', start2 - 30 * 86400e3, endMs, null, need1h),
+      _btFetch(sym, '1d', start2 - 30 * 86400e3, endMs, null, need1d)
+    ]);
+    if (!k1h || !k1d || k1h.length < 250 || k1d.length < 40) { if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测：1h/1d 数据不足（1h=' + (k1h || []).length + ' 1d=' + (k1d || []).length + '）</div>'; return null; }
+    const toRows = (x) => Array.isArray(x) ? x.map(k => [+k[0], +k[1], +k[2], +k[3], +k[4]]) : x.closes.map((c, i) => [+x.times[i], +x.opens[i], +x.highs[i], +x.lows[i], +c]);
+    const r1h = toRows(k1h), r1d = toRows(k1d);
+    const h1 = { t: r1h.map(k => k[0]), o: r1h.map(k => k[1]), c: r1h.map(k => k[4]) };
+    const d1 = { t: r1d.map(k => k[0]), c: r1d.map(k => k[4]) };
+    const r = runBacktest(h1, d1, { start: start2, end: endMs, band: 0.05, volTarget: 0.3, vtCap: 1.5, levCap: 3, funding: [], useFunding: false });
+    if (r.error) { if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测失败: ' + r.error + '</div>'; return null; }
+    const ann = ((Math.pow(r.final, 365 / Math.max(1, r.nBars / 24)) - 1) * 100);
+    _btAlphaText = '## 三、基石策略 Alpha 回测（参数固化 GOAL2-4 定版，历史回测非预测）\n- 窗口: ' + days + 'd (' + new Date(start2).toISOString().slice(0, 10) + ' → ' + new Date(endMs).toISOString().slice(0, 10) + ')\n- 期末权益: ' + (r.final * 100).toFixed(1) + '%（本金 100%）\n- 年化(CAGR): ' + ann.toFixed(1) + '%\n- Sharpe(日): ' + (r.sharpe || 0).toFixed(2) + '\n- maxDD: ' + (r.maxDD || 0).toFixed(1) + '%\n- 调仓次数: ' + r.trades.length + '\n- 费用: ' + (r.fees * 100).toFixed(2) + '%\n- 参数: vt30% / levCap3 / band5% / combo权重 carry0.5+momo0.2+brk0.3（固化，不优选）\n';
+    if (el) {
+      el.innerHTML = '<div class="kt-auto-row"><b>🧭 Alpha 基石策略</b>（参数固化 GOAL2-4 定版·不参与优选·历史回测非预测）</div>'
+        + '<div class="kt-auto-row">窗口 ' + days + 'd｜期末权益 <b>' + (r.final * 100).toFixed(1) + '%</b>｜年化 <b>' + ann.toFixed(1) + '%</b>｜Sharpe <b>' + (r.sharpe || 0).toFixed(2) + '</b>｜maxDD <b>' + (r.maxDD || 0).toFixed(1) + '%</b></div>'
+        + '<div class="kt-auto-row">调仓 ' + r.trades.length + ' 次｜费用 ' + (r.fees * 100).toFixed(2) + '%｜参数 vt30%/L3/band5%/权重0.5+0.2+0.3（固化）</div>';
+    }
+    window.__alphaBtLast = { sym, days, final: r.final, ann, sharpe: r.sharpe, dd: r.maxDD };
+    return r;
+  } catch (e) {
+    if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测失败: ' + (e && e.message) + '</div>';
+    return null;
+  }
+}
+let _btAlphaText = ''; // GOAL12：基石报告文本（导出并入）
 export async function runSrsiBacktest(days, opts) {
   const el = typeof document !== 'undefined' ? document.getElementById('ktSrsiBtResult') : null;
   const sym = cfg.symbol;
+  // GOAL12：策略分流——alpha=基石单独回测；srsi/combo 走原 SRSI 流程
+  if ((_btCfg.btStrategy || 'alpha') === 'alpha') return runAlphaBacktest(days, opts);
   const force = !!(opts && opts.force);
   let kl = force ? null : _btReadRaw(sym, days);
   const now = Date.now(), endMs = now, startMs = now - days * 24 * 3600 * 1000;
@@ -6881,7 +6938,7 @@ export async function runSrsiBacktest(days, opts) {
       const exBtn = el.querySelector('#ktBtExport');
       if (exBtn) exBtn.addEventListener('click', () => exportBacktestReport(res, days, sym, mode, startMs, endMs));
       // GOAL8：勾选「叠加Alpha组合」→ 回测完成后自动计算组合行（vol 倒数融合，GOAL7 实验）
-      if (typeof window !== 'undefined' && _btCfg.alphaCombo && window.__alphaLab && window.__alphaLab.comboWithSrsi && window.__srsiBtDaily) {
+      if (typeof window !== 'undefined' && _btCfg.btStrategy === 'combo' && window.__alphaLab && window.__alphaLab.comboWithSrsi && window.__srsiBtDaily) {
         const comboEl = document.createElement('div');
         comboEl.innerHTML = '<div class="kt-auto-row">🧪 Alpha 组合计算中…（拉取 1h 历史重放 Alpha 子账户）</div>';
         el.appendChild(comboEl);
