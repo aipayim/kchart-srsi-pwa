@@ -90,3 +90,21 @@
 - C：legacy.js 浮盈循环 + kchartApp.js 主循环改调 positionPnlPct（币本位 pnlPct 从 pnl/币数 失真口径 → pnl/amt×entry 保证金收益率）
 - D：测试 indicators 319(+16)/kchart 903(+3)/全套无 FAIL；1.5.40 部署后复验发现崩溃→1.5.41 修复重部署。线上 e2e（iPhone13 仿真+合成 TouchEvent）：touchAction=none ✓、pinch 150→60→192（张开/捏合双向）✓、🔒金色 68px 出现→跨 2.5s 清除期仍在→解锁消失 ✓、0 PAGEERROR ✓
 - 验证方法论：CDP dispatchTouchEvent 与 playwright mobile 仿真不兼容（e.touches 空）→ 用页面内 new TouchEvent+new Touch 合成事件驱动；🔒验证用 getImageData 金色像素采样
+
+# GOAL26 — 底部 Tab 导航（GOAL17-D ③，拇指区单页切换）
+
+> GOAL17-D ③：K线/交易/回测/设置——kchart.html 单页内切 panel 显隐（无路由改动）。⑤横屏 PAD 自动展开已由 GOAL18-C 实现（kchartApp.js initPwaTrade matchMedia landscape）无需重做。
+
+## 子任务
+- [x] A. kchart.html：内容块加 data-tab-block 标记（K线=根线数/子图开关/速览/纪律/主工具/画布；交易=ktPanelWrap；回测=alphaLabWrap；设置=SRSI参数/模拟交易设置/数据源；header 常驻不参与）+ 底部 Tab 条 DOM（4 按钮 ≥44px）
+- [x] B. kchartApp.js：setupTabNav（切显隐+active+localStorage pwa_tab 记忆+切回K线 renderKChart 尺寸刷新）；kchart.js 加 export ktStackOffset()（Tab条高+安装条高）；thumb bottom 改走 ktStackOffset（kchart.js/kchartApp.js 共用公式）
+- [x] C. 样式：#pwaTabBar fixed bottom 0（pointer:coarse 显示，桌面隐藏）；body padding-bottom 92→140；thumb/安装条叠层公式统一
+- [x] D. 双仓 test → 1.5.42 → build → deploy → e2e（切tab后canvas重绘/拇指条位置/桌面回归）→ 汇报
+
+## 执行记录（2026-09-15，GOAL26 完成）
+
+- A/B：12 个内容块 data-tab-block 分组（K线=根线数/子图/hint/速览/纪律/主工具/画布 7 块；交易=ktPanelWrap；回测=alphaLabWrap；设置=SRSI参数/模拟交易设置/数据源 3 块；header 常驻）；#pwaTabBar 4 按钮（≥44px，fixed bottom 0，z-index 9998 低于 thumb 9999）；setupTabNav 切显隐+active+pwa_tab 记忆+切回K线 api.render()（canvas 从 none→block 需按实际尺寸重绘）
+- C：kchart.js 新增 export ktStackOffset()（Tab条可见高+安装条可见高）——thumb bottom 每秒主循环校正走统一公式；kchartApp syncThumbForInstall 退役为同公式包装；body padding 92→140px（thumb+tab 叠加）
+- **桌面回归踩坑**：setupTabNav 初版无条件激活分组切换——桌面无 Tab 条但 trade/bt/settings 块被 display:none（用户看不到交易面板！）。修=matchMedia(pointer:coarse) 不匹配直接 return（桌面全部块默认显示）。**教训：PWA 触屏特性的 JS 激活必须与 CSS media 条件同步**
+- 线上 e2e（1.5.43）：桌面 Tab 隐藏+全块显示 ✓；手机 Tab flex+K线组 7/7+切设置/交易/回测显隐正确+pwa_tab 记忆 ✓；thumb bottom=53px（tab 49px+边距）随公式 ✓；0 PAGEERROR ✓
+- 测试：kchart 906/indicators 319/全套无 FAIL（Tab 为纯 DOM 逻辑，e2e 为准）

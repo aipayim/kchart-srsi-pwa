@@ -1,7 +1,7 @@
 // 独立迷你 PWA 的入口：挂载 kchart.js 渲染、轮询行情、暴露 window 钩子
 // 不依赖 legacy.js / main.js，仅复用共享的 kchart.js（与主系统同一份 K线分析代码）
 import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈希化并注入 kchart.html 的 <head>
-import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
+import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
@@ -266,20 +266,42 @@ function showInstall(text) {
   if (!bar || !txt) return;
   txt.innerHTML = text;
   bar.hidden = false;
-  syncThumbForInstall(bar);
+  syncThumbForInstall();
 }
 function hideInstall() {
   const bar = document.getElementById('pwaInstall');
   if (bar) bar.hidden = true;
-  syncThumbForInstall(null);
+  syncThumbForInstall();
 }
-// GOAL24：安装条与拇指条同在 bottom:0，安装条显示时拇指条实测上移错位（否则 z-index 9999 全盖住安装条）
-function syncThumbForInstall(bar) {
+// GOAL26：拇指条底部叠层偏移 = Tab条高 + 安装条可见高（与 kchart.js ktStackOffset 同一公式，此处直接复用）
+function syncThumbForInstall() {
   const tb = document.getElementById('ktThumbBar');
   if (!tb) return;
-  if (bar && !bar.hidden && bar.offsetHeight > 0) tb.style.bottom = bar.offsetHeight + 'px';
-  else tb.style.bottom = '';
+  tb.style.bottom = ktStackOffset() + 'px';
 }
+// GOAL26：底部 Tab 导航（GOAL17-D ③）——单页内切 panel 显隐（data-tab-block 分组），无路由改动
+// 仅触屏设备显示 Tab 条（CSS pointer:coarse）；桌面保持原长页滚动不受影响
+function setupTabNav() {
+  const bar = document.getElementById('pwaTabBar');
+  if (!bar) return;
+  // 桌面（鼠标）不激活：全部块保持默认显示、无 Tab 行为（CSS 中 Tab 条也仅 pointer:coarse 显示）
+  const coarse = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
+  if (!coarse) return;
+  const apply = (name) => {
+    document.querySelectorAll('[data-tab-block]').forEach(el => { el.style.display = el.getAttribute('data-tab-block') === name ? '' : 'none'; });
+    bar.querySelectorAll('button[data-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === name));
+    try { localStorage.setItem('pwa_tab', name); } catch (e) {}
+    if (name === 'kline' && api && api.render) { try { api.render(); } catch (e) {} }   // canvas 从 none→block 需按实际尺寸重绘
+    syncThumbForInstall();                                                              // 拇指条 bottom 走统一叠层公式
+  };
+  bar.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-tab]');
+    if (b) apply(b.getAttribute('data-tab'));
+  });
+  let saved = null; try { saved = localStorage.getItem('pwa_tab'); } catch (e) {}
+  apply(saved || 'kline');
+}
+
 function setupInstallPrompt() {
   if (isStandalone()) return;                                   // 已作为 PWA 打开，不提示
   try { if (localStorage.getItem(PWA_DISMISS_KEY) === '1') return; } catch (e) {}
@@ -379,6 +401,7 @@ async function init() {
   setupInstallPrompt();
   showVersionBadge();
   renderSymList();
+  setupTabNav();
   initPwaTrade();
   initLocalLoop();
   initAlphaLab();

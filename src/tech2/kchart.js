@@ -4937,6 +4937,17 @@ export function setSrsiAutoOn(on) {
   }
   }
 }
+// GOAL26：拇指条底部叠层偏移 = Tab条(PWA 触屏常驻)可见高 + 安装条可见高；桌面无这些元素返回 0
+export function ktStackOffset() {
+  if (typeof document === 'undefined') return 0;
+  let h = 0;
+  const tab = document.getElementById('pwaTabBar');
+  if (tab && tab.offsetHeight > 0) h += tab.offsetHeight;
+  const inst = document.getElementById('pwaInstall');
+  if (inst && !inst.hidden && inst.offsetHeight > 0) h += inst.offsetHeight;
+  return h;
+}
+
 // GOAL24：拇指条骨架构建 + 就地同步（状态行/arm 确认态/显隐）；与 renderQuickTrade 同数据源、每秒主循环驱动
 function syncThumbBar() {
   if (typeof document === 'undefined') return;
@@ -4957,9 +4968,6 @@ function syncThumbBar() {
     tb.querySelector('#ktTbShort').addEventListener('click', () => kchartTradeOpen('short', true));
     tb.querySelector('#ktTbClose').addEventListener('click', () => kchartTradeClose(true));
     tb.querySelector('#ktTbOrders').addEventListener('click', () => openOrderManager({ tab: 'positions' }));
-    // 安装条先显示、拇指条后创建的时序：创建时反向对齐（否则 z-index 9999 盖住安装条）
-    const inst = document.getElementById('pwaInstall');
-    if (inst && !inst.hidden && inst.offsetHeight > 0) tb.style.bottom = inst.offsetHeight + 'px';
   }
   tb.style.display = 'flex';
   const sym = cfg.symbol;
@@ -4985,6 +4993,7 @@ function syncThumbBar() {
   if (bL) { bL.textContent = armLong ? '确认开多?' : '▲ 开多'; bL.classList.toggle('armed', armLong); }
   if (bS) { bS.textContent = armShort ? '确认开空?' : '▼ 开空'; bS.classList.toggle('armed', armShort); }
   if (bC) { bC.textContent = armClose ? '确认平仓?' : '平仓'; bC.classList.toggle('armed', armClose); }
+  tb.style.bottom = ktStackOffset() + 'px';   // GOAL26：统一叠层公式（Tab条+安装条），每秒主循环校正
 }
 
 // GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）
