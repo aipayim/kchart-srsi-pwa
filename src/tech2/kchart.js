@@ -4054,7 +4054,19 @@ function setTradePanelOpen(on) {
 }
 function kToggleTradePanel() { setTradePanelOpen(!cfg.tradePanelOpen); }
 // GOAL13：主图实盘信号层总开关
-function setSigOverlay(on) { cfg.sigOverlay = !!on; persist(); renderKChart(); renderMainTools(); }
+// GOAL15：乐观 UI——点击立即更新 chip 样式并保留当前画面，重绘放下一帧（365d 大数据全量重绘秒级，原同步等待导致“十几秒才熄灭”体感）
+function setSigOverlay(on) {
+  cfg.sigOverlay = !!on; persist();
+  const sc = typeof document !== 'undefined' ? document.getElementById('sigOverlayChip') : null;
+  if (sc) {
+    sc.style.border = cfg.sigOverlay ? '1px solid #22d3ee' : '1px solid var(--border)';
+    sc.style.background = cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)';
+    sc.style.color = cfg.sigOverlay ? '#22d3ee' : 'var(--text2)';
+    sc.textContent = '实盘信号' + (cfg.sigOverlay ? ' ✓' : '');
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { renderKChart(); renderMainTools(); });
+  else { renderKChart(); renderMainTools(); }
+}
 function setBars(v) { cfg.bars = Math.max(60, Math.min(300, parseInt(v) || 150)); persist(); renderKChart(); const lbl = document.getElementById('kchartBarsLbl'); if (lbl) lbl.textContent = cfg.bars; }
 function setShow(key, on) {
   if (!(key in cfg.show)) return;
@@ -4102,10 +4114,18 @@ function setMainOverlay(on) {
 async function setAlphaSignal(on) {
   cfg.alphaSignalOn = !!on;
   persist();
-  if (on && typeof window !== 'undefined' && typeof window.__alphaSignalProvider === 'function') {
-    try { await window.__alphaSignalProvider(); } catch (e) { /* provider 内部已兜底 */ }
+  // GOAL15：乐观 UI——先立即翻 chip + 重绘（旧的 await provider 同步等待 6 年全量回放=十几秒无响应根因），provider 后台重算完再补一帧
+  const ac2 = typeof document !== 'undefined' ? document.getElementById('alphaChip') : null;
+  if (ac2) {
+    ac2.style.border = cfg.alphaSignalOn ? '1px solid #2ecc71' : '1px solid var(--border)';
+    ac2.style.background = cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)';
+    ac2.style.color = cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)';
+    ac2.textContent = 'α 信号' + (cfg.alphaSignalOn ? ' ✓' : '');
   }
   renderKChart();
+  if (on && typeof window !== 'undefined' && typeof window.__alphaSignalProvider === 'function') {
+    window.__alphaSignalProvider().then(() => { try { renderKChart(); } catch (e) {} }).catch(() => {});
+  }
 }
 
 // 某周期优选角色：勾选「辅助(只做放行闸门)」的周期即闸门(gate)，其余为波段(swing)
@@ -6926,6 +6946,22 @@ export async function runAlphaBacktest(days, opts) {
         + '<div class="kt-auto-row" style="white-space:pre-wrap;font-size:10px;opacity:.85">最近调仓 ' + showN + ' 笔:\n' + detTxt + '（全部 ' + r.trades.length + ' 笔见「📄 导出」报告）</div>';
     }
     window.__alphaBtLast = { sym, days, final: r.final, ann, sharpe: r.sharpe, dd: r.maxDD };
+    // GOAL15：导出按钮（基石报告全文 + 全部逐笔调仓）
+    if (el) {
+      const exA = document.createElement('div');
+      exA.className = 'kt-auto-row';
+      exA.innerHTML = '<button id="ktBtExportAlpha" class="kt-btn kt-bt">📄 导出基石报告</button><span style="font-size:10px;opacity:.7;margin-left:6px">含年度分解+全部 ' + r.trades.length + ' 笔逐笔调仓</span>';
+      el.appendChild(exA);
+      exA.querySelector('#ktBtExportAlpha').addEventListener('click', () => {
+        const rows2 = r.trades.map(t => '| ' + (t.tIn ? new Date(t.tIn).toISOString().slice(0, 16).replace('T', ' ') : '-') + ' | ' + (t.side || '') + ' | 权重 ' + (t.w != null ? (t.w * 100).toFixed(0) + '%' : '-') + ' | 入 ' + (t.pIn != null ? t.pIn.toFixed(1) : '-') + ' | 出 ' + (t.pOut != null ? t.pOut.toFixed(1) : '-') + ' | 盈亏 ' + (t.pnlPct != null ? t.pnlPct.toFixed(1) + '%' : '-') + ' |');
+        const md = [_btAlphaText, '', '## 四、基石逐笔调仓明细', '| 时间 | 方向 | 权重 | 入价 | 出价 | 盈亏 |', '| --- | --- | --- | --- | --- | --- |'].concat(rows2).join('\n');
+        const blob = new Blob([md], { type: 'text/plain;charset=utf-8' });
+        const a2 = document.createElement('a');
+        a2.href = URL.createObjectURL(blob);
+        a2.download = 'alpha-' + sym + '-' + new Date(start2).toISOString().slice(0, 10) + '-' + new Date(endMs).toISOString().slice(0, 10) + '-' + days + 'd.txt';
+        a2.click(); setTimeout(() => URL.revokeObjectURL(a2.href), 5000);
+      });
+    }
     return r;
   } catch (e) {
     if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测失败: ' + (e && e.message) + '</div>';
