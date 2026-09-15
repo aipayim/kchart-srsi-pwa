@@ -1,15 +1,15 @@
-# GOAL15 — 反馈修复：Alpha 回测导出 + 信号 chip 慢响应
+# GOAL16 — 数学框架 + 人工盯盘流优化 + 主图明确信号
 
-> 1. Alpha 回测只有概要+近10笔，没有像 SRSI 那样的「导出」——补导出按钮（全明细 txt）；2. 「α 信号」「实盘信号」chip 点击后十几秒才生效（按钮一直亮/角标残留）——修即时反馈+性能。
+> 1. 数学家视角：初始本金/仓位/杠杆如何数学化计算永续与现货 2019 起的自适应稳收益策略？是否必须在 Alpha 基础上研究？2. 用户盯盘流（5m 150 根 + 15m SRSI 带交叉反手）优化 + 结合 Alpha 在主图给明确交易信号。
 
 ## 子任务
-- [x] A. Alpha 回测导出按钮：结果区加「📄 导出」，导出基石报告全文（_btAlphaText 已含年度/近10笔）+ 全部逐笔调仓 txt（下载格式同 SRSI 报告）
-- [x] B. chip 即时反馈：setSigOverlay/setAlphaSignal 点击**立即**更新 chip 样式（乐观 UI，不等重绘）；renderKChart 延迟到 rAF/微任务；排查 setAlphaSignal 是否同步等待 alphaSignalProvider 重算（6 年全量回放）并异步化
-- [x] C. 角标残留：确认关闭实盘信号后右上角角标同步消失（sigOverlay 关→整层不画，含角标）
-- [ ] D. 双仓 test/build → bump 1.5.30 → deploy → 线上验证（点击响应 <300ms 体感、导出文件正确）→ 汇报
+- [x] A. 数学框架报告 docs/research/GOAL16-FRAMEWORK.md：复利方程/凯利/爆仓概率/波动率倒数仓位；为什么以 Alpha 为基石（多重检验论证）；三层架构（资金管理×方向×时机）+ regime 自适应
+- [x] B. 盯盘规则回测验证（fork 长窗数据）：用户原始规则（5m+15m SRSI 带交叉反手）vs +Alpha 方向过滤 vs +Alpha+EMA 趋势过滤 —— 胜率/盈亏/回撤对比
+- [x] C. 主图盯盘信号卡：纯函数 manualSignal（5m 入场 + 15m SRSI 带 + Alpha 方向过滤 + EMA 趋势 + ATR 止损止盈）+ 主图顶栏明确建议（做多/做空/平仓/观望 + 理由 + 止损止盈价）+ 「盯盘信号」开关
+- [ ] D. 双仓 test/build → bump 1.5.31 → deploy → 线上验证 → 汇报（含数学结论摘要）
 
-## 执行记录（2026-09-14，GOAL15 A-C 完成）
+## 执行记录（2026-09-14，GOAL16 A-C 完成）
 
-- A：Alpha 结果区加「📄 导出基石报告」（年度分解+全部逐笔调仓 txt，文件名 alpha-SYM-起-止-365d.txt）
-- B：慢响应根因=①setAlphaSignal await __alphaSignalProvider（6 年全量回放同步等待十几秒）②setSigOverlay 同步全量重绘。修：乐观 UI——点击立即翻 chip 样式（与初始渲染同色系无跳变）+ renderKChart 放 rAF/微任务 + provider 后台跑完补帧
-- C：sigOverlay 关→drawMain 外层条件整层不画（含角标）逻辑本就正确，残留=重绘慢所致（B 修复后下一帧消失）
+- A：docs/research/GOAL16-FRAMEWORK.md——资金管理数学（复利方程 g=Σln(1+fLr)/T、Jensen 波动拖累、生存条件 fL<1/|r_max|、凯利 f*≈0.22→半凯利名义 11%、爆仓概率指数惩罚）、必须以已验证正期望源为基石（多重检验税论证）、三层架构表（资金管理×方向×时机）
+- B：spawn 长窗验证（BTC 永续 15m 2020-2026 23.4万根）——用户规则带交叉反手成本后 -100%（免成本仍 -98.8%，PF 0.94=负期望非成本问题）；+Alpha 过滤免成本 +31.1%/年（质变）但频次成本吃掉；+趋势过滤不够；结论=反手指令停用，SRSI 带改为「Alpha 方向内择优时机」
+- C：manualSignal 纯函数（Alpha 方向 × 15m SRSI 带位置 → 做多/做空/持仓勿追/观望 + 时机优/可/等 + ATR 止损止盈 1:2）+ 主图左上盯盘信号卡（半透明背景条双行：动作·时机 / 理由·SL/TP·EMA）+ 10 项单测；Alpha 中性→观望（非 null）

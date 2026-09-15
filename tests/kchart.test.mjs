@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf } from '../src/tech2/kchart.js';
+import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -3132,3 +3132,17 @@ ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信�
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);
+
+// ===== GOAL16: manualSignal（方向+时机+风控三元组）=====
+{
+  ok('manualSignal: Alpha多+超卖回升→做多优', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: 530, emaFast: 100, emaSlow: 90 }); return r.action === 'long' && r.timing === '优'; })());
+  ok('manualSignal: Alpha多+超买→hold勿追', (() => { const r = manualSignal({ alphaDir: 'long', k15: 85, d15: 70, prevK15: 90, price: 61200, atr: 530 }); return r.action === 'hold' && r.timing === '勿追'; })());
+  ok('manualSignal: Alpha多+中带→做多可', manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 61200, atr: 530 }).timing === '可');
+  ok('manualSignal: Alpha空+超买回落→做空优', (() => { const r = manualSignal({ alphaDir: 'short', k15: 78, d15: 82, prevK15: 82, price: 61200, atr: 530 }); return r.action === 'short' && r.timing === '优'; })());
+  ok('manualSignal: Alpha中性→观望', manualSignal({ alphaDir: null, k15: 22, d15: 18, prevK15: 15, price: 61200, atr: 530 }).action === 'wait');
+  ok('manualSignal: 止损止盈=R2R 1:2 (1.5ATR)', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: 530 }); return close(r.stop, 61200 - 795) && close(r.target, 61200 + 1590); })());
+  ok('manualSignal: 空单止损在上方', (() => { const r = manualSignal({ alphaDir: 'short', k15: 78, d15: 82, prevK15: 82, price: 61200, atr: 530 }); return r.stop > 61200 && r.target < 61200; })());
+  ok('manualSignal: 无ATR→stop/target null', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: null }); return r.stop === null && r.target === null; })());
+  ok('manualSignal: 坏价格→null', manualSignal({ alphaDir: 'long', price: 0 }) === null);
+  ok('manualSignal: EMA趋势标记', (() => { const up = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 105, emaSlow: 95 }); const dn = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 95, emaSlow: 105 }); return up.trend === 'up' && dn.trend === 'dn'; })());
+}

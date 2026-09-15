@@ -3319,6 +3319,43 @@ function drawMain(ctx, sym, tf, H) {
   const _alphaLiveOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
   const _showSrsi = cfg.sigOverlay && cfg.srsiAutoOn;   // 勾 SRSI 自动 → 显示 SRSI 信号
   const _showAlpha = cfg.sigOverlay && _alphaLiveOn;    // 勾 Alpha 基石实盘 → 显示 Alpha 信号
+  // GOAL16：主图盯盘信号卡（manualSignal：Alpha方向+SRSI带时机+ATR止损止盈，明确三元组）
+  if (cfg.sigOverlay && typeof window !== 'undefined') {
+    try {
+      const sym16 = typeof sym !== 'undefined' ? sym : cfg.sym;
+      const srsi15cfg = (cfg.srsiByTf && cfg.srsiByTf['15m']) || cfg.srsi;
+      const c15 = (getTFData(sym16, '15m') || {}).c || [];
+      let k15 = null, d15 = null, prevK15 = null, atr15 = null;
+      if (c15.length > 40) {
+        const { k: kArr, d: dArr } = srsiKD(c15, srsi15cfg);
+        const n = kArr.length;
+        k15 = kArr[n - 1]; d15 = dArr[n - 1]; prevK15 = n > 1 ? kArr[n - 2] : null;
+        atr15 = atrClose(c15, 14);
+      }
+      const aw16 = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
+      const alphaDir = aw16 > 0.02 ? 'long' : aw16 < -0.02 ? 'short' : (window.__alphaLab && window.__alphaLab.state && window.__alphaLab.state.dir) || null;
+      const pm16 = (typeof series !== 'undefined' && series && series.ema20 != null) ? { emaFast: series.ema20, emaSlow: series.ema120 } : { emaFast: null, emaSlow: null };
+      window.__manualSignal = manualSignal({ alphaDir, k15, d15, prevK15, price: c[c.length - 1], atr: atr15, emaFast: pm16.emaFast, emaSlow: pm16.emaSlow });
+    } catch (e) { /* 数据未就绪时静默，下一帧重试 */ }
+  }
+  if (cfg.sigOverlay && window.__manualSignal) {
+    const ms = window.__manualSignal;
+    ctx.save();
+    ctx.font = 'bold 11px sans-serif';
+    const col = ms.action === 'long' ? '#2ecc71' : ms.action === 'short' ? '#ff6b6b' : ms.action === 'hold' ? '#f59e0b' : '#8899aa';
+    const actTxt = ms.action === 'long' ? '做多' : ms.action === 'short' ? '做空' : ms.action === 'hold' ? '持仓' : '观望';
+    const l1 = '盯盘: ' + actTxt + '·时机' + ms.timing;
+    const l2 = ms.reason + (ms.stop != null && ms.target != null ? (' · SL ' + ms.stop.toFixed(0) + ' / TP ' + ms.target.toFixed(0)) : '') + (ms.trend === 'up' ? ' | EMA↑' : ms.trend === 'dn' ? ' | EMA↓' : '');
+    ctx.textAlign = 'left';
+    const w1 = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 14;
+    ctx.fillStyle = 'rgba(16,22,30,.78)';
+    ctx.fillRect(PAD_L + 6, PAD_T + 4, w1, 34);
+    ctx.strokeStyle = col; ctx.globalAlpha = .6; ctx.strokeRect(PAD_L + 6, PAD_T + 4, w1, 34); ctx.globalAlpha = 1;
+    ctx.fillStyle = col; ctx.fillText(l1, PAD_L + 13, PAD_T + 19);
+    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(230,238,245,.85)';
+    ctx.fillText(l2, PAD_L + 13, PAD_T + 32);
+    ctx.restore();
+  }
   if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
     ctx.save();
     const LT = (_showSrsi || cfg.srsiAutoApplyBt) ? (window.__srsiLiveTrades || []) : [];
@@ -4128,6 +4165,33 @@ async function setAlphaSignal(on) {
   }
 }
 
+// GOAL16：盯盘信号纯函数——方向(Alpha 基石) + 时机(15m SRSI 带位置择优，非反手) + 风控(ATR 止损止盈)
+// 数学依据 docs/research/GOAL16-FRAMEWORK.md §四：带交叉反手单独使用为负期望（长窗实测 -100%），
+// 正确形态=在 Alpha 方向内用 SRSI 带位置择优入场（顺势回调买点/持仓提示），不提供方向
+export function manualSignal({ alphaDir, k15, d15, prevK15, price, atr, emaFast, emaSlow, lev }) {
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const st = (v, lo, hi) => v == null || !Number.isFinite(v) ? 'na' : v > hi ? 'ob' : v < lo ? 'os' : 'mid';
+  const zone = st(k15, 20, 80);
+  const cross = prevK15 != null && k15 != null ? (prevK15 < 20 && k15 >= 20 ? 'upExit' : prevK15 > 80 && k15 <= 80 ? 'dnExit' : 'none') : 'none';
+  const trend = emaFast == null || emaSlow == null ? 'na' : emaFast > emaSlow ? 'up' : emaFast < emaSlow ? 'dn' : 'flat';
+  const stopD = Number.isFinite(atr) && atr > 0 ? 1.5 * atr : null;
+  const base = {
+    long: { action: 'long', stop: stopD != null ? price - stopD : null, target: stopD != null ? price + 2 * stopD : null },
+    short: { action: 'short', stop: stopD != null ? price + stopD : null, target: stopD != null ? price - 2 * stopD : null },
+  };
+  if (alphaDir === 'long') {
+    if (cross === 'upExit' || (zone === 'os' && k15 > d15)) return { ...base.long, timing: '优', reason: 'Alpha多头·15m超卖回升=顺势回调买点', trend };
+    if (zone === 'ob') return { action: 'hold', timing: '勿追', reason: 'Alpha多头·15m超买：持仓等回落，勿追多开新', trend, stop: null, target: null };
+    return { ...base.long, timing: '可', reason: 'Alpha多头·15m中带：持仓/回落后再入', trend };
+  }
+  if (alphaDir === 'short') {
+    if (cross === 'dnExit' || (zone === 'ob' && k15 < d15)) return { ...base.short, timing: '优', reason: 'Alpha空头·15m超买回落=顺势反弹空点', trend };
+    if (zone === 'os') return { action: 'hold', timing: '勿追', reason: 'Alpha空头·15m超卖：持仓等反弹，勿追空开新', trend, stop: null, target: null };
+    return { ...base.short, timing: '可', reason: 'Alpha空头·15m中带：持仓/反弹后再入', trend };
+  }
+  return { action: 'wait', timing: '观望', reason: 'Alpha中性：无方向优势，观望', trend, stop: null, target: null };
+}
+
 // 某周期优选角色：勾选「辅助(只做放行闸门)」的周期即闸门(gate)，其余为波段(swing)
 function roleForTf(tf) { return !!(cfg.srsiAux && cfg.srsiAux[tf]) ? 'gate' : 'swing'; }
 
@@ -4639,6 +4703,7 @@ export const kchartApi = {
   toggleOverview,
   setKDisc,
   toggleKDisc,
+  manualSignal,
   kToggleTradePanel,
   setSigOverlay,
   setDiscEvidence: (v) => { cfg.discEvidenceOpen = !!v; persist(); },
