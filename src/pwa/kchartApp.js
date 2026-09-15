@@ -447,7 +447,10 @@ function initPwaTrade() {
   localPE.seedSim(pwaSim);
   api.setTradeEngine(localPE);
   const onEl = document.getElementById('pwaTradeOn');
-  api.setTradeConfig({ on: !onEl || onEl.value !== '0' });
+  // GOAL17：快捷交易开关持久化（刷新恢复用户选择）
+  const savedOn = localStorage.getItem('pwa_trade_on');
+  api.setTradeConfig({ on: savedOn != null ? savedOn === '1' : (!onEl || onEl.value !== '0') });
+  if (onEl && savedOn != null) onEl.value = savedOn;
   renderPwaSimCoins();
   setInterval(savePwaPaper, 5000);
   document.addEventListener('visibilitychange', () => { if (document.hidden) savePwaPaper(); });
@@ -513,7 +516,7 @@ globalThis.pwaClearAll = function pwaClearAll() {
     location.reload(true);
   }
 };
-globalThis.pwaTradeOn = function pwaTradeOn(v) { api.setTradeConfig({ on: v === '1' }); };
+globalThis.pwaTradeOn = function pwaTradeOn(v) { try { localStorage.setItem('pwa_trade_on', v); } catch (e) {} api.setTradeConfig({ on: v === '1' }); }; // GOAL17
 
 if (typeof document !== 'undefined') {
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

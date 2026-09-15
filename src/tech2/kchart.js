@@ -408,6 +408,11 @@ function normalizeCfg(c) {
   if (!['alpha', 'srsi', 'combo'].includes(c.btStrategy)) c.btStrategy = 'alpha';
   if (typeof c.tradePanelOpen !== 'boolean') c.tradePanelOpen = false; // GOAL13：交易面板默认收缩
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
+  if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
+  if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
+  if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
+  if (typeof c.tradeOn !== 'boolean') c.tradeOn = true; // GOAL17：快捷交易总开关持久
+  if (typeof c.tradeLinked !== 'boolean') c.tradeLinked = true; // GOAL17：联动主系统资金持久
   if (!['follow', 'usdt', 'coin'].includes(c.srsiAutoMode)) c.srsiAutoMode = 'follow';
   if (c.srsiAutoUpper !== 0 && (typeof c.srsiAutoUpper !== 'number' || !(c.srsiAutoUpper >= 50 && c.srsiAutoUpper <= 100))) c.srsiAutoUpper = 90;
   if (c.srsiAutoLower !== 0 && (typeof c.srsiAutoLower !== 'number' || !(c.srsiAutoLower >= 0 && c.srsiAutoLower <= 50))) c.srsiAutoLower = 10;
@@ -3344,16 +3349,21 @@ function drawMain(ctx, sym, tf, H) {
     ctx.font = 'bold 11px sans-serif';
     const col = ms.action === 'long' ? '#2ecc71' : ms.action === 'short' ? '#ff6b6b' : ms.action === 'hold' ? '#f59e0b' : '#8899aa';
     const actTxt = ms.action === 'long' ? '做多' : ms.action === 'short' ? '做空' : ms.action === 'hold' ? '持仓' : '观望';
+    // GOAL17：左侧垂直居中（原左上角挡币对/周期/根数提示）；带币对+时机周期标签（切币自动跟随、全币对有效）
+    const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m SRSI';
     const l1 = '盯盘: ' + actTxt + '·时机' + ms.timing;
     const l2 = ms.reason + (ms.stop != null && ms.target != null ? (' · SL ' + ms.stop.toFixed(0) + ' / TP ' + ms.target.toFixed(0)) : '') + (ms.trend === 'up' ? ' | EMA↑' : ms.trend === 'dn' ? ' | EMA↓' : '');
     ctx.textAlign = 'left';
-    const w1 = Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width) + 14;
+    const w1 = Math.max(Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width), ctx.measureText(l0).width) + 14;
+    const cy1 = (PAD_T + (H - PAD_B)) / 2 - 22;
     ctx.fillStyle = 'rgba(16,22,30,.78)';
-    ctx.fillRect(PAD_L + 6, PAD_T + 4, w1, 34);
-    ctx.strokeStyle = col; ctx.globalAlpha = .6; ctx.strokeRect(PAD_L + 6, PAD_T + 4, w1, 34); ctx.globalAlpha = 1;
-    ctx.fillStyle = col; ctx.fillText(l1, PAD_L + 13, PAD_T + 19);
+    ctx.fillRect(PAD_L + 6, cy1, w1, 44);
+    ctx.strokeStyle = col; ctx.globalAlpha = .6; ctx.strokeRect(PAD_L + 6, cy1, w1, 44); ctx.globalAlpha = 1;
+    ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(160,175,190,.9)';
+    ctx.fillText(l0, PAD_L + 13, cy1 + 12);
+    ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = col; ctx.fillText(l1, PAD_L + 13, cy1 + 26);
     ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(230,238,245,.85)';
-    ctx.fillText(l2, PAD_L + 13, PAD_T + 32);
+    ctx.fillText(l2, PAD_L + 13, cy1 + 39);
     ctx.restore();
   }
   if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
@@ -4821,7 +4831,11 @@ export function setSrsiAutoOn(on) {
   const abEl = bar.querySelector('#ktSrsiApplyBt');
   if (abEl) abEl.checked = !!cfg.srsiAutoApplyBt;
   const alEl = bar.querySelector('#ktAlphaLive');
-  if (alEl) alEl.checked = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
+  // GOAL17：Alpha 基石实盘勾选持久化——刷新后按 cfg 自动恢复 live
+  if (alEl && typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.startLive) {
+    if (cfg.alphaLiveOn && !window.__alphaLab.isLive()) { try { window.__alphaLab.startLive(); } catch (e) {} }
+    alEl.checked = cfg.alphaLiveOn && window.__alphaLab.isLive();
+  } else if (alEl) alEl.checked = false;
   const stEl = document.getElementById('ktPanelState');
   if (stEl) {
     const sOn = cfg.srsiAutoOn, aOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
@@ -4853,6 +4867,10 @@ export function setTradeConfig(c) {
     if (typeof c.on === 'boolean') _tradeOn = c.on;
     if (typeof c.linked === 'boolean') _tradeLinked = c.linked;
     if (typeof c.lev === 'number') _lev = c.lev;
+    // GOAL17：快捷交易开关/联动持久化（外部未注入时下次启动从 cfg 恢复）
+    if (typeof c.on === 'boolean') cfg.tradeOn = c.on;
+    if (typeof c.linked === 'boolean') cfg.tradeLinked = c.linked;
+    if (c.on !== undefined || c.linked !== undefined || c.lev !== undefined) persist();
   }
   renderQuickTrade();
 }
@@ -5043,10 +5061,10 @@ function renderQuickTrade() {
     <div id="ktPos" class="kt-row kt-pos"></div>`;
     const b = bar;
     b.querySelector('#ktLev').addEventListener('input', () => { _lev = +b.querySelector('#ktLev').value; b.querySelector('#ktLevV').textContent = _lev + 'x'; });
-    b.querySelector('#ktFixed').addEventListener('change', () => { _useFixed = b.querySelector('#ktFixed').checked; renderQuickTrade(); });
+    b.querySelector('#ktFixed').addEventListener('change', () => { _useFixed = b.querySelector('#ktFixed').checked; cfg.ktUseFixed = _useFixed; persist(); renderQuickTrade(); }); // GOAL17
     b.querySelector('#ktPct').addEventListener('input', () => { _sizePct = +b.querySelector('#ktPct').value; b.querySelector('#ktPctV').textContent = _sizePct + '%'; });
     b.querySelector('#ktFixedAmt').addEventListener('input', () => { _fixedAmt = parseFloat(b.querySelector('#ktFixedAmt').value) || 0; });
-    b.querySelector('#ktSafe').addEventListener('change', () => { _safeguard = b.querySelector('#ktSafe').checked; });
+    b.querySelector('#ktSafe').addEventListener('change', () => { _safeguard = b.querySelector('#ktSafe').checked; cfg.ktSafe = _safeguard; persist(); }); // GOAL17
     b.querySelector('#ktShort').addEventListener('click', () => kchartTradeOpen('short'));
     b.querySelector('#ktLong').addEventListener('click', () => kchartTradeOpen('long'));
     b.querySelector('#ktHistory').addEventListener('click', () => openOrderManager({ tab: 'history' }));
@@ -5066,6 +5084,7 @@ function renderQuickTrade() {
         return;
       }
       if (on) window.__alphaLab.startLive(); else window.__alphaLab.stopLive();
+      cfg.alphaLiveOn = on; persist(); // GOAL17：勾选持久，刷新恢复
     });
     // GOAL9：应用回测参数开关；勾选时若已有回测快照则立即应用
     b.querySelector('#ktSrsiApplyBt').addEventListener('change', () => {
@@ -5203,6 +5222,7 @@ function renderQuickTrade() {
   // ---- 就地更新动态值（不重建 DOM，按钮/监听保持存活）----
   const q = (id) => bar.querySelector('#' + id);
   q('ktLev').value = _lev; q('ktLevV').textContent = _lev + 'x';
+  _useFixed = cfg.ktUseFixed; _safeguard = cfg.ktSafe; // GOAL17：从 cfg 恢复
   q('ktFixed').checked = _useFixed; q('ktSafe').checked = _safeguard;
   q('ktPct').value = _sizePct; q('ktPctV').textContent = _sizePct + '%';
   q('ktFixedAmt').value = _fixedAmt;
