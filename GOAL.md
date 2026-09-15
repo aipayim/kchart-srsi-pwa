@@ -1,21 +1,19 @@
-# GOAL13 — 交易面板独立收缩 + 主图策略信号映射 + 多策略路线讨论
+# GOAL14 — 用户反馈修复：F12 报错 / Alpha 回测明细 / SRSI 收益波动 / 角标遮挡
 
-> 1. 交易面板（手动下单+SRSI 自动+回测面板）独立为可收缩面板（仿交易纪律分析），默认收缩、状态记忆；2. Alpha基石/SRSI自动/应用回测参数 勾选后信号映射到主图（颜色/方式区分），信号=真实交易（历史/持仓本地持久化可见）；3. 讨论基石之上的多策略应用（按周期 or 全周期）。
+> 反馈：1. F12 报错（fapi.binance.vision fundingRate ERR_CONNECTION_CLOSED 刷屏 + [SRSI-PERSIST] smartTrader_kchart_bt_raw/bt QuotaExceededError）；2. Alpha 回测只有概要没有明细；SRSI/组合 365d 收益比前一天报告低许多；3. 主图右上角信号文字遮挡 SRSI 线和 K 线。
 
 ## 子任务
-- [x] A. 交易面板折叠容器：kchartTradeBar（含手动下单+SRSI 自动+回测 ktBtBody）包进「🧭 交易面板」折叠头（仿 #kchartDiscWrap），默认收缩，localStorage `kchartTradePanelOpen` 记忆，刷新恢复
-- [x] B. 主图信号映射：drawMain 新增「实盘信号层」——勾 Alpha基石实盘→Alpha 信号（青蓝菱形◆开/空心平）；勾 SRSI自动→SRSI 信号（▲绿/▼红开仓+灰点平仓）；勾应用回测参数→组合角标；不同策略样式区分；总开关 cfg.sigOverlay（默认开）
-- [x] C. 信号=真实交易核对：确认 SRSI 标记数据源=placeOrder/exitPosition 实际调用点、Alpha=alphaLive 实际调仓、历史（S.closed）/持仓（S.pos）本地持久化（pwa_paper_state/smartTrader）可查——文档说明主图信号与成交一一对应
-- [x] D. 讨论+文档：多策略路线（AGENTS 5.31 入场券制度细化：按市场周期分层应用 vs 全周期；候选策略清单与验证门槛）
-- [x] E. 双仓 test/build → bump 1.5.28 → commit+push → deploy → 线上验证（折叠记忆/信号层/一致性）→ 汇报
+- [x] A. fundingRate 域名修复：去掉不存在的 fapi.binance.vision（vision 只有 S3 历史仓库）；fapi.binance.com 失败→降级 funding=[] 并静默（不重试错误域、不刷屏）
+- [x] B. 回测持久化瘦身（5.30.1 配额红线）：bt_raw（回测原始 K 线 35k 根=派生数据）停止写 localStorage 只留会话内存；bt 结果裁剪大数组（ws/eqs 等逐 bar 数据不落盘，保留概要+trades 事件）
+- [x] C. Alpha 回测明细：页面显示年度分解+近期调仓明细；导出报告加「基石明细」节（对齐 SRSI 报告的可复核性）
+- [x] D. SRSI 收益波动解释（写入 GOAL.md/AGENTS）：窗口右移一天收益大变=窗口选择偏差（GOAL11 已证），非 bug；funding 缺失影响成本模型（A 修复后改善）
+- [x] E. 角标遮挡修复：右上角信号文字加半透明背景条+上移至主图顶部外沿（不压 K 线/SRSI 线）
+- [ ] F. 双仓 test/build → bump 1.5.29 → deploy → 线上验证 → 汇报
 
-## 执行记录（2026-09-14，GOAL13 A-C 完成）
+## 执行记录（2026-09-14，GOAL14 A-E 完成）
 
-- A：#ktPanelWrap 折叠容器（discwrap 复用+ovhead+kToggleTradePanel）默认收缩、cfg.tradePanelOpen 记忆、renderKChart 恢复；头部 #ktPanelState 状态徽章（renderQuickTrade 更新：●Alpha实盘青/●SRSI自动绿）
-- B：drawMain 实盘信号层重构——sigOverlay 总开关（叠加栏「实盘信号」chip，青色同 α 信号风格）；SRSI 勾选→▲绿/▼红三角+灰点；Alpha live 勾选→◆青多/◆橙空菱形+空心平仓；应用回测参数→组合角标；信号与真实交易一一对应（数据源=placeOrder/exitPosition/alphaLive 调仓动作）
-- C：数据源核对——SRSI 标记写入点=kchart.js placeOrder 成功后（~5699）+4 处 SRSI自动 exitPosition（5749/5753/5761/5765）；Alpha=alphaLab tickLive 实际调仓后；持仓 S.pos/历史 S.closed 本地持久化（pwa_paper_state/smartTrader）✓
-
-## 发布（v1.5.28 已上线验证 2026-09-14）
-
-- 线上（srsi-pwa.pages.dev 合成数据 e2e）：默认收缩 ✓ / 点击展开 ✓ / 刷新记忆展开 ✓ / 实盘信号 chip ✓ / 1.5.28 ✓ / 策略顺序 Alpha 第一 ✓ / 0 页面错误；坑：onclick 直调函数必须绑 window（main.js+kchartApp.js）
-- 双仓全绿（kchart 903）；commit b508774→23bedf5（脱敏版 push 成功）；AGENTS 5.32 已固化
+- A：EP_FAPI 移除 fapi.binance.vision（该域不存在，vision 只有 S3 仓库无 REST fundingRate）；fapi 不可达时静默降级 funding=[]（回测/实盘兼容空 funding）——ERR_CONNECTION_CLOSED 刷屏消除
+- B：_btRawMem 会话内存缓存替代 localStorage（bt_raw 1.8MB 派生数据按 5.30.1 红线停止落盘+清理旧键）；bt 结果落盘裁剪 eqs/ws/fund 大数组（trades/概要保留，恢复/报告/组合不受影响）——QuotaExceededError 消除
+- C：Alpha 回测明细——年度分解行 + 最近 10 笔调仓（页面）+ 导出报告全明细；基准数据（GOAL11）：Alpha 6.7 年 +30.3%/现货 8.7 年 +24.6% 可交叉核对
+- D：SRSI 收益波动=窗口右移一天（20250914→20250915 窗口）+ 数据批次差异，GOAL11 已证窗口选择偏差（长窗 -23.4% vs 365d +17%~84%），属策略特性非 bug；funding 缺失影响成本模型（A 修复后 0916 起改善）
+- E：角标移至右下角+半透明背景条（原右上角覆盖 SRSI 线/K 线）

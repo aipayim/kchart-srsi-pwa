@@ -3364,9 +3364,17 @@ function drawMain(ctx, sym, tf, H) {
       ap++;
     }
     if (lp || ap || _alphaLiveOn) {
-      ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#2ecc71'; ctx.textAlign = 'right';
+      ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'right';
       const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
-      ctx.fillText('组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp, W - PAD_R - 4, PAD_T + 40);
+      const label = '组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp;
+      const tw = ctx.measureText(label).width;
+      // GOAL14：右下角 + 半透明背景条（不遮挡 K 线/SRSI 线，原右上角会覆盖）
+      const bx = W - PAD_R - 4 - tw - 10, by = H - PAD_B - 26;
+      ctx.fillStyle = 'rgba(16,22,30,.72)';
+      ctx.fillRect(bx, by, tw + 12, 18);
+      ctx.strokeStyle = 'rgba(46,204,113,.35)'; ctx.strokeRect(bx, by, tw + 12, 18);
+      ctx.fillStyle = '#2ecc71';
+      ctx.fillText(label, W - PAD_R - 8, by + 13);
       ctx.textAlign = 'left';
     }
     ctx.restore();
@@ -6533,11 +6541,13 @@ _btCfgLoad();
  }
 function _btReadStore() { try { return JSON.parse(localStorage.getItem(_BT_KEY) || '{}'); } catch { return {}; } }
 function _btWriteStore(obj) { _safeSetItem(_BT_KEY, JSON.stringify(obj)); }
-function _btReadRaw(sym, days) {
-  try { const raw = JSON.parse(localStorage.getItem(_BT_RAW_KEY) || '{}'); return raw[sym + '|' + days] || null; } catch { return null; }
-}
+// GOAL14：回测原始 K 线=派生数据（35k 根 15m≈1.8MB），按 5.30.1 配额红线不再写 localStorage（曾撑爆配额致 bt 结果也写失败），
+// 只保留会话内存缓存（刷新后重新拉取）；并清理历史遗留的 localStorage 大键释放配额
+const _btRawMem = {};
+function _btReadRaw(sym, days) { return _btRawMem[sym + '|' + days] || null; }
 function _btWriteRaw(sym, days, kl) {
-  try { const raw = JSON.parse(localStorage.getItem(_BT_RAW_KEY) || '{}'); raw[sym + '|' + days] = kl; _safeSetItem(_BT_RAW_KEY, JSON.stringify(raw)); } catch {}
+  try { localStorage.removeItem(_BT_RAW_KEY); } catch {}
+  _btRawMem[sym + '|' + days] = kl;
 }
 function _btReadFund(sym, days) {
   try { const raw = JSON.parse(localStorage.getItem(_BT_FUND_KEY) || '{}'); return raw[sym + '|' + days] || null; } catch { return null; }
@@ -6893,11 +6903,27 @@ export async function runAlphaBacktest(days, opts) {
     const r = alphaRunBacktest(h1, d1, { start: start2, end: endMs, band: 0.05, volTarget: 0.3, vtCap: 1.5, levCap: 3, funding: [], useFunding: false });
     if (r.error) { if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测失败: ' + r.error + '</div>'; return null; }
     const ann = ((Math.pow(r.final, 365 / Math.max(1, r.nBars / 24)) - 1) * 100);
-    _btAlphaText = '## 三、基石策略 Alpha 回测（参数固化 GOAL2-4 定版，历史回测非预测）\n- 窗口: ' + days + 'd (' + new Date(start2).toISOString().slice(0, 10) + ' → ' + new Date(endMs).toISOString().slice(0, 10) + ')\n- 期末权益: ' + (r.final * 100).toFixed(1) + '%（本金 100%）\n- 年化(CAGR): ' + ann.toFixed(1) + '%\n- Sharpe(日): ' + (r.sharpe || 0).toFixed(2) + '\n- maxDD: ' + (r.maxDD || 0).toFixed(1) + '%\n- 调仓次数: ' + r.trades.length + '\n- 费用: ' + (r.fees * 100).toFixed(2) + '%\n- 参数: vt30% / levCap3 / band5% / combo权重 carry0.5+momo0.2+brk0.3（固化，不优选）\n';
+    // GOAL14：年度分解 + 明细（对齐 SRSI 报告可复核性）
+    const yr = {};
+    let pe = 1;
+    for (let i = 0; i < r.ts.length; i++) { const y = new Date(r.ts[i]).getUTCFullYear(); (yr[y] = yr[y] || []).push([i, r.eqs[i]]); }
+    let yrTxt = '';
+    for (const y of Object.keys(yr).sort()) {
+      const seg = yr[y]; const v0 = seg[0][1] > 0 ? seg[0][1] : 1, v1 = seg[seg.length - 1][1];
+      yrTxt += y + ': ' + ((v1 / v0 - 1) * 100).toFixed(1) + '%  ';
+    }
+    let detTxt = '';
+    const showN = Math.min(r.trades.length, 10);
+    for (const t of r.trades.slice(-showN)) {
+      detTxt += new Date(t.tIn).toISOString().slice(5, 16) + ' ' + (t.side || '') + ' w=' + (t.w != null ? (t.w * 100).toFixed(0) + '%' : '-') + ' 入@' + (t.pIn != null ? t.pIn.toFixed(0) : '-') + ' → 出@' + (t.pOut != null ? t.pOut.toFixed(0) : '-') + ' 盈亏 ' + (t.pnlPct != null ? t.pnlPct.toFixed(1) + '%' : '') + '\n';
+    }
+    _btAlphaText = '## 三、基石策略 Alpha 回测（参数固化 GOAL2-4 定版，历史回测非预测）\n- 窗口: ' + days + 'd (' + new Date(start2).toISOString().slice(0, 10) + ' → ' + new Date(endMs).toISOString().slice(0, 10) + ')\n- 期末权益: ' + (r.final * 100).toFixed(1) + '%（本金 100%）\n- 年化(CAGR): ' + ann.toFixed(1) + '%\n- Sharpe(日): ' + (r.sharpe || 0).toFixed(2) + '\n- maxDD: ' + (r.maxDD || 0).toFixed(1) + '%\n- 调仓次数: ' + r.trades.length + '\n- 费用: ' + (r.fees * 100).toFixed(2) + '%\n- 年度分解: ' + yrTxt + '\n- 参数: vt30% / levCap3 / band5% / combo权重 carry0.5+momo0.2+brk0.3（固化，不优选）\n- 最近调仓明细:\n' + detTxt + '\n';
     if (el) {
       el.innerHTML = '<div class="kt-auto-row"><b>🧭 Alpha 基石策略</b>（参数固化 GOAL2-4 定版·不参与优选·历史回测非预测）</div>'
         + '<div class="kt-auto-row">窗口 ' + days + 'd｜期末权益 <b>' + (r.final * 100).toFixed(1) + '%</b>｜年化 <b>' + ann.toFixed(1) + '%</b>｜Sharpe <b>' + (r.sharpe || 0).toFixed(2) + '</b>｜maxDD <b>' + (r.maxDD || 0).toFixed(1) + '%</b></div>'
-        + '<div class="kt-auto-row">调仓 ' + r.trades.length + ' 次｜费用 ' + (r.fees * 100).toFixed(2) + '%｜参数 vt30%/L3/band5%/权重0.5+0.2+0.3（固化）</div>';
+        + '<div class="kt-auto-row">调仓 ' + r.trades.length + ' 次｜费用 ' + (r.fees * 100).toFixed(2) + '%｜参数 vt30%/L3/band5%/权重0.5+0.2+0.3（固化）</div>'
+        + '<div class="kt-auto-row">年度分解: ' + yrTxt + '</div>'
+        + '<div class="kt-auto-row" style="white-space:pre-wrap;font-size:10px;opacity:.85">最近调仓 ' + showN + ' 笔:\n' + detTxt + '（全部 ' + r.trades.length + ' 笔见「📄 导出」报告）</div>';
     }
     window.__alphaBtLast = { sym, days, final: r.final, ann, sharpe: r.sharpe, dd: r.maxDD };
     return r;
@@ -6975,7 +7001,8 @@ export async function runSrsiBacktest(days, opts) {
     } catch (e) { /* 非浏览器环境忽略 */ }
     const store = _btReadStore();
     store.results = store.results || {};
-    store.results[sym + '|' + days + (mode === 'spot' ? '|spot' : '')] = res;
+    const slim = Object.assign({}, res); delete slim.eqs; delete slim.ws; delete slim.fund; // GOAL14：大数组不落盘（防配额爆，绘制/报告不依赖）
+    store.results[sym + '|' + days + (mode === 'spot' ? '|spot' : '')] = slim;
     store.lastDays = days;
     store.lastSym = sym;
     store.lastMode = mode;

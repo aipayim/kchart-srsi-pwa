@@ -74,7 +74,7 @@ export function computeSeries(arr) {
 //   包裹代理 https://corsproxy.io/?url={url} → <代理>?url=<encoded 全 URL>。
 // 默认走 Binance 多域名并发竞速（api/api1/api2/data-api.vision），提升不同地区命中率。
 const EP_API = ['https://api.binance.com', 'https://api1.binance.com', 'https://api2.binance.com', 'https://data-api.binance.vision'];
-const EP_FAPI = ['https://fapi.binance.com', 'https://fapi.binance.vision'];
+const EP_FAPI = ['https://fapi.binance.com']; // GOAL14：fapi.binance.vision 不存在（vision 只有 S3 历史仓库无 REST fundingRate），移除避免 ERR_CONNECTION_CLOSED 刷屏；fapi 不可达时 funding 静默降级为空（回测/实盘均兼容空 funding）
 const PROXY_KEY = 'pwa_binance_proxy';
 
 function userProxy() {
