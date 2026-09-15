@@ -3420,8 +3420,8 @@ function drawMain(ctx, sym, tf, H) {
       const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
       const label = '组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp;
       const tw = ctx.measureText(label).width;
-      // GOAL14：右下角 + 半透明背景条（不遮挡 K 线/SRSI 线，原右上角会覆盖）
-      const bx = W - PAD_R - 4 - tw - 10, by = H - PAD_B - 26;
+      // GOAL14：右下角 + 半透明背景条（GOAL20 修复：原 H-PAD_B-26 是整画布底=落到 MACD 子图区；正确=主图区内右下角，与左居中信号卡对角呼应）
+      const bx = W - PAD_R - 4 - tw - 10, by = PAD_T + MAIN_H - 26;
       ctx.fillStyle = 'rgba(16,22,30,.72)';
       ctx.fillRect(bx, by, tw + 12, 18);
       ctx.strokeStyle = 'rgba(46,204,113,.35)'; ctx.strokeRect(bx, by, tw + 12, 18);
