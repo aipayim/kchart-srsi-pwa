@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SRSI PWA · 赛博风格设计稿 v1 — GOAL17-E</title>
+<style>
+:root {
+  --bg0: #070b14; --bg1: #0b1220; --bg2: #101a2e;
+  --cy: #22d3ee; --gr: #2ecc71; --rd: #ff4d6d; --am: #f59e0b; --pu: #a78bfa;
+  --tx: #e6eef5; --tx2: #8fa3b8; --line: rgba(34,211,238,.14);
+  --glow-cy: 0 0 12px rgba(34,211,238,.35); --glow-gr: 0 0 10px rgba(46,204,113,.3);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg0); color:var(--tx); font:14px/1.55 -apple-system,'SF Pro','PingFang SC','Segoe UI',sans-serif; padding:20px; max-width:1180px; margin:0 auto; }
+h1 { font-size:20px; letter-spacing:.5px; margin-bottom:4px; }
+h1 .accent { color:var(--cy); text-shadow:var(--glow-cy); }
+.sub { color:var(--tx2); font-size:12px; margin-bottom:20px; }
+h2 { font-size:14px; color:var(--cy); margin:26px 0 10px; letter-spacing:1px; }
+h2::before { content:'◈ '; opacity:.7; }
+.note { font-size:11px; color:var(--tx2); margin-top:6px; }
+.grid { display:grid; gap:14px; }
+.g2 { grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); }
+.g3 { grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+
+/* ===== 组件预览 ===== */
+.card { background:linear-gradient(160deg,var(--bg1),var(--bg2)); border:1px solid var(--line); border-radius:12px; padding:14px; position:relative; overflow:hidden; }
+.card::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,transparent,rgba(34,211,238,.5),transparent); }
+.card h3 { font-size:12px; color:var(--tx2); font-weight:500; margin-bottom:10px; display:flex; justify-content:space-between; }
+.card h3 .tag { color:var(--cy); font-size:10px; border:1px solid var(--line); padding:1px 6px; border-radius:8px; }
+.num { font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; }
+.up { color:var(--gr); text-shadow:var(--glow-gr); } .dn { color:var(--rd); }
+.chg { font-size:11px; margin-left:6px; }
+
+/* 信号卡（主图左居中形态） */
+.sigcard { width:250px; border-radius:10px; border:1px solid rgba(46,204,113,.55); background:rgba(7,11,20,.86); padding:10px 12px; box-shadow:0 0 18px rgba(46,204,113,.12); }
+.sigcard .h { font-size:9px; color:var(--tx2); letter-spacing:.5px; }
+.sigcard .a { font-size:15px; font-weight:700; margin:2px 0; }
+.sigcard .a .tm { font-size:11px; padding:1px 7px; border-radius:8px; margin-left:6px; }
+.tm-a { background:rgba(46,204,113,.16); color:var(--gr); }
+.tm-w { background:rgba(245,158,11,.16); color:var(--am); }
+.sigcard .r { font-size:10.5px; color:rgba(230,238,245,.85); }
+.sigcard .sl { font-size:10.5px; font-variant-numeric:tabular-nums; margin-top:3px; }
+.sigcard.short { border-color:rgba(255,77,109,.55); box-shadow:0 0 18px rgba(255,77,109,.12); }
+.sigcard.wait { border-color:rgba(143,163,184,.4); }
+
+/* 顶栏 chips */
+.bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; background:var(--bg1); border:1px solid var(--line); border-radius:10px; padding:8px 12px; }
+.chip { font-size:11px; padding:3px 11px; border-radius:12px; border:1px solid var(--line); color:var(--tx2); cursor:pointer; user-select:none; white-space:nowrap; transition:.15s; }
+.chip.on { color:var(--cy); border-color:var(--cy); background:rgba(34,211,238,.1); box-shadow:var(--glow-cy); }
+.chip.g { color:var(--gr); border-color:var(--gr); background:rgba(46,204,113,.1); }
+
+/* 手机底栏 */
+.phone { width:280px; margin:0 auto; border:2px solid var(--bg2); border-radius:26px; padding:12px 10px 40px; background:var(--bg1); position:relative; }
+.phone .nav { position:absolute; bottom:0; left:0; right:0; display:flex; background:rgba(7,11,20,.95); border-top:1px solid var(--line); border-radius:0 0 24px 24px; }
+.phone .nav div { flex:1; text-align:center; font-size:9px; color:var(--tx2); padding:8px 0 12px; }
+.phone .nav div.on { color:var(--cy); }
+.phone .nav .ic { font-size:16px; display:block; }
+.touchbtn { min-height:44px; font-size:13px; }
+
+/* 色板 */
+.pal { display:flex; gap:8px; flex-wrap:wrap; }
+.pal span { width:88px; height:44px; border-radius:8px; display:flex; align-items:flex-end; padding:4px 6px; font-size:9px; color:#fff; font-family:monospace; }
+</style>
+</head>
+<body>
+<h1>SRSI PWA <span class="accent">赛博风格</span> 设计稿 v1</h1>
+<div class="sub">GOAL17-E · 仅视觉预览（配色/发光/圆角/层级），布局与信息结构保持现有功能不变 · 确认后按现有组件渐进替换</div>
+
+<h2>1 · 设计原则（不影响使用的赛博感）</h2>
+<div class="grid g3">
+  <div class="card"><h3>深空底 + 单色发光</h3><div class="note">底色更深（#070b14），关键数字与激活态才发光——信息密度不变，扫读更快</div></div>
+  <div class="card"><h3>青色=系统/数据 · 绿红=多空</h3><div class="note">色彩语义固定：青=交互与工具，绿/红=盈亏方向，琥珀=警示，紫=AI/LLM</div></div>
+  <div class="card"><h3>触控目标 ≥44px</h3><div class="note">手机/PAD 全部可点元素加高，hover 依赖全部改为点按或长显</div></div>
+</div>
+
+<h2>2 · 顶部叠加栏（现有功能，新视觉）</h2>
+<div class="bar">
+  <span class="chip on">BTCUSDT ▾</span>
+  <span class="chip">5m</span><span class="chip on">15m</span><span class="chip">1h</span><span class="chip">4h</span>
+  <span class="chip on">α 信号 ✓</span><span class="chip on">实盘信号 ✓</span><span class="chip g">盯盘信号 ✓</span>
+  <span class="chip">🧭 交易面板</span>
+</div>
+<div class="note">激活态青色发光描边；策略勾选=亮，未选=灰——一眼可读，无需 hover。</div>
+
+<h2>3 · 主图盯盘信号卡（GOAL17-A 左侧居中形态）</h2>
+<div class="grid g2">
+  <div class="card"><h3>做多 · 时机优<span class="tag">BTCUSDT · 15m SRSI</span></h3>
+    <div class="sigcard">
+      <div class="h">BTCUSDT · 15m SRSI</div>
+      <div class="a up">做多<span class="tm tm-a">时机优</span></div>
+      <div class="r">Alpha多头·15m超卖回升=顺势回调买点</div>
+      <div class="sl">SL 60400 / TP 63200 · EMA↑</div>
+    </div>
+  </div>
+  <div class="card"><h3>做空 · 勿追 / 观望<span class="tag">同款双态</span></h3>
+    <div class="sigcard short" style="margin-bottom:10px">
+      <div class="h">BTCUSDT · 15m SRSI</div>
+      <div class="a dn">做空<span class="tm tm-a">时机优</span></div>
+      <div class="r">Alpha空头·15m超买回落=顺势反弹空点</div>
+      <div class="sl">SL 62100 / TP 59400 · EMA↓</div>
+    </div>
+    <div class="sigcard wait">
+      <div class="h">ETHUSDT · 15m SRSI</div>
+      <div class="a" style="color:var(--tx2)">观望<span class="tm tm-w">等方向</span></div>
+      <div class="r">Alpha中性：无方向优势，观望</div>
+    </div>
+  </div>
+</div>
+
+<h2>4 · 融合页卡片（数据发光、静噪）</h2>
+<div class="grid g3">
+  <div class="card"><h3>期末权益<span class="tag">回测 365d</span></h3><div class="num up">+136.9%<span class="chg up">▲</span></div><div class="note">年化 36.9 · Sharpe 1.13 · maxDD 18.1%</div></div>
+  <div class="card"><h3>Alpha 信号<span class="tag">基石</span></h3><div class="num" style="color:var(--cy)">◆ 多</div><div class="note">carry 0.5 + momo 0.2 + brk 0.3（固化）</div></div>
+  <div class="card"><h3>资金费率<span class="tag">双所均值</span></h3><div class="num dn">-0.012%</div><div class="note">更新 4s 前 · 正费率=多头拥挤</div></div>
+</div>
+
+<h2>5 · 手机/PAD 盯盘（3.5 项联动）</h2>
+<div class="grid g2">
+  <div class="phone">
+    <div class="card" style="margin-bottom:8px"><h3>BTCUSDT · 15m<span class="tag up">做多·优</span></h3><div class="num up" style="font-size:20px">61,200 <span class="chg up">+2.1%</span></div></div>
+    <button class="chip g touchbtn" style="width:100%;margin-bottom:6px">▲ 开多（确认后执行）</button>
+    <button class="chip touchbtn" style="width:100%;border-color:var(--rd);color:var(--rd)">▼ 开空</button>
+    <div class="nav"><div class="on"><span class="ic">📈</span>K线</div><div><span class="ic">🧪</span>回测</div><div><span class="ic">⚡</span>实盘</div><div><span class="ic">⚙️</span>设置</div></div>
+  </div>
+  <div class="card">
+    <h3>手机/PAD 体验方案（GOAL17-D 摘要）</h3>
+    <div class="note" style="line-height:1.9">
+      ① 悬停依赖全部替代：K线读数改<b style="color:var(--cy)">点按取值</b>（点哪显示哪根 OHLC/SRSI），长按=十字线锁定<br>
+      ② 信号卡常显（不依赖 hover），双指缩放K线保持<br>
+      ③ 底部 Tab 导航（拇指区）：K线/回测/实盘/设置<br>
+      ④ 开平仓按钮固定拇指区 + 3s 二次确认（防误触已有）<br>
+      ⑤ 横屏 PAD 自动展开交易面板双栏
+    </div>
+  </div>
+</div>
+
+<h2>6 · 色板（替换现有 --bg/--card/--accent 系列）</h2>
+<div class="pal">
+  <span style="background:#070b14">bg0 深空</span>
+  <span style="background:#0b1220">bg1 面板</span>
+  <span style="background:#101a2e">bg2 卡片</span>
+  <span style="background:#22d3ee;color:#04202a">accent 青</span>
+  <span style="background:#2ecc71">多/涨</span>
+  <span style="background:#ff4d6d">空/跌</span>
+  <span style="background:#f59e0b">警示</span>
+  <span style="background:#a78bfa">AI/LLM</span>
+</div>
+<div class="note" style="margin-top:14px">⚠ 渐进替换原则：只动 CSS 变量与发光/圆角，不改任何 DOM 结构与功能 id；确认后 1 个版本内完成（可先做顶栏+信号卡+色板，融合页卡片第二批）。</div>
+</body>
+</html>
