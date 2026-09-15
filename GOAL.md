@@ -50,4 +50,24 @@
 
 ## 子任务
 - [x] A. loadCfg 800ms 快照固化块内追加：cfg.alphaSignalOn=true 时自动后台跑 __alphaSignalProvider，完成后 renderKChart 补帧（切币场景同样覆盖）
-- [ ] B. test → 1.5.38 → deploy → 验证 → 汇报
+- [x] B. test → 1.5.38 → deploy → 验证 → 汇报
+- 线上 e2e（1.5.38）：0 错误 ✓；α 角标数据链路=cfg.alphaSignalOn（已持久）+800ms 自动 provider 重算+renderKChart 补帧
+
+# GOAL24 — 拇指条补全（GOAL17-D ④ 收尾批）
+
+> GOAL26 起拇指条已有骨架（fixed bottom/44px/pointer:coarse），对照 GOAL17-D ④ 有 6 差距：平仓按钮不直接平仓（开订单管理）、无强制防误触（依赖 _safeguard 可被关）、arm 状态不同步（无「确认?」反馈）、无状态行（价/持仓/浮盈）、遮挡页面底部（body 无 padding 补偿）、与安装条重叠（z-index 9999>50 全盖住）。
+
+## 子任务
+- [x] A. kchart.js：kchartTradeOpen(side,forceArm)/kchartTradeClose(forceArm) 强制两段确认（_safeguard||forceArm）；arm 判定去 _safeguard 前缀（纯时效）；thumb 骨架改 4 按钮（▲开多/平仓/▼开空/☰持仓）+ 状态行；renderQuickTrade 早退分支隐藏 thumb；_tradeOn=false 同步隐藏；export 供测试
+- [x] B. styles.css：thumb 两行布局+状态行+armed 样式；去 display !important（JS 内联接管）
+- [x] C. kchart.html：@media(pointer:coarse) body padding-bottom 补偿（防拇指条遮底部内容）
+- [x] D. kchartApp.js：安装条 show/hide 时 thumb bottom 实测错位（offsetHeight）
+- [x] E. tests：forceArm 两段确认/超时重 arm/_safeguard=false 直接下单/close 路径
+- [x] F. 双仓 test → 1.5.39 → build → deploy → 线上验证 → 同步脱敏版 → 汇报
+
+## 执行记录（2026-09-15，GOAL24 完成）
+
+- 踩坑（重要）：原 GOAL18-B thumb 创建块**缩进错乱实挂在 setSrsiAutoOn 的 document 分支内**（非 renderQuickTrade），首轮替换后 thumb 仅在 Alpha 一键开启路径创建——PWA 主循环（renderQuickTrade 每秒）永不触发。症状：手动 api.renderQuickTrade() 立即出现、自然加载 15s 不出现。修复=renderQuickTrade 真实尾部（renderSrsiAutoPanel 后）调 syncThumbBar（commit f214bb0，重新部署 0ca291e1）
+- 线上 e2e（1.5.39，iPhone 13 仿真 pointer:coarse=true）：thumb 自然创建 ✓、状态行「BTCUSDT 77118 ▲多10x -38.6」实时 ✓、arm 两段确认（确认开多?→下单 amt=0.25 币本位 ✓ / 确认平仓?→pos=0 ✓）、4 按钮（▲开多/平仓/▼开空/☰持仓）✓、body padding-bottom 92px ✓、80px 高 ✓、桌面回归 coarse=false 不创建 ✓、0 pageerror ✓
+- 已知遗留（GOAL26 既有，未动）：①币本位 pos.pnlPct 口径失真（pnl/amt，amt 为币数 → %异常巨大；主系统同）；②PWA 新用户 coins 空 → 拇指条开多（币本位）alert「可用保证金不足」，需先在设置页填币库存
+- 测试：kchart 903（+12 GOAL24 用例：_tradeOn=false 无下单/第一击 arm/第二击执行/参数/超时重 arm/超时后执行/换方向重 arm/空单 U本位/无持仓平仓无操作/平仓 arm/平仓执行）全绿

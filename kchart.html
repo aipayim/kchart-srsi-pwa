@@ -7,6 +7,8 @@
   <title>K线多周期 SRSI 分析</title>
   <style>
     html,body{height:auto!important;min-height:100vh;overflow:auto!important;display:block!important;overscroll-behavior:y contain;padding-bottom:env(safe-area-inset-bottom)}
+    /* GOAL24：触摸设备拇指条(fixed bottom 两行≈84px)常驻，补偿页面底部防遮挡 */
+    @media (pointer:coarse){body{padding-bottom:calc(92px + env(safe-area-inset-bottom))}}
     /* 纪律分析面板已统一单列(共享 styles.css)，这里仅保留窄屏细节 */
     .disc-nowprice,.disc-action{flex-wrap:wrap}
     .pwa-install{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(90deg,#0e1626,#10202e);border-top:1px solid var(--border);box-shadow:0 -4px 18px rgba(0,0,0,.45);font-size:12px;color:var(--text)}

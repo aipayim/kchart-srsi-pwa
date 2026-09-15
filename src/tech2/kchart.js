@@ -4870,19 +4870,8 @@ export function setSrsiAutoOn(on) {
     if (cfg.alphaLiveOn && !window.__alphaLab.isLive()) { try { window.__alphaLab.startLive(); } catch (e) {} }
     alEl.checked = cfg.alphaLiveOn && window.__alphaLab.isLive();
   } else if (alEl) alEl.checked = false;
-  // GOAL18-B：手机/PAD 拇指区快捷条（触屏设备固定底部，≥44px；复用防误触+现有开平仓路径）
-  let tb = document.getElementById('ktThumbBar');
-  if (!tb && typeof document !== 'undefined') {
-    tb = document.createElement('div');
-    tb.id = 'ktThumbBar';
-    tb.innerHTML = '<button id="ktTbLong" class="kt-tb-long">▲ 开多</button><button id="ktTbClose" class="kt-tb-close">平仓</button><button id="ktTbShort" class="kt-tb-short">▼ 开空</button><button id="ktTbPanel" class="kt-tb-panel">🧭 面板</button>';
-    document.body.appendChild(tb);
-    tb.querySelector('#ktTbLong').addEventListener('click', () => kchartTradeOpen('long'));
-    tb.querySelector('#ktTbShort').addEventListener('click', () => kchartTradeOpen('short'));
-    tb.querySelector('#ktTbClose').addEventListener('click', () => openOrderManager({ tab: 'positions' }));
-    tb.querySelector('#ktTbPanel').addEventListener('click', () => kToggleTradePanel());
-  }
-  if (tb) tb.style.display = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer:coarse)').matches) ? 'flex' : 'none';
+  // GOAL18-B/GOAL24：手机/PAD 拇指区快捷条（触屏设备固定底部，≥44px；强制两段确认 + 状态行）
+  syncThumbBar();
   const stEl = document.getElementById('ktPanelState');
   if (stEl) {
     const sOn = cfg.srsiAutoOn, aOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
@@ -4890,6 +4879,56 @@ export function setSrsiAutoOn(on) {
   }
   }
 }
+// GOAL24：拇指条骨架构建 + 就地同步（状态行/arm 确认态/显隐）；与 renderQuickTrade 同数据源、每秒主循环驱动
+function syncThumbBar() {
+  if (typeof document === 'undefined') return;
+  let tb = document.getElementById('ktThumbBar');
+  const coarse = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
+  if (!coarse || !_tradeOn || !_tradeEngine) { if (tb) tb.style.display = 'none'; return; }
+  if (!tb) {
+    tb = document.createElement('div');
+    tb.id = 'ktThumbBar';
+    tb.innerHTML = '<div id="ktThumbStatus"></div><div id="ktThumbBtns">'
+      + '<button id="ktTbLong" class="kt-tb-long">▲ 开多</button>'
+      + '<button id="ktTbClose" class="kt-tb-close">平仓</button>'
+      + '<button id="ktTbShort" class="kt-tb-short">▼ 开空</button>'
+      + '<button id="ktTbOrders" class="kt-tb-panel">☰ 持仓</button></div>';
+    document.body.appendChild(tb);
+    // 强制防误触：forceArm=true → 无视 _safeguard 开关，首次点=arm，3s 内再点=执行
+    tb.querySelector('#ktTbLong').addEventListener('click', () => kchartTradeOpen('long', true));
+    tb.querySelector('#ktTbShort').addEventListener('click', () => kchartTradeOpen('short', true));
+    tb.querySelector('#ktTbClose').addEventListener('click', () => kchartTradeClose(true));
+    tb.querySelector('#ktTbOrders').addEventListener('click', () => openOrderManager({ tab: 'positions' }));
+    // 安装条先显示、拇指条后创建的时序：创建时反向对齐（否则 z-index 9999 盖住安装条）
+    const inst = document.getElementById('pwaInstall');
+    if (inst && !inst.hidden && inst.offsetHeight > 0) tb.style.bottom = inst.offsetHeight + 'px';
+  }
+  tb.style.display = 'flex';
+  const sym = cfg.symbol;
+  const pos = ((_tradeEngine.S && _tradeEngine.S.pos) || []).find(p => p.sym === sym);
+  const price = (_tradeEngine.S && _tradeEngine.S.prices && _tradeEngine.S.prices[sym] && _tradeEngine.S.prices[sym].last) || null;
+  const st = document.getElementById('ktThumbStatus');
+  if (st) {
+    const px = price != null ? _fmt(price, price >= 100 ? 1 : 4) : '--';
+    let html = '<b>' + sym + '</b> ' + px;
+    if (pos) {
+      const pnl = _fmt(pos.pnl || 0, 1), pct = _fmt(pos.pnlPct || 0, 1);
+      const col = (pos.pnl || 0) >= 0 ? '#2ecc71' : '#ff4d6d';
+      html += '　<span style="color:' + col + '">' + (pos.side === 'long' ? '▲多' : '▼空') + pos.lev + 'x ' + pnl + '(' + pct + '%)</span>';
+    } else {
+      html += '　<span style="opacity:.55">无持仓</span>';
+    }
+    st.innerHTML = html;
+  }
+  const armShort = _arm.side === 'short' && Date.now() - _arm.t < 3000;
+  const armLong = _arm.side === 'long' && Date.now() - _arm.t < 3000;
+  const armClose = _arm.side === 'close' && Date.now() - _arm.t < 3000;
+  const bL = tb.querySelector('#ktTbLong'), bS = tb.querySelector('#ktTbShort'), bC = tb.querySelector('#ktTbClose');
+  if (bL) { bL.textContent = armLong ? '确认开多?' : '▲ 开多'; bL.classList.toggle('armed', armLong); }
+  if (bS) { bS.textContent = armShort ? '确认开空?' : '▼ 开空'; bS.classList.toggle('armed', armShort); }
+  if (bC) { bC.textContent = armClose ? '确认平仓?' : '平仓'; bC.classList.toggle('armed', armClose); }
+}
+
 // GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）
 export function applyBtSnapshot(bt, eff) {
   if (!bt) return false;
@@ -4928,7 +4967,7 @@ function _tradeBar() { return typeof document !== 'undefined' ? document.getElem
 function renderQuickTrade() {
   const bar = _tradeBar();
   if (!bar) return;
-  if (!_tradeOn) { bar.innerHTML = '<div class="kt-off">快捷交易已关闭（设置中可开启）</div>'; bar._built = false; return; }
+  if (!_tradeOn) { bar.innerHTML = '<div class="kt-off">快捷交易已关闭（设置中可开启）</div>'; bar._built = false; syncThumbBar(); return; }
   const sym = cfg.symbol;
   const engine = _tradeEngine;
   let perp = null, price = null, pos = null, usdt = 0, coin = 0;
@@ -4941,11 +4980,13 @@ function renderQuickTrade() {
   if (!engine) {
     bar.innerHTML = '<div class="kt-off">交易引擎未连接</div>';
     bar._built = false;
+    syncThumbBar();
     return;
   }
-  const armShort = _safeguard && _arm.side === 'short' && Date.now() - _arm.t < 3000;
-  const armLong = _safeguard && _arm.side === 'long' && Date.now() - _arm.t < 3000;
-  const armClose = _safeguard && _arm.side === 'close' && Date.now() - _arm.t < 3000;
+  // GOAL24：arm 判定纯时效（_safeguard=false 但 forceArm 的 thumb 路径也能正确显示确认态）
+  const armShort = _arm.side === 'short' && Date.now() - _arm.t < 3000;
+  const armLong = _arm.side === 'long' && Date.now() - _arm.t < 3000;
+  const armClose = _arm.side === 'close' && Date.now() - _arm.t < 3000;
   // 首次构建骨架(含监听)，之后仅就地更新动态值，避免每次 render 重建按钮导致真实点击失效
   if (!bar._built) {
     bar.innerHTML = `
@@ -5378,9 +5419,11 @@ function renderQuickTrade() {
   if (btBody) btBody.style.display = _btCfg.collapsed ? 'none' : '';
   if (btTog) btTog.textContent = _btCfg.collapsed ? '▸' : '▾';
   renderSrsiAutoPanel();
+  syncThumbBar();   // GOAL24：拇指条与交易条同频刷新（每秒主循环驱动）
 }
 
-function kchartTradeOpen(side) {
+// GOAL24：forceArm=true 时无视 _safeguard 开关强制两段确认（拇指条/手机必经）
+export function kchartTradeOpen(side, forceArm) {
   if (!_tradeOn || !_tradeEngine) return;
   const sym = cfg.symbol;
   const mm = side === 'short' ? 'usdt' : 'coin';
@@ -5389,7 +5432,7 @@ function kchartTradeOpen(side) {
   if (!sub) { if (typeof alert === 'function') alert('未初始化模拟账户（请先设置初始资金）'); return; }
   const price = (engine.S.prices && engine.S.prices[sym] && engine.S.prices[sym].last);
   if (!price) { if (typeof alert === 'function') alert('无行情价，无法开仓'); return; }
-  if (_safeguard) {
+  if (_safeguard || forceArm) {
     const now = Date.now();
     if (_arm.side !== side || now - _arm.t > 3000) { _arm = { side, t: now }; renderQuickTrade(); return; }
     _arm = { side: null, t: 0 };
@@ -5401,12 +5444,12 @@ function kchartTradeOpen(side) {
   renderQuickTrade();
 }
 
-function kchartTradeClose() {
+export function kchartTradeClose(forceArm) {
   if (!_tradeEngine) return;
   const sym = cfg.symbol;
   const pos = (_tradeEngine.S.pos || []).find(p => p.sym === sym);
   if (!pos) return;
-  if (_safeguard) {
+  if (_safeguard || forceArm) {
     const now = Date.now();
     if (_arm.side !== 'close' || now - _arm.t > 3000) { _arm = { side: 'close', t: now }; renderQuickTrade(); return; }
     _arm = { side: null, t: 0 };

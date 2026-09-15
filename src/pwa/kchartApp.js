@@ -265,10 +265,19 @@ function showInstall(text) {
   if (!bar || !txt) return;
   txt.innerHTML = text;
   bar.hidden = false;
+  syncThumbForInstall(bar);
 }
 function hideInstall() {
   const bar = document.getElementById('pwaInstall');
   if (bar) bar.hidden = true;
+  syncThumbForInstall(null);
+}
+// GOAL24：安装条与拇指条同在 bottom:0，安装条显示时拇指条实测上移错位（否则 z-index 9999 全盖住安装条）
+function syncThumbForInstall(bar) {
+  const tb = document.getElementById('ktThumbBar');
+  if (!tb) return;
+  if (bar && !bar.hidden && bar.offsetHeight > 0) tb.style.bottom = bar.offsetHeight + 'px';
+  else tb.style.bottom = '';
 }
 function setupInstallPrompt() {
   if (isStandalone()) return;                                   // 已作为 PWA 打开，不提示

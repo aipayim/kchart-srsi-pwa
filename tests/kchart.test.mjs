@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf } from '../src/tech2/kchart.js';
+import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -3145,4 +3145,66 @@ if (failed > 0) process.exit(1);
   ok('manualSignal: 无ATR→stop/target null', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: null }); return r.stop === null && r.target === null; })());
   ok('manualSignal: 坏价格→null', manualSignal({ alphaDir: 'long', price: 0 }) === null);
   ok('manualSignal: EMA趋势标记', (() => { const up = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 105, emaSlow: 95 }); const dn = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 95, emaSlow: 105 }); return up.trend === 'up' && dn.trend === 'dn'; })());
+}
+
+// ===== GOAL24: 拇指条强制两段确认（kchartTradeOpen/Close forceArm）=====
+{
+  console.log('\n[kchart: GOAL24 拇指条强制两段确认]');
+  // mock 引擎
+  const orders = [], exits = [];
+  const mockEngine = {
+    S: { prices: { THUMBUSDT: { last: 100, lastT: Date.now() } }, pos: [] },
+    getPerpSub: () => ({ id: 'perp', bal: 1000, coins: { THUMBUSDT: 2 } }),
+    placeOrder: (o) => orders.push(o),
+    exitPosition: (p, o) => exits.push(o),
+  };
+  setTradeConfig({ on: true });
+  cfg.symbol = 'THUMBUSDT';
+  setTradeEngine(mockEngine);
+
+  // A1: 开关关闭 → 直接 return 无下单
+  setTradeConfig({ on: false });
+  kchartTradeOpen('long', true);
+  ok('拇指条: _tradeOn=false 无下单', orders.length === 0);
+  setTradeConfig({ on: true });
+
+  // A2: forceArm 第一击=arm（不下单），第二击=执行
+  kchartTradeOpen('long', true);
+  ok('拇指条: 第一击仅 arm 不下单', orders.length === 0);
+  kchartTradeOpen('long', true);
+  ok('拇指条: 第二击执行下单', orders.length === 1);
+  ok('拇指条: 下单参数(币本位/reinvest)', orders[0].side === 'long' && orders[0].marginMode === 'coin' && orders[0].reinvest === true);
+
+  // A3: arm 超时（快进 4s）→ 重新 arm 不执行
+  const realNow = Date.now;
+  Date.now = () => realNow() + 4000;
+  kchartTradeOpen('long', true);
+  const n1 = orders.length;
+  ok('拇指条: arm 超时后重新 arm 不执行', orders.length === n1);
+  // A4: 超时后第二击执行（arm.t 已刷新为 fake 时间，dt<3000 满足）
+  kchartTradeOpen('long', true);
+  ok('拇指条: 超时重 arm 后第二击执行', orders.length === n1 + 1);
+  Date.now = realNow;
+
+  // A5: 换方向 → 重新 arm（long arm 状态下点 short 不执行）
+  kchartTradeOpen('long', true);       // arm long
+  const n2 = orders.length;
+  kchartTradeOpen('short', true);      // 换方向 → 重新 arm
+  ok('拇指条: 换方向重新 arm 不执行', orders.length === n2);
+  kchartTradeOpen('short', true);      // 第二击执行（U本位空）
+  ok('拇指条: 空单第二击执行(U本位)', orders.length === n2 + 1 && orders[n2].marginMode === 'usdt');
+
+  // A6: 平仓两段确认（无持仓时无操作；有持仓第一击 arm 第二击 exitPosition）
+  kchartTradeClose(true);
+  ok('拇指条: 无持仓平仓无操作', exits.length === 0);
+  mockEngine.S.pos.push({ sym: 'THUMBUSDT', side: 'long', qty: 1, entry: 100, amt: 100, lev: 10 });
+  kchartTradeClose(true);
+  ok('拇指条: 平仓第一击仅 arm', exits.length === 0);
+  kchartTradeClose(true);
+  ok('拇指条: 平仓第二击执行', exits.length === 1 && exits[0].reason === '手动平仓');
+
+  // A7: reset（还原 cfg.symbol，关引擎避免污染后续用例）
+  setTradeEngine(null);
+  setTradeConfig({ on: false });
+  cfg.symbol = 'BTCUSDT';
 }
