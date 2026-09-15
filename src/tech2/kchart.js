@@ -3235,7 +3235,7 @@ function drawMain(ctx, sym, tf, H) {
     const axisVals = [0, 25, 50, 75, 100];
     ctx.textBaseline = 'middle'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
     axisVals.forEach(v => {
-      const y = Y0(v);
+      const y = Math.max(PAD_T + 6, Math.min(PAD_T + MAIN_H - 6, Y0(v))); // GOAL22：刻度文字钳制在主图区内（顶部100/底部0 原被画布边裁一半）
       if (v !== 50) {
         ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.setLineDash([1, 4]); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke(); ctx.setLineDash([]);
@@ -3431,7 +3431,7 @@ function drawMain(ctx, sym, tf, H) {
       ap++;
     }
     if (lp || ap || _alphaLiveOn) {
-      ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'right';
+      ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; // GOAL22：状态带左角标必须左对齐（残留 right 导致文字向左延伸一半出画布）
       const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
       const label = '组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp;
       const tw = ctx.measureText(label).width;

@@ -31,4 +31,14 @@
 - [x] A. 根因排查：Node 往返测试（persist→loadCfg）全部字段保留 ✓ → 丢态在浏览器时序（checkbox 视觉恢复缺位+启动早期陈旧写入覆盖）
 - [x] B. 修复：renderQuickTrade 每次重绘按 cfg 对齐 ktSrsiAuto/ktSrsiApplyBt/ktAlphaLive 勾选视觉（时序无关）；loadCfg 尾部 800ms 快照固化 persist（防早期覆盖）
 - [x] C. 主图底部状态带 STATUS_H=22：分隔虚线+SRSI0 线下方专用信息条；组合实盘角标→带左、α 信号角标（α空7%·54s前）→带右；子图 y0 下移、BASE_H+22 全链自适应——不再压 K 线/上限带/下限带
-- [ ] D. test/build → 1.5.36 → deploy → 验证 → 汇报
+- [x] D. test/build → 1.5.36 → deploy → 验证 → 汇报
+- 线上 e2e（1.5.36）：状态带区深色像素 13063≈角标条面积（组合条 230×18+α文字）✓；sig 正常 ✓ 0 报错；双仓全绿；脱敏版已 push
+
+# GOAL22 — 状态带文字越界 + SRSI 刻度避让
+
+> 反馈：①状态带左下角文字一半超出页面 ②主图顶部 100/底部 0 被挡一半。
+
+## 子任务
+- [x] A. 组合角标 textAlign 残留 right → 文字以右对齐锚点画在左缘=向左延伸出画布；改 left+textBaseline alphabetic
+- [x] B. SRSI 0-100 副轴刻度 y 钳制 [PAD_T+6, PAD_T+MAIN_H-6]——顶部 100/底部 0 完整显示
+- [ ] C. test → 1.5.37 → deploy → 验证 → 汇报
