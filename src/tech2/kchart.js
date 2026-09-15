@@ -3328,7 +3328,9 @@ function drawMain(ctx, sym, tf, H) {
   if (cfg.sigOverlay && typeof window !== 'undefined') {
     try {
       const sym16 = typeof sym !== 'undefined' ? sym : cfg.sym;
-      const srsi15cfg = (cfg.srsiByTf && cfg.srsiByTf['15m']) || cfg.srsi;
+      // GOAL19：srsi 配置防御（老 localStorage 可能缺字段）——逐项深合并默认
+      const _raw15 = (cfg.srsiByTf && cfg.srsiByTf['15m']) || cfg.srsi || {};
+      const srsi15cfg = { rsiPeriod: _raw15.r || _raw15.rsiPeriod || 14, stochPeriod: _raw15.s || _raw15.stochPeriod || 9, smoothK: _raw15.k != null ? _raw15.k : 2, smoothD: _raw15.d != null ? _raw15.d : 3 };
       const c15 = (getTFData(sym16, '15m') || {}).c || [];
       let k15 = null, d15 = null, prevK15 = null, atr15 = null;
       if (c15.length > 40) {
@@ -3340,8 +3342,9 @@ function drawMain(ctx, sym, tf, H) {
       const aw16 = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
       const alphaDir = aw16 > 0.02 ? 'long' : aw16 < -0.02 ? 'short' : (window.__alphaLab && window.__alphaLab.state && window.__alphaLab.state.dir) || null;
       const pm16 = (typeof series !== 'undefined' && series && series.ema20 != null) ? { emaFast: series.ema20, emaSlow: series.ema120 } : { emaFast: null, emaSlow: null };
-      window.__manualSignal = manualSignal({ alphaDir, k15, d15, prevK15, price: c[c.length - 1], atr: atr15, emaFast: pm16.emaFast, emaSlow: pm16.emaSlow });
-    } catch (e) { /* 数据未就绪时静默，下一帧重试 */ }
+      window.__manualSignal = manualSignal({ alphaDir, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, emaFast: pm16.emaFast, emaSlow: pm16.emaSlow });
+      window.__manualSigErr = null;
+    } catch (e) { window.__manualSigErr = String(e && e.message || e).slice(0, 80); if (!window.__manualSigWarned) { window.__manualSigWarned = 1; console.log('[SIG-CARD] 计算失败:', window.__manualSigErr); } }
   }
   if (cfg.sigOverlay && window.__manualSignal) {
     const ms = window.__manualSignal;
@@ -3350,12 +3353,14 @@ function drawMain(ctx, sym, tf, H) {
     const col = ms.action === 'long' ? '#2ecc71' : ms.action === 'short' ? '#ff6b6b' : ms.action === 'hold' ? '#f59e0b' : '#8899aa';
     const actTxt = ms.action === 'long' ? '做多' : ms.action === 'short' ? '做空' : ms.action === 'hold' ? '持仓' : '观望';
     // GOAL17：左侧垂直居中（原左上角挡币对/周期/根数提示）；带币对+时机周期标签（切币自动跟随、全币对有效）
+    // GOAL19 修复：Y 基准=主图区（PAD_T→mainBottom）中点——旧式 (PAD_T+(H-PAD_B))/2 落进子图区域，被子图随后绘制覆盖（用户环境“不显示”根因）
     const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m SRSI';
     const l1 = '盯盘: ' + actTxt + '·时机' + ms.timing;
     const l2 = ms.reason + (ms.stop != null && ms.target != null ? (' · SL ' + ms.stop.toFixed(0) + ' / TP ' + ms.target.toFixed(0)) : '') + (ms.trend === 'up' ? ' | EMA↑' : ms.trend === 'dn' ? ' | EMA↓' : '');
     ctx.textAlign = 'left';
     const w1 = Math.max(Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width), ctx.measureText(l0).width) + 14;
-    const cy1 = (PAD_T + (H - PAD_B)) / 2 - 22;
+    const mainBottom = PAD_T + MAIN_H;
+    const cy1 = (PAD_T + mainBottom) / 2 - 22;
     ctx.fillStyle = 'rgba(16,22,30,.78)';
     ctx.fillRect(PAD_L + 6, cy1, w1, 44);
     ctx.strokeStyle = col; ctx.globalAlpha = .6; ctx.strokeRect(PAD_L + 6, cy1, w1, 44); ctx.globalAlpha = 1;

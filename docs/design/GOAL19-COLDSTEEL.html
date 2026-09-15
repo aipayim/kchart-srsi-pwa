@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SRSI TERMINAL · 冷钢铁风 v3 — 1:1 全页面（响应式）</title>
+<style>
+:root{--bg:#0a0e14;--bg2:#0e141d;--pn:#101823;--pn2:#151f2d;--ln:#233246;--ln2:#31445e;
+--ic:#4fc3f7;--ic2:#2196c9;--st:#8b9bb4;--up:#3ddc84;--dn:#ff5252;--wn:#ffb74d;--ai:#ce93d8;
+--tx:#cfd8e3;--tx2:#6b7f95;--tx3:#45566b}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font:12.5px/1.5 ui-monospace,'SF Mono','Cascadia Code',Consolas,'PingFang SC',monospace;-webkit-font-smoothing:antialiased}
+/* 金属拉丝底 + 冷光斑 */
+body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(100deg,rgba(139,155,180,.014) 0 2px,transparent 2px 5px),radial-gradient(1200px 500px at 70% -10%,rgba(79,195,247,.05),transparent),radial-gradient(900px 420px at 10% 110%,rgba(33,150,201,.04),transparent);pointer-events:none;z-index:0}
+.app{position:relative;z-index:1;max-width:1460px;margin:0 auto;padding:8px 10px 20px}
+/* 面板：金属基座 */
+.pnl{background:linear-gradient(178deg,var(--pn2),var(--pn) 60%);border:1px solid var(--ln);position:relative}
+.pnl::after{content:'';position:absolute;inset:0;border-top:1px solid rgba(139,155,180,.14);pointer-events:none}
+.hd{display:flex;align-items:center;gap:8px;padding:6px 11px;border-bottom:1px solid var(--ln);font-size:9.5px;letter-spacing:1.6px;color:var(--tx2);background:linear-gradient(180deg,rgba(49,68,94,.28),transparent)}
+.hd .riv{width:4px;height:4px;border-radius:50%;background:var(--ln2);box-shadow:inset 0 1px 1px rgba(0,0,0,.7),0 0 3px rgba(79,195,247,.3)}
+.hd .no{color:var(--tx3)}
+.hd .r{margin-left:auto}
+.lamp{width:6px;height:6px;border-radius:50%;background:var(--up);box-shadow:0 0 6px var(--up);animation:lp 2.4s infinite}
+@keyframes lp{0%,100%{opacity:1}50%{opacity:.35}}
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:9px;padding:8px 12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:7px}
+.mark{width:22px;height:22px;border:1px solid var(--ic2);position:relative;transform:rotate(45deg)}
+.mark::after{content:'';position:absolute;inset:5px;background:linear-gradient(135deg,var(--ic),var(--ic2))}
+.brand b{font-size:14px;letter-spacing:2.5px;color:var(--tx)}
+.brand b i{color:var(--ic);font-style:normal}
+.px{font-size:19px;font-weight:700;color:var(--up);font-variant-numeric:tabular-nums;letter-spacing:.5px}
+.pu{font-size:10px;color:var(--up);opacity:.8}
+.tab{font-size:10px;padding:4px 11px;color:var(--tx2);border:1px solid transparent;cursor:pointer;letter-spacing:1px;background:linear-gradient(180deg,rgba(49,68,94,.16),rgba(49,68,94,.04))}
+.tab.on{color:var(--ic);border:1px solid var(--ic2);background:linear-gradient(180deg,rgba(79,195,247,.12),rgba(79,195,247,.03));box-shadow:inset 0 0 10px rgba(79,195,247,.06)}
+.tab:hover{color:var(--tx)}
+.sp{flex:1}
+.meta{font-size:9px;color:var(--tx3);letter-spacing:1.5px}
+/* 主布局：桌面 3 区 → PAD 2 区 → 手机单列 */
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 236px;gap:8px;margin-top:8px}
+.chartwrap{position:relative}
+.cvbox{height:440px}
+canvas{width:100%;height:100%;display:block}
+/* 信号卡：冷钢 HUD */
+.sig{position:absolute;left:10px;top:50%;transform:translateY(-50%);width:238px;background:linear-gradient(175deg,rgba(14,20,29,.96),rgba(10,14,20,.9));border:1px solid var(--ln2);box-shadow:0 8px 28px rgba(0,0,0,.5),inset 0 0 0 1px rgba(79,195,247,.05)}
+.sig::before{content:' SIGNAL // 01';position:absolute;top:-16px;left:0;font-size:8px;letter-spacing:2px;color:var(--tx3)}
+.sig .row{display:flex;align-items:center;gap:8px;padding:9px 12px 0}
+.sig .sym{font-size:9.5px;color:var(--tx2);letter-spacing:1.5px}
+.sig .st{margin-left:auto;font-size:8.5px;color:var(--up);border:1px solid rgba(61,220,132,.4);padding:1px 7px;letter-spacing:1px}
+.sig .act{padding:4px 12px 0;font-size:21px;font-weight:800;color:var(--up);letter-spacing:2px}
+.sig .tim{font-size:9px;color:var(--ic);letter-spacing:2px;padding:0 12px}
+.sig .rsn{margin:7px 12px 0;padding:7px 9px;font-size:10px;color:var(--tx);opacity:.9;background:rgba(49,68,94,.16);border-left:2px solid var(--ic)}
+.sig .sl{display:flex;gap:10px;margin:8px 12px 10px;font-size:10px;font-variant-numeric:tabular-nums}
+.sig .sl div{flex:1;border:1px solid var(--ln);padding:4px 8px}
+.sig .sl i{display:block;font-style:normal;font-size:8.5px;color:var(--tx3);letter-spacing:1px;margin-bottom:2px}
+.sig .meter{height:3px;margin:0 12px 11px;background:var(--ln);position:relative;overflow:hidden}
+.sig .meter::after{content:'';position:absolute;inset:0;width:66%;background:linear-gradient(90deg,var(--ic2),var(--ic));box-shadow:0 0 8px rgba(79,195,247,.5)}
+/* 侧栏卡 */
+.side{display:flex;flex-direction:column;gap:8px}
+.f{padding:8px 11px}
+.f .t{display:flex;justify-content:space-between;font-size:9px;color:var(--tx2);letter-spacing:1.6px}
+.f .v{font-size:17px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums}
+.f .s{font-size:9px;color:var(--tx3);margin-top:3px;display:flex;justify-content:space-between}
+.f .meter{height:2px;background:var(--ln);margin-top:6px;position:relative}
+.f .meter i{position:absolute;left:0;top:0;bottom:0;background:var(--ic2)}
+.up{color:var(--up)} .dn{color:var(--dn)} .wn{color:var(--wn)} .aic{color:var(--ai)}
+/* 子图 */
+.subs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+.sc{height:84px}
+.subnote{padding:5px 11px 7px;font-size:9.5px;color:var(--tx2)}
+.subnote b{color:var(--ic)}
+/* 底部交易 */
+.bot{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:8px;margin-top:8px}
+.lev{display:flex;align-items:center;gap:10px;padding:10px 12px 0}
+.lev input{flex:1;accent-color:var(--ic2);height:2px}
+.lev b{font-size:15px;color:var(--ic);min-width:38px;text-align:right}
+.pool{display:flex;gap:7px;padding:8px 12px 0;flex-wrap:wrap}
+.pool div{flex:1;min-width:110px;border:1px solid var(--ln);padding:6px 9px}
+.pool i{display:block;font-style:normal;font-size:8.5px;color:var(--tx3);letter-spacing:1px}
+.pool b{font-size:13px;font-variant-numeric:tabular-nums}
+.bts{display:flex;gap:7px;padding:10px 12px 12px}
+.bts button{flex:1;min-height:44px;font-family:inherit;font-weight:700;font-size:12.5px;letter-spacing:1.5px;cursor:pointer;border:1px solid var(--ln2);background:linear-gradient(180deg,rgba(49,68,94,.3),rgba(49,68,94,.08));color:var(--tx)}
+.bts .bl{border-color:rgba(61,220,132,.55);color:var(--up);background:linear-gradient(180deg,rgba(61,220,132,.14),rgba(61,220,132,.03))}
+.bts .bs{border-color:rgba(255,82,82,.55);color:var(--dn);background:linear-gradient(180deg,rgba(255,82,82,.12),rgba(255,82,82,.03))}
+.bts .bc{color:var(--wn);border-color:rgba(255,183,77,.45)}
+.bts button:active{transform:translateY(1px)}
+/* 持仓 */
+.pos{padding:6px 12px 10px}
+.pos .r{display:flex;justify-content:space-between;font-size:10.5px;padding:6px 0;border-bottom:1px solid rgba(35,50,70,.5);font-variant-numeric:tabular-nums}
+.pos .r:last-child{border:0}
+/* 响应式：PAD */
+@media(max-width:1080px){.grid{grid-template-columns:1fr}.side{flex-direction:row;overflow-x:auto;padding-bottom:4px}.side .f{min-width:150px;flex:1}.subs{grid-template-columns:1fr 1fr}.bot{grid-template-columns:1fr}}
+/* 响应式：手机 */
+@media(max-width:640px){
+  .top{gap:6px;padding:7px 9px}.brand b{font-size:12px}.px{font-size:16px}
+  .cvbox{height:320px}
+  .sig{left:6px;width:calc(100% - 12px);max-width:250px}
+  .subs{grid-template-columns:1fr 1fr}
+  .subs .pnl:nth-child(3){display:none}
+  .bts button{min-height:48px}
+  .meta{display:none}
+  /* 拇指条 */
+  .thumb{position:fixed;bottom:0;left:0;right:0;display:flex;gap:6px;padding:7px 8px calc(7px + env(safe-area-inset-bottom));background:rgba(10,14,20,.96);border-top:1px solid var(--ln2);z-index:9}
+  .thumb button{flex:1;min-height:46px;font-family:inherit;font-weight:800;font-size:13px;letter-spacing:1px;border:1px solid var(--ln2);color:var(--tx);background:var(--pn2)}
+  .thumb .bl{color:var(--up);border-color:rgba(61,220,132,.5)}.thumb .bs{color:var(--dn);border-color:rgba(255,82,82,.5)}
+  .app{padding-bottom:74px}
+}
+@media(min-width:641px){.thumb{display:none}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="pnl top">
+    <div class="brand"><div class="mark"></div><b>SRSI<i>_TERMINAL</i></b></div>
+    <span style="font-size:17px;font-weight:700;color:var(--up);font-variant-numeric:tabular-nums" id="px">61,284.5</span><span class="pu" style="font-size:10px;color:var(--up)">+2.14%</span>
+    <span class="tab on">BTCUSDT</span>
+    <span class="tab">5m</span><span class="tab on">15m</span><span class="tab">1h</span><span class="tab">4h</span>
+    <span class="sp"></span>
+    <span class="tab on">α信号</span><span class="tab on">实盘信号</span><span class="tab" style="color:var(--up);border-color:rgba(61,220,132,.4)">盯盘</span>
+    <span class="tab">🧭交易面板</span>
+    <span class="meta">TERM-07 // LINK:OK // v2.1</span>
+  </div>
+
+  <div class="grid">
+    <div class="pnl chartwrap">
+      <div class="hd"><span class="riv"></span>MAIN // 15m · 300 BARS · SRSI R14/S9 <span class="r lamp"></span><span class="no">FEED LIVE</span></div>
+      <div class="cvbox"><canvas id="cv"></canvas></div>
+      <div class="sig">
+        <div class="row"><span class="sym">BTCUSDT · 15m SRSI</span><span class="st">ACTIVE</span></div>
+        <div class="act">做多 ▲</div>
+        <div class="tim">时机 优 // TIMING-A</div>
+        <div class="rsn">Alpha多头·15m超卖回升=顺势回调买点</div>
+        <div class="sl"><div><i>STOP -1.5ATR</i>60,400</div><div><i>TARGET +3ATR</i>63,200</div></div>
+        <div class="meter"></div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="pnl f"><div class="t">权益 // 365d<span class="no">BT</span></div><div class="v up">+136.9%</div><div class="s"><span>Sharpe 1.13</span><span>DD 18.1%</span></div><div class="meter"><i style="width:72%"></i></div></div>
+      <div class="pnl f"><div class="t">资金费率<span>双所</span></div><div class="v dn">-0.012%</div><div class="s"><span class="wn">更新 4s</span></div><div class="meter"><i style="width:44%;background:var(--wn)"></i></div></div>
+      <div class="pnl f"><div class="t">持仓量 OI<span>双所</span></div><div class="v">$18.42B</div><div class="s"><span class="up">+0.8% 流入</span></div><div class="meter"><i style="width:63%"></i></div></div>
+      <div class="pnl f"><div class="t">多空比<span>账户</span></div><div class="v" style="color:var(--ic)">53.4/46.6</div><div class="s"><span>Taker 1.08</span></div><div class="meter"><i style="width:53%"></i></div></div>
+      <div class="pnl f"><div class="t">恐惧贪婪</div><div class="v wn">71 贪婪</div><div class="meter"><i style="width:71%;background:var(--wn)"></i></div></div>
+      <div class="pnl f"><div class="t">AI 战绩<span>paper</span></div><div class="v aic">62%</div><div class="s"><span>+148.2 / 87笔</span></div><div class="meter"><i style="width:62%;background:var(--ai)"></i></div></div>
+    </div>
+  </div>
+
+  <div class="subs">
+    <div class="pnl"><div class="hd"><span class="riv"></span>SRSI // 15m</div><div class="sc"><canvas id="s1"></canvas></div><div class="subnote">K <b>23.4</b> D <b>31.2</b> · 金钩<b class="up">✓</b> · 超卖回升</div></div>
+    <div class="pnl"><div class="hd"><span class="riv"></span>MACD // 15m</div><div class="sc"><canvas id="s2"></canvas></div><div class="subnote">DIF <b>-12.1</b> DEA <b>-18.7</b> · 柱收敛↑</div></div>
+    <div class="pnl"><div class="hd"><span class="riv"></span>RSI // 15m</div><div class="sc"><canvas id="s3"></canvas></div><div class="subnote">RSI <b>38.6</b> · 离超卖区</div></div>
+  </div>
+
+  <div class="bot">
+    <div class="pnl">
+      <div class="hd"><span class="riv"></span>⚡ 快捷合约 // 模拟真实交易<span class="r no">HEDGE MODE</span></div>
+      <div class="lev"><span style="font-size:9px;color:var(--tx3);letter-spacing:1px">杠杆</span><input type="range" min="1" max="30" value="10"><b>10x</b></div>
+      <div class="pool">
+        <div><i>现货 USDT 池</i><b>$2,840.22</b></div>
+        <div><i>永续 U 本位</i><b>$1,190.50</b></div>
+        <div><i>BTC 库存</i><b>0.0185</b></div>
+      </div>
+      <div class="bts"><button class="bl">▲ 币本位 开多</button><button class="bc">平仓</button><button class="bs">▼ U本位 开空</button></div>
+    </div>
+    <div class="pnl">
+      <div class="hd"><span class="riv"></span>◈ 持仓 // 2 <span class="r" style="color:var(--ic)">订单管理 →</span></div>
+      <div class="pos">
+        <div class="r"><span>BTC 多 10x</span><span>@60,120</span><span class="up">+$194.2</span></div>
+        <div class="r"><span>ETH 空 5x</span><span>@3,412</span><span class="dn">-$12.8</span></div>
+        <div class="r"><span style="color:var(--tx3)">AI 3/20 · 预设 标准 · 卫星入场券 ✓</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="thumb"><button class="bl">▲ 开多</button><button>平仓</button><button class="bs">▼ 开空</button></div>
+</div>
+<script>
+function candles(cv,n,base,vol){const ctx=cv.getContext('2d');const dpr=devicePixelRatio||1;const W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.scale(dpr,dpr);
+let p=base;const data=[];for(let i=0;i<n;i++){const o=p;p*=1+(Math.random()-.47)*vol;data.push([o,p,Math.min(o,p)*(1+Math.random()*vol*.5),Math.max(o,p)*(1-Math.random()*vol*.5)])}
+const lo=Math.min(...data.map(d=>d[3])),hi=Math.max(...data.map(d=>d[2]));const Y=v=>H-24-(v-lo)/(hi-lo)*(H-36);const X=i=>6+i/(n-1)*(W-24);const cw=(W-30)/n*.6;
+ctx.strokeStyle='rgba(35,50,70,.55)';for(let y=16;y<H-14;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+data.forEach(([o,c,h,l],i)=>{const up=c>=o,x=X(i);ctx.strokeStyle=up?'rgba(61,220,132,.8)':'rgba(255,82,82,.8)';ctx.fillStyle=up?'rgba(61,220,132,.24)':'rgba(255,82,82,.22)';
+ctx.beginPath();ctx.moveTo(x,Y(h));ctx.lineTo(x,Y(l));ctx.stroke();ctx.fillRect(x-cw/2,Y(Math.max(o,c)),cw,Math.max(1.5,Y(Math.min(o,c))-Y(Math.max(o,c))))});
+ctx.beginPath();ctx.strokeStyle='rgba(79,195,247,.7)';ctx.lineWidth=1.3;let e=data[0][1];data.forEach(([o,c],i)=>{e=e*.94+c*.06;i?ctx.lineTo(X(i),Y(e)):ctx.moveTo(X(i),Y(e))});ctx.stroke();ctx.lineWidth=1;
+[Math.floor(n*.32),Math.floor(n*.66)].forEach(i=>{const x=X(i),y=Y(data[i][3])+13;ctx.fillStyle='#4fc3f7';ctx.shadowColor='#4fc3f7';ctx.shadowBlur=8;ctx.beginPath();ctx.moveTo(x,y-5);ctx.lineTo(x+5,y);ctx.lineTo(x,y+5);ctx.lineTo(x-5,y);ctx.closePath();ctx.fill();ctx.shadowBlur=0});
+const lx=X(n-1),ly=Y(data[n-1][1]);ctx.setLineDash([3,4]);ctx.strokeStyle='rgba(79,195,247,.3)';ctx.beginPath();ctx.moveTo(0,ly);ctx.lineTo(W,ly);ctx.stroke();ctx.setLineDash([]);
+ctx.fillStyle='#3ddc84';ctx.shadowColor='#3ddc84';ctx.shadowBlur=9;ctx.beginPath();ctx.arc(lx,ly,2.6,0,7);ctx.fill();ctx.shadowBlur=0;}
+function sub(cv,col,seed){const ctx=cv.getContext('2d');const dpr=devicePixelRatio||1;const W=cv.clientWidth,H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;ctx.scale(dpr,dpr);
+ctx.strokeStyle=col+'66';ctx.beginPath();let v=.5;for(let i=0;i<70;i++){v=Math.min(.9,Math.max(.1,v+(Math.sin(i*seed)+Math.random()-.5)*.09));i?ctx.lineTo(i/69*W,H-v*H):ctx.moveTo(0,H-v*H)}ctx.stroke();
+ctx.strokeStyle='rgba(35,50,70,.7)';ctx.beginPath();ctx.moveTo(0,H*.2);ctx.lineTo(W,H*.2);ctx.moveTo(0,H*.8);ctx.lineTo(W,H*.8);ctx.stroke()}
+window.addEventListener('resize',()=>location.reload());
+setTimeout(()=>{candles(document.getElementById('cv'),90,60000,.012);sub(document.getElementById('s1'),'#4fc3f7',.35);sub(document.getElementById('s2'),'#ffb74d',.5);sub(document.getElementById('s3'),'#8b9bb4',.42)},50);
+setInterval(()=>{const el=document.getElementById('px');if(el)el.textContent=(61000+Math.random()*500).toLocaleString('en-US',{minimumFractionDigits:1})},1100);
+</script>
+</body>
+</html>
