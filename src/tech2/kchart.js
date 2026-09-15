@@ -6,6 +6,7 @@
 import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState } from '../engine/indicators.js';
 import { optimizeSrsi, srsiNeighborhoodGrid, srsiParamGrid, optimizeSrsiBand, optimizeGateBand, rollingGateOos, bandNeighborTPos, MANUAL_SWING_PARAMS, manualSwingParams, DEFAULT_SRSI_BAND, GATE_PARAMS_GRID } from '../engine/srsiOptimizer.js';
 import { fetchKlinesRange, fetchFundingRate } from '../pwa/data.js';
+import { runBacktest as alphaRunBacktest } from '../pwa/alphaCore.js';
 export { fetchKlinesRange, fetchFundingRate };
 import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -281,6 +282,8 @@ export function defaultKConfig() {
     subOrder: ['rsi', 'srsi', 'macd'],   // 子图顺序（拖拽换序）
     // ---- SRSI 自动交易 ----
     srsiAutoOn: false,          // SRSI 自动交易总开关
+    tradePanelOpen: false,      // GOAL13：交易面板展开状态（记忆）
+    sigOverlay: true,           // GOAL13：主图实盘信号层（Alpha/SRSI 信号映射，总开关）
     btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
     srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
     srsiAutoMode: 'follow',     // 本位：follow=跟随快捷交易(开空U本位/开多币本位) / usdt / coin
@@ -403,6 +406,8 @@ function normalizeCfg(c) {
   if (typeof c.srsiAutoOn !== 'boolean') c.srsiAutoOn = false;
   if (typeof c.srsiAutoApplyBt !== 'boolean') c.srsiAutoApplyBt = false;
   if (!['alpha', 'srsi', 'combo'].includes(c.btStrategy)) c.btStrategy = 'alpha';
+  if (typeof c.tradePanelOpen !== 'boolean') c.tradePanelOpen = false; // GOAL13：交易面板默认收缩
+  if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
   if (!['follow', 'usdt', 'coin'].includes(c.srsiAutoMode)) c.srsiAutoMode = 'follow';
   if (c.srsiAutoUpper !== 0 && (typeof c.srsiAutoUpper !== 'number' || !(c.srsiAutoUpper >= 50 && c.srsiAutoUpper <= 100))) c.srsiAutoUpper = 90;
   if (c.srsiAutoLower !== 0 && (typeof c.srsiAutoLower !== 'number' || !(c.srsiAutoLower >= 0 && c.srsiAutoLower <= 50))) c.srsiAutoLower = 10;
@@ -711,6 +716,8 @@ function renderControls() {
   if (ovWrap) ovWrap.classList.toggle('closed', !cfg.overviewOpen);
   const discWrap = document.getElementById('kchartDiscWrap');
   if (discWrap) discWrap.classList.toggle('closed', !cfg.discOpen);
+  const tpWrap = document.getElementById('ktPanelWrap');
+  if (tpWrap) tpWrap.classList.toggle('closed', !cfg.tradePanelOpen);
 
   const bars = document.getElementById('kchartBars');
   if (bars) bars.value = cfg.bars;
@@ -814,12 +821,14 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span>`;
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
   const ac = el.querySelector('#alphaChip');
   if (ac) ac.addEventListener('click', () => setAlphaSignal(!cfg.alphaSignalOn));
+  const sc = el.querySelector('#sigOverlayChip');
+  if (sc) sc.addEventListener('click', () => setSigOverlay(!cfg.sigOverlay));
 }
 
 // ---- 多周期 SRSI 速览表渲染（DOM，与 canvas 无关）----
@@ -3302,10 +3311,17 @@ function drawMain(ctx, sym, tf, H) {
     }
   }
 
-  // GOAL9：实时交易信号标记（应用回测参数勾选时）——SRSI 自动交易开/平 + alphaLive 调仓，与实盘一一对应
-  if (cfg.srsiAutoApplyBt && typeof window !== 'undefined') {
+  // GOAL13：主图实盘信号层（总开关 cfg.sigOverlay，叠加栏「实盘信号」chip）——策略勾选即映射：
+  //   SRSI自动开启 → SRSI 信号（▲绿开多/▼红开空 + 灰点平仓）
+  //   Alpha基石实盘(live) → Alpha 信号（◆青多/◆橙空 实心菱形 + 空心菱形平仓）
+  //   应用回测参数 → 组合角标文字
+  // 数据源 = 真实成交动作（placeOrder/exitPosition/alphaLive 调仓），信号与交易一一对应
+  const _alphaLiveOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
+  const _showSrsi = cfg.sigOverlay && cfg.srsiAutoOn;   // 勾 SRSI 自动 → 显示 SRSI 信号
+  const _showAlpha = cfg.sigOverlay && _alphaLiveOn;    // 勾 Alpha 基石实盘 → 显示 Alpha 信号
+  if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
     ctx.save();
-    const LT = window.__srsiLiveTrades || [];
+    const LT = (_showSrsi || cfg.srsiAutoApplyBt) ? (window.__srsiLiveTrades || []) : [];
     let lp = 0;
     const tEnd = t[t.length - 1] || 0;
     for (const tr of LT) {
@@ -3316,26 +3332,41 @@ function drawMain(ctx, sym, tf, H) {
       if (idx < start) idx = start;
       const x = X(Math.min(idx, start + n - 1)), y = Y(c[Math.min(idx, c.length - 1)] || c[c.length - 1]);
       if (tr.action === 'open') {
+        // ▲绿开多 / ▼红开空（实心三角）
         ctx.fillStyle = tr.side === 'long' ? '#2ecc71' : '#ff6b6b';
-        ctx.fillRect(x - 4, tr.side === 'long' ? y + 16 : y - 22, 8, 6);
+        ctx.beginPath();
+        if (tr.side === 'long') { ctx.moveTo(x, y + 22); ctx.lineTo(x - 5, y + 31); ctx.lineTo(x + 5, y + 31); }
+        else { ctx.moveTo(x, y - 22); ctx.lineTo(x - 5, y - 31); ctx.lineTo(x + 5, y - 31); }
+        ctx.closePath(); ctx.fill();
       } else {
         ctx.fillStyle = '#8899aa';
         ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
       }
       lp++;
     }
-    const AM = window.__alphaLiveMarks || [];
+    const AM = _showAlpha ? (window.__alphaLiveMarks || []) : [];
+    let ap = 0;
     for (const m3 of AM) {
       if (!m3 || !Number.isFinite(m3.t) || m3.t < t[0]) continue;
-      const x = X(start + n - 1), y = Y(c[c.length - 1] || 0);
-      ctx.fillStyle = m3.dir > 0 ? 'rgba(46,204,113,.8)' : m3.dir < 0 ? 'rgba(255,107,107,.8)' : '#8899aa';
-      ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 8, y - 4); ctx.lineTo(x + 8, y + 4); ctx.closePath(); ctx.fill();
-      break;
+      let ai = t.length - 1;
+      for (let m4 = t.length - 1; m4 >= start; m4--) { if (t[m4] <= m3.t) { ai = m4; break; } }
+      if (ai < start) ai = start;
+      const x = X(Math.min(ai, start + n - 1)), y = Y(c[Math.min(ai, c.length - 1)] || c[c.length - 1]);
+      const dy = y - 36, dx = 6;
+      if (m3.action === 'close' || m3.dir === 0) {
+        ctx.strokeStyle = '#8899aa'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, dy - dx); ctx.lineTo(x + dx, dy); ctx.lineTo(x, dy + dx); ctx.lineTo(x - dx, dy); ctx.closePath(); ctx.stroke();
+        ctx.lineWidth = 1;
+      } else {
+        ctx.fillStyle = m3.dir > 0 ? '#22d3ee' : '#f59e0b';
+        ctx.beginPath(); ctx.moveTo(x, dy - dx); ctx.lineTo(x + dx, dy); ctx.lineTo(x, dy + dx); ctx.lineTo(x - dx, dy); ctx.closePath(); ctx.fill();
+      }
+      ap++;
     }
-    if (lp || AM.length) {
+    if (lp || ap || _alphaLiveOn) {
       ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#2ecc71'; ctx.textAlign = 'right';
       const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
-      ctx.fillText('组合实盘 ON · α' + (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '% · SRSI信号' + lp, W - PAD_R - 4, PAD_T + 40);
+      ctx.fillText('组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp, W - PAD_R - 4, PAD_T + 40);
       ctx.textAlign = 'left';
     }
     ctx.restore();
@@ -4007,6 +4038,15 @@ function setKOverview(on) { cfg.overviewOpen = !!on; persist(); const wrap = doc
 function toggleOverview() { setKOverview(!cfg.overviewOpen); }
 function setKDisc(on) { cfg.discOpen = !!on; persist(); const wrap = document.getElementById('kchartDiscWrap'); if (wrap) wrap.classList.toggle('closed', !cfg.discOpen); renderKChart(); }
 function toggleKDisc() { setKDisc(!cfg.discOpen); }
+// GOAL13：交易面板折叠（默认收缩，cfg 记忆）
+function setTradePanelOpen(on) {
+  cfg.tradePanelOpen = !!on; persist();
+  const wrap = typeof document !== 'undefined' ? document.getElementById('ktPanelWrap') : null;
+  if (wrap) wrap.classList.toggle('closed', !cfg.tradePanelOpen);
+}
+function kToggleTradePanel() { setTradePanelOpen(!cfg.tradePanelOpen); }
+// GOAL13：主图实盘信号层总开关
+function setSigOverlay(on) { cfg.sigOverlay = !!on; persist(); renderKChart(); renderMainTools(); }
 function setBars(v) { cfg.bars = Math.max(60, Math.min(300, parseInt(v) || 150)); persist(); renderKChart(); const lbl = document.getElementById('kchartBarsLbl'); if (lbl) lbl.textContent = cfg.bars; }
 function setShow(key, on) {
   if (!(key in cfg.show)) return;
@@ -4571,6 +4611,8 @@ export const kchartApi = {
   toggleOverview,
   setKDisc,
   toggleKDisc,
+  kToggleTradePanel,
+  setSigOverlay,
   setDiscEvidence: (v) => { cfg.discEvidenceOpen = !!v; persist(); },
   setBars,
   setShow,
@@ -4687,6 +4729,11 @@ export function setSrsiAutoOn(on) {
   if (abEl) abEl.checked = !!cfg.srsiAutoApplyBt;
   const alEl = bar.querySelector('#ktAlphaLive');
   if (alEl) alEl.checked = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
+  const stEl = document.getElementById('ktPanelState');
+  if (stEl) {
+    const sOn = cfg.srsiAutoOn, aOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
+    stEl.innerHTML = (aOn ? '<span style="color:#22d3ee">●Alpha实盘</span> ' : '') + (sOn ? '<span style="color:#2ecc71">●SRSI自动</span>' : '') + (!sOn && !aOn ? '<span style="opacity:.6">未启用策略</span>' : '');
+  }
   }
 }
 // GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）
@@ -5145,7 +5192,7 @@ function renderQuickTrade() {
   _btChk('ktBtOpt1h', _btCfg.optTfs.indexOf('1h') >= 0);
   _btChk('ktBtOpt4h', _btCfg.optTfs.indexOf('4h') >= 0);
   _btChk('ktBtOptOn', _btCfg.optEnabled);
-  b.querySelectorAll('input[name=ktBtStrat]').forEach(r => { r.checked = r.value === (_btCfg.btStrategy || 'alpha'); });
+  bar.querySelectorAll('input[name=ktBtStrat]').forEach(r => { r.checked = r.value === (_btCfg.btStrategy || 'alpha'); });
   _btChk('ktBtMarks', !!_btCfg.btMarks);
   _btChk('ktBtOptIntOn', _btCfg.optIntervalOn);
   _btVal('ktBtOptInt', _btCfg.optIntervalH);
@@ -6843,7 +6890,7 @@ export async function runAlphaBacktest(days, opts) {
     const r1h = toRows(k1h), r1d = toRows(k1d);
     const h1 = { t: r1h.map(k => k[0]), o: r1h.map(k => k[1]), c: r1h.map(k => k[4]) };
     const d1 = { t: r1d.map(k => k[0]), c: r1d.map(k => k[4]) };
-    const r = runBacktest(h1, d1, { start: start2, end: endMs, band: 0.05, volTarget: 0.3, vtCap: 1.5, levCap: 3, funding: [], useFunding: false });
+    const r = alphaRunBacktest(h1, d1, { start: start2, end: endMs, band: 0.05, volTarget: 0.3, vtCap: 1.5, levCap: 3, funding: [], useFunding: false });
     if (r.error) { if (el) el.innerHTML = '<div class="kt-auto-row kt-auto-warn">Alpha 回测失败: ' + r.error + '</div>'; return null; }
     const ann = ((Math.pow(r.final, 365 / Math.max(1, r.nBars / 24)) - 1) * 100);
     _btAlphaText = '## 三、基石策略 Alpha 回测（参数固化 GOAL2-4 定版，历史回测非预测）\n- 窗口: ' + days + 'd (' + new Date(start2).toISOString().slice(0, 10) + ' → ' + new Date(endMs).toISOString().slice(0, 10) + ')\n- 期末权益: ' + (r.final * 100).toFixed(1) + '%（本金 100%）\n- 年化(CAGR): ' + ann.toFixed(1) + '%\n- Sharpe(日): ' + (r.sharpe || 0).toFixed(2) + '\n- maxDD: ' + (r.maxDD || 0).toFixed(1) + '%\n- 调仓次数: ' + r.trades.length + '\n- 费用: ' + (r.fees * 100).toFixed(2) + '%\n- 参数: vt30% / levCap3 / band5% / combo权重 carry0.5+momo0.2+brk0.3（固化，不优选）\n';

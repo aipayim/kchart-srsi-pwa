@@ -117,7 +117,10 @@
     <div class="kchart-ovhead" onclick="this.parentElement.classList.toggle('closed');window.__alphaLabHead&&window.__alphaLabHead()">🧪 Alpha 实验室（回测 + Paper 模拟实盘 · 点击展开/收起）<span class="kchart-ovarrow" style="transition:transform .15s">▾</span></div>
     <div id="alphaLab" class="alpha-lab"></div>
   </div>
-  <div class="kchart-tradebar" id="kchartTradeBar"></div>
+  <div class="kchart-discwrap closed" id="ktPanelWrap">
+    <div class="kchart-ovhead" onclick="window.kToggleTradePanel()">🧭 交易面板（手动下单 · 策略实盘 · 回测 · 点击展开/收起）<span id="ktPanelState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
+    <div class="kchart-tradebar" id="kchartTradeBar"></div>
+  </div>
   <div class="kchart-maintools" id="kchartMainTools"></div>
   <div class="kchart-box">
     <canvas id="kchartCanvas"></canvas>
