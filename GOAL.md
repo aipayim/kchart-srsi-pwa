@@ -41,4 +41,13 @@
 ## 子任务
 - [x] A. 组合角标 textAlign 残留 right → 文字以右对齐锚点画在左缘=向左延伸出画布；改 left+textBaseline alphabetic
 - [x] B. SRSI 0-100 副轴刻度 y 钳制 [PAD_T+6, PAD_T+MAIN_H-6]——顶部 100/底部 0 完整显示
-- [ ] C. test → 1.5.37 → deploy → 验证 → 汇报
+- [x] C. test → 1.5.37 → deploy → 验证 → 汇报
+- 线上 e2e（1.5.37）：状态带左缘越界像素 0 ✓；双仓全绿；脱敏版 941f345 已 push
+
+# GOAL23 — α 角标刷新后不显示修复
+
+> 反馈：主图「α空7%·54s前」刷新后不显示，需重点击「α信号」——排查：chip/cfg 已持久恢复（GOAL21 ✓），真因=**刷新后 alphaSignalProvider 不自动运行，A 数据为空 → GOAL6 绘制块无数据跳过**（非持久化问题）。
+
+## 子任务
+- [x] A. loadCfg 800ms 快照固化块内追加：cfg.alphaSignalOn=true 时自动后台跑 __alphaSignalProvider，完成后 renderKChart 补帧（切币场景同样覆盖）
+- [ ] B. test → 1.5.38 → deploy → 验证 → 汇报

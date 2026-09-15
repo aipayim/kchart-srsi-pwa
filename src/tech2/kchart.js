@@ -605,6 +605,13 @@ export function loadCfg(symOverride) {
   // GOAL21：启动快照固化——浏览器环境下 800ms 后把恢复态重新落盘，防止启动早期其它实例/组件的陈旧写入覆盖用户勾选
   if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.requestAnimationFrame) {
     setTimeout(() => { try { persist(); } catch (e) {} }, 800);
+    try {
+      // GOAL23：α 信号开启时自动重算 provider——刷新后 A 数据为空=主图「α空7%·54s前」角标不显示（chip 状态其实已恢复）
+      if (cfg.alphaSignalOn && typeof window.__alphaSignalProvider === 'function') {
+        const pr = window.__alphaSignalProvider();
+        if (pr && pr.then) pr.then(() => { try { renderKChart(); } catch (e) {} }).catch(() => {});
+      }
+    } catch (e) {}
   }
 
 }
