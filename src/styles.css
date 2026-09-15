@@ -514,7 +514,7 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-hint{font-size:8px;color:var(--text2);margin-bottom:6px}
 .kchart-fresh{font-size:9px;color:var(--text2);margin-left:auto}
 .kchart-box{position:relative;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px}
-#kchartCanvas{display:block;border-radius:4px;cursor:crosshair;width:100%;height:auto}
+#kchartCanvas{display:block;border-radius:4px;cursor:crosshair;width:100%;height:auto;touch-action:none}
 .kchart-subtog{display:flex;align-items:center;gap:4px}
 .kchart-tog{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 6px;border:1px solid var(--border);border-radius:4px}
 .kchart-tog input{display:none}

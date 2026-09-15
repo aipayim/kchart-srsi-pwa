@@ -3,7 +3,7 @@
 //   - 顶部：交易对 + K线周期多选（决定 SRSI 多子图）+ 主图周期单选 + 根线数 + 子图顺序 + SRSI 参数
 //   - 主图：真 OHLC 蜡烛（数据取自 S.klinesO/H/L 与 S.klines（close））
 //   - 子图：RSI / SRSI / MACD（顺序可拖拽），SRSI 对每个勾选 K 线周期渲染短→长堆叠
-import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState } from '../engine/indicators.js';
+import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState, barsFromPinch, insufficientMsg } from '../engine/indicators.js';
 import { optimizeSrsi, srsiNeighborhoodGrid, srsiParamGrid, optimizeSrsiBand, optimizeGateBand, rollingGateOos, bandNeighborTPos, MANUAL_SWING_PARAMS, manualSwingParams, DEFAULT_SRSI_BAND, GATE_PARAMS_GRID } from '../engine/srsiOptimizer.js';
 import { fetchKlinesRange, fetchFundingRate } from '../pwa/data.js';
 import { runBacktest as alphaRunBacktest } from '../pwa/alphaCore.js';
@@ -339,6 +339,7 @@ export let cfg = defaultKConfig();
 // ---- 内部状态 ----
 let _cv = null, _ctx = null;
 let _hover = null;
+let _hoverLock = false;       // GOAL25：长按锁定十字线（再次点按解锁，不清除）
 let _resizeObs = null;
 let _drag = null;            // 子图拖拽 {startY, curY, moved, fromIdx}
 let _suppressClick = false;
@@ -3590,7 +3591,7 @@ function drawSubTitle(ctx, text, color, y0) {
 export function srsiPanelSeries(price, cfg, bars) {
   const p = Array.isArray(price) ? price : [];
   const n = Math.min(bars, p.length);
-  if (!(n >= 2)) return { k: [], d: [], crossings: [] };
+  if (!(n >= 2)) return { k: [], d: [], crossings: [], hooks: [] };  // GOAL25：补 hooks，防空结构下 sl.hooks[-1] 崩
   const sl = srsiKD(p, cfg);
   const cross = srsiCrossings(sl.k, cfg);
   const hooks = srsiHooks(sl.k, sl.d, cfg);
@@ -3805,9 +3806,17 @@ function drawHover(ctx, subList, H) {
     ctx.fillText(fmt(c[i]), PAD_L + plotW - 60, yc + 1);
   }
 
-  // ---- 顶部联动汇总栏（任意位置都显示：主图 + 全部子图 在 hovered x 的读数）----
+  // ---- 顶部联动汇总栏（任意位置都显示：主图 + 全部子图 在 hovered x 的读数；GOAL25 锁定时加🔒）----
   const m = i >= 0 ? mainHoverAt(frac, sym, tf, bars) : null;
   drawLinkBar(ctx, subList, m, tf, frac, mainBottom);
+  if (_hoverLock) {
+    ctx.save();
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = '#ffd740';
+    ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+    ctx.fillText('🔒 锁定·点按解锁', W - PAD_R - 4, PAD_T + 4);
+    ctx.restore();
+  }
 
   // ---- 命中面板：跟随式浮动详情框 ----
   const hit = panelFromLy(ly, _subRegions, mainBottom);
@@ -3957,13 +3966,60 @@ export function initKChart() {
       const H = _cv.__logicalH || BASE_H;
       return { lx: (e.clientX - rect.left) * (W / rect.width), ly: (e.clientY - rect.top) * (H / rect.height) };
     };
-    // GOAL18-A：触屏取值（touch→hover 同路径；复用 mainHoverAt/subHoverAt 绘制；点按显示、移动更新、松手保持 2s 后清除）
+    // GOAL18-A/GOAL25：触屏取值（touch→hover 同路径；复用 mainHoverAt/subHoverAt 绘制）
+    // GOAL25 新增：单指长按 500ms 锁定十字线（再次点按解锁）；双指捏合缩放可视根数 cfg.bars（60-300）
     const _touchClear = () => { if (_touchT) { clearTimeout(_touchT); _touchT = null; } };
     let _touchT = null;
+    let _longT = null;                        // 长按锁定定时器
+    let _pinch = null;                        // 双指缩放状态 {d0, bars0}
     const touchLocal = (e) => { const t = e.touches[0] || e.changedTouches[0]; return t ? { x: t.clientX, y: t.clientY, lx: t.clientX - _cv.getBoundingClientRect().left, ly: t.clientY - _cv.getBoundingClientRect().top } : null; };
-    _cv.addEventListener('touchstart', (e) => { const p = touchLocal(e); if (!p) return; _hover = p; renderKChart(); e.preventDefault(); }, { passive: false });
-    _cv.addEventListener('touchmove', (e) => { const p = touchLocal(e); if (!p) return; _hover = p; renderKChart(); e.preventDefault(); }, { passive: false });
-    _cv.addEventListener('touchend', () => { _touchClear(); _touchT = setTimeout(() => { _hover = null; renderKChart(); }, 2000); }, { passive: true });
+    const touchDist = (e) => { const a = e.touches, t0 = a[0], t1 = a[1]; return (t0 && t1) ? Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY) : 0; };
+    const pinchApply = (e) => {               // 双指：距离比→可视根数
+      if (!_pinch) return;
+      const nb = barsFromPinch(_pinch.bars0, _pinch.d0, touchDist(e));
+      if (nb !== cfg.bars) {
+        cfg.bars = nb;
+        const bEl = document.getElementById('kchartBars'), bLbl = document.getElementById('kchartBarsLbl');
+        if (bEl) bEl.value = nb;
+        if (bLbl) bLbl.textContent = nb;
+        renderKChart();
+      }
+    };
+    _cv.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      if (e.touches.length >= 2) {            // 双指=缩放（取消长按与锁定）
+        if (_longT) { clearTimeout(_longT); _longT = null; }
+        _hoverLock = false;
+        _pinch = { d0: touchDist(e), bars0: cfg.bars };
+        _hover = null; renderKChart();
+        return;
+      }
+      const p = touchLocal(e); if (!p) return;
+      _hoverLock = false;                     // 再次点按=解锁（并作为新取值点）
+      _hover = p; renderKChart();
+      if (_longT) clearTimeout(_longT);
+      _longT = setTimeout(() => { _hoverLock = true; renderKChart(); }, 500);
+    }, { passive: false });
+    _cv.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (_pinch && e.touches.length >= 2) { pinchApply(e); return; }
+      const p = touchLocal(e); if (!p) return;
+      if (_hover) {
+        const dx = Math.abs(p.lx - _hover.lx), dy = Math.abs(p.ly - _hover.ly);
+        if (dx > 8 || dy > 8) { if (_longT) { clearTimeout(_longT); _longT = null; } }  // 移动取消长按
+      }
+      _hover = p; renderKChart();
+    }, { passive: false });
+    _cv.addEventListener('touchend', (e) => {
+      if (_longT) { clearTimeout(_longT); _longT = null; }
+      if (e.touches.length === 0 && _pinch) { _pinch = null; persist(); }   // 缩放结束一次性落盘
+      _touchClear();
+      if (!_hoverLock) _touchT = setTimeout(() => { _hover = null; renderKChart(); }, 2000);  // 锁定时不自动清除
+    }, { passive: true });
+    // iOS 页面级双指缩放手势拦截（canvas 上双指只用于图表缩放）
+    const _gest = (e) => e.preventDefault();
+    _cv.addEventListener('gesturestart', _gest);
+    _cv.addEventListener('gesturechange', _gest);
     _cv.addEventListener('mousemove', (e) => {
       _hover = toLocal(e);
       // 区分拖动与点击：mousedown 后位移过大视为拖动（点击监听据此忽略）
@@ -4014,7 +4070,7 @@ export function initKChart() {
     };
     _cv.addEventListener('mouseup', endDrag);
     window.addEventListener('mouseup', endDrag);
-    _cv.addEventListener('mouseleave', () => { _hover = null; _press = null; _pressMoved = false; renderKChart(); });
+    _cv.addEventListener('mouseleave', () => { _hover = null; _hoverLock = false; _press = null; _pressMoved = false; renderKChart(); });
     // SRSI 周期切换已迁出 HTML chip 栏（#kchartOvQuick），画布内不再处理点击命中
   }
   renderKChart();
@@ -4721,11 +4777,13 @@ export function subHoverAt(frac, sym, tf, key, bars) {
   }
   if (key === 'srsi') {
     const price = nativeMain(sym, tf).c;
-    const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars);
+    const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars) || { k: [], d: [], crossings: [], hooks: [] };
     // srsiPanelSeries 把数组切到最后 bars 根(局部索引 0..n-1)，需把绝对索引 i 换算成局部索引
     const off = Math.max(0, price.length - Math.min(bars, price.length));
     const li = i - off;
-    return { i, k: sl.k[li] != null ? sl.k[li] : null, d: sl.d[li] != null ? sl.d[li] : null, cross: sl.crossings[li] || null, hook: sl.hooks[li] || null };
+    // GOAL25：li<0（数据不足 warmup）一律 null，防空数组/缺失字段下负索引崩（触屏取值首次暴露）
+    const safe = (arr) => (li >= 0 && Array.isArray(arr) && li < arr.length) ? arr[li] : null;
+    return { i, k: safe(sl.k), d: safe(sl.d), cross: safe(sl.crossings) || null, hook: safe(sl.hooks) || null };
   }
   return { i };
 }
@@ -5439,7 +5497,7 @@ export function kchartTradeOpen(side, forceArm) {
   }
   const available = mm === 'coin' ? ((sub.coins && sub.coins[sym]) || 0) : (sub.bal || 0);
   const amt = _useFixed ? (parseFloat(_fixedAmt) || 0) : available * _sizePct / 100;
-  if (amt <= 0) { if (typeof alert === 'function') alert('可用保证金不足'); return; }
+  if (amt <= 0) { if (typeof alert === 'function') alert(insufficientMsg(mm, sym, mm === 'coin' ? ((sub.coins && sub.coins[sym]) || 0) : available)); return; }
   engine.placeOrder({ symbol: sym, side, lev: _lev, amt, marginMode: mm, reinvest: true, src: 'manual', sub: sub.id });
   renderQuickTrade();
 }

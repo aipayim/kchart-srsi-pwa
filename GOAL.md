@@ -71,3 +71,22 @@
 - 线上 e2e（1.5.39，iPhone 13 仿真 pointer:coarse=true）：thumb 自然创建 ✓、状态行「BTCUSDT 77118 ▲多10x -38.6」实时 ✓、arm 两段确认（确认开多?→下单 amt=0.25 币本位 ✓ / 确认平仓?→pos=0 ✓）、4 按钮（▲开多/平仓/▼开空/☰持仓）✓、body padding-bottom 92px ✓、80px 高 ✓、桌面回归 coarse=false 不创建 ✓、0 pageerror ✓
 - 已知遗留（GOAL26 既有，未动）：①币本位 pos.pnlPct 口径失真（pnl/amt，amt 为币数 → %异常巨大；主系统同）；②PWA 新用户 coins 空 → 拇指条开多（币本位）alert「可用保证金不足」，需先在设置页填币库存
 - 测试：kchart 903（+12 GOAL24 用例：_tradeOn=false 无下单/第一击 arm/第二击执行/参数/超时重 arm/超时后执行/换方向重 arm/空单 U本位/无持仓平仓无操作/平仓 arm/平仓执行）全绿
+
+# GOAL25 — 触屏手势（双指缩放/长按锁定）+ pnlPct 口径修复 + 库存提示（用户反馈驱动）
+
+> 反馈：①手机双指缩放主图/子图无效，屏幕跟着滚动；②处理 GOAL24 遗留（币本位 pnlPct 失真 / 库存 0 alert）+ GOAL17-D ①（点按取值已有、长按锁定缺失）。
+
+## 子任务
+- [x] A. 纯函数（indicators.js + 单测）：positionPnlPct(pos,price)（币本位分母=amt×entry 保证金 USDT 价值/U本位=amt）；barsFromPinch(bars0,d0,d1,min,max)（张开=放大=根数少）；insufficientMsg(mm,sym,held)（库存 0 引导文案）
+- [x] B. kchart.js 手势：双指 pinch → cfg.bars（60-300）+persist+滑块同步；单指长按 500ms 锁定十字线（移动>8px 取消，再次点按解锁）；drawHover 汇总栏🔒；canvas touch-action:none + iOS gesturestart 拦截；kchartTradeOpen 库存 0 细化 alert
+- [x] C. pnlPct 口径：legacy.js 浮盈循环 + kchartApp.js 主循环改 positionPnlPct
+- [x] D. 双仓 test → 1.5.40 → build → deploy → 手机仿真验证 → 脱敏版 → 汇报
+
+## 执行记录（2026-09-15，GOAL25 完成）
+
+- A：indicators.js 三纯函数（positionPnlPct/barsFromPinch/insufficientMsg）+ 16 单测。**踩坑修正**：amt 缺失回退 entry×qty/lev 已直接是 USDT 保证金（币本位=entry×amt、U本位≈amt），勿再乘 entry
+- B：触摸块重写——双指 pinch→cfg.bars（张开=放大=根数少）+滑块同步（persist 放 touchend 一次性落盘）；单指长按 500ms 锁定十字线（移动>8px 取消、再次点按解锁、锁定期间不触发 2s 自动清除）；drawHover 顶部「🔒 锁定·点按解锁」金色提示；canvas touch-action:none + iOS gesturestart/change 拦截；kchartTradeOpen 库存 0 放 insufficientMsg 引导文案
+- **额外捕获线上崩溃（GOAL26 既有）**：合成触摸验证时暴露 `subHoverAt` SRSI 分支 `sl.hooks[-1]` 崩——空数据 tf → idxFromFrac=-1 → li=-1，且 srsiPanelSeries 空结构缺 hooks 字段。修=空结构补 hooks:[] + safe() 负索引/范围防御（kchart 903+3 回归全绿）。教训：**触屏取值路径线上从未被真实触发过，GOAL26 的 hover 修复只测了桌面路径**
+- C：legacy.js 浮盈循环 + kchartApp.js 主循环改调 positionPnlPct（币本位 pnlPct 从 pnl/币数 失真口径 → pnl/amt×entry 保证金收益率）
+- D：测试 indicators 319(+16)/kchart 903(+3)/全套无 FAIL；1.5.40 部署后复验发现崩溃→1.5.41 修复重部署。线上 e2e（iPhone13 仿真+合成 TouchEvent）：touchAction=none ✓、pinch 150→60→192（张开/捏合双向）✓、🔒金色 68px 出现→跨 2.5s 清除期仍在→解锁消失 ✓、0 PAGEERROR ✓
+- 验证方法论：CDP dispatchTouchEvent 与 playwright mobile 仿真不兼容（e.touches 空）→ 用页面内 new TouchEvent+new Touch 合成事件驱动；🔒验证用 getImageData 金色像素采样

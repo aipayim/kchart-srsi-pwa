@@ -4,6 +4,7 @@ import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈
 import { kchartApi, loadTsevWeights, refreshLocalTsev } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
+import { positionPnlPct } from '../engine/indicators.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
@@ -474,8 +475,9 @@ function initPwaTrade() {
     if (S.pos && S.pos.length) S.pos.forEach(pos => {
       const c = (S.prices[pos.sym] || {}).last;
       if (!c) return;
-      pos.pnl = pos.side === 'long' ? (c - pos.entry) * pos.qty : (pos.entry - c) * pos.qty;
-      pos.pnlPct = pos.amt ? (pos.pnl / pos.amt) * 100 : 0;
+      const _r = positionPnlPct(pos, c);   // GOAL25：币本位分母=amt×entry，修复 pnl/币数 失真
+      pos.pnl = _r.pnl;
+      pos.pnlPct = _r.pnlPct;
       if (pos.side === 'long') pos.hi = Math.max(pos.hi || pos.entry, c);
       else pos.lo = Math.min(pos.lo || pos.entry, c);
     });

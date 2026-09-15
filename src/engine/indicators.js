@@ -1225,3 +1225,44 @@ export function sumVol(vols, step) {
   return rv;
 }
 
+
+// ===================== GOAL25：触屏手势 + 仓位口径纯函数 =====================
+
+// positionPnlPct：仓位浮盈 + 保证金收益率口径（GOAL25 遗留①修复）。
+// 口径：pnlPct = pnl / 保证金USDT价值 × 100。
+//   U本位：保证金 = amt（USDT）；币本位：保证金 = amt × entry（amt 为币数，其 USDT 价值随开仓价锁定）。
+//   amt 缺失时回退 amt ≈ entry×qty/lev（对币本位恰等于 entry×amt，口径一致）。
+// 返回 {pnl, pnlPct}；输入无效（pos/price 非有限正数）返回 {pnl:0, pnlPct:0}。
+export function positionPnlPct(pos, price) {
+  if (!pos || !isFinite(price) || price <= 0) return { pnl: 0, pnlPct: 0 };
+  const entry = +pos.entry, qty = +pos.qty, lev = +pos.lev;
+  if (!isFinite(entry) || entry <= 0 || !isFinite(qty) || qty <= 0) return { pnl: 0, pnlPct: 0 };
+  const pnl = pos.side === 'long' ? (price - entry) * qty : (entry - price) * qty;
+  const isCoin = pos.marginMode === 'coin';
+  const hasAmt = isFinite(+pos.amt) && +pos.amt > 0;
+  // 有 amt：币本位保证金USDT价值=amt×entry；U本位=amt。
+  // amt 缺失回退 entry×qty/lev —— 该公式对币本位恰等于 entry×amt、对U本位恰≈amt，即已直接是 USDT 保证金，不再乘 entry。
+  const marginUsdt = hasAmt ? (isCoin ? +pos.amt * entry : +pos.amt) : (isFinite(lev) && lev > 0 ? entry * qty / lev : 0);
+  const pnlPct = (isFinite(marginUsdt) && marginUsdt > 0) ? (pnl / marginUsdt) * 100 : 0;
+  return { pnl, pnlPct: isFinite(pnlPct) ? pnlPct : 0 };
+}
+
+// barsFromPinch：双指捏合 → 可视 K 线根数（GOAL25）。
+// 语义：两指张开（d1>d0）= 放大图表 = 看更少根（bars 变小）；捏合 = 看更多根（bars 变大）。
+// 返回 clamp(round(bars0 × d0/d1), min, max)；输入无效返回 bars0。
+export function barsFromPinch(bars0, d0, d1, min = 60, max = 300) {
+  if (!isFinite(bars0) || bars0 <= 0 || !isFinite(d0) || d0 <= 0 || !isFinite(d1) || d1 <= 0) return bars0;
+  const v = Math.round(bars0 * d0 / d1);
+  if (!isFinite(v)) return bars0;
+  return Math.max(min, Math.min(max, v));
+}
+
+// insufficientMsg：可用保证金/库存不足时的具体提示（GOAL25 遗留②修复）。
+// 币本位库存为 0 → 引导到设置页填库存；否则通用提示。
+export function insufficientMsg(mm, sym, held) {
+  const base = (sym || '').replace(/USDT$|USD$|BUSD$/, '');
+  if (mm === 'coin' && !(+held > 0)) {
+    return '币本位库存为 0：请先在「模拟真实交易设置」里填入 ' + (base || sym) + ' 库存（现货与永续同量），或改用 ▼开空（U本位）';
+  }
+  return '可用保证金不足';
+}
