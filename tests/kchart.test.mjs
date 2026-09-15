@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
+import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -1985,6 +1985,110 @@ console.log('\n[kchart: SRSI 自动交易]');
 }
 
 // ============================================================
+//  GOAL27 确认 bar：srsiConfirmPass 纯函数 / 实盘接线 / 回测接线
+// ============================================================
+console.log('\n[kchart: GOAL27 确认 bar srsiConfirmPass]');
+{
+  let cp = srsiConfirmPass(85, 84, 80, 20, 'short', 0, 1);
+  ok('确认 短侧带内1根即fire', cp.inBand === true && cp.fire === true && cp.count === 1 && cp.active === false);
+  cp = srsiConfirmPass(85, 70, 80, 20, 'short', 0, 1);
+  ok('确认 d 掉出上带→作废', cp.inBand === false && cp.fire === false && cp.count === 0 && cp.active === false);
+  cp = srsiConfirmPass(70, 85, 80, 20, 'short', 2, 3);
+  ok('确认 k 掉出上带→作废', cp.inBand === false && cp.active === false);
+  cp = srsiConfirmPass(85, 84, 80, 20, 'short', 0, 3);
+  ok('确认 未满根数→继续挂', cp.inBand === true && cp.fire === false && cp.count === 1 && cp.active === true);
+  cp = srsiConfirmPass(85, 84, 80, 20, 'short', 2, 3);
+  ok('确认 计数递进 count=3→fire', cp.fire === true && cp.count === 3 && cp.active === false);
+  cp = srsiConfirmPass(15, 18, 80, 20, 'long', 0, 2);
+  ok('确认 多侧带内未满→挂', cp.inBand === true && cp.fire === false && cp.count === 1 && cp.active === true);
+  cp = srsiConfirmPass(15, 18, 80, 20, 'long', 1, 2);
+  ok('确认 多侧满根数→fire', cp.fire === true && cp.count === 2 && cp.active === false);
+  cp = srsiConfirmPass(15, 25, 80, 20, 'long', 0, 1);
+  ok('确认 d 回升出下带→作废', cp.inBand === false && cp.active === false);
+  cp = srsiConfirmPass(80, 85, 80, 20, 'short', 0, 1);
+  ok('确认 边界k=upper→不带内(严格>)', cp.inBand === false);
+  cp = srsiConfirmPass(null, 85, 80, 20, 'short', 0, 1);
+  ok('确认 null k→不带内', cp.inBand === false);
+  cp = srsiConfirmPass(85, 84, 80, 20, 'short', 5, 0);
+  ok('确认 bars=0 防御→立即fire', cp.inBand === true && cp.fire === true);
+}
+
+console.log('\n[kchart: GOAL27 实盘确认 bar 接线]');
+{
+  // 跌 130 根后涨 60 根：SRSI K/D 尾部≈100（上带内）——确认通过数据
+  const down = []; for (let i = 0; i < 130; i++) down.push(160 - i);
+  const rise = []; for (let i = 0; i < 60; i++) rise.push(30 + i * 2);
+  const seq = down.concat(rise);
+  const times = seq.map((_, i) => i * 900000);
+  const cfgAuto = __defaultKConfig();
+  cfgAuto.symbol = 'BTCUSDT'; cfgAuto.srsiAutoOn = true;
+  ['5m', '10m', '15m', '30m', '1h', '4h'].forEach(tf => cfgAuto.srsiOptSource[tf] = 'optimized');
+  const kd = { '1h': 'long', '30m': 'long', '15m': 'long' };
+  const sd = { '4h': 'short', '1h': 'short', '30m': 'short' };
+  const bandUp = { edge: 'enterUpper', band: 'upper', k: 95, d: 92 };
+  const bandHold = { edge: null, band: 'upper', k: 95, d: 92 };
+  let orders = [], exits = [];
+  const mkEngine = (bal = 1000) => {
+    const positions = [];
+    return {
+      S: { prices: { 'BTCUSDT': { last: 100 } }, pos: positions },
+      getPerpSub: () => ({ id: 'perp', bal, coins: { 'BTCUSDT': 0 } }),
+      placeOrder: (o) => { orders.push(o); positions.push({ sym: o.symbol, side: o.side, src: o.src, pnl: 0, entry: 100, qty: 1, amt: o.amt }); },
+      exitPosition: (p, r) => { const i = positions.indexOf(p); if (i >= 0) positions.splice(i, 1); exits.push({ p, r }); }
+    };
+  };
+  const setup = (confirmBars) => {
+    kchartApi.__setCfgForTest({ ...cfgAuto, srsiAutoConfirmBars: confirmBars });
+    resetSrsiAuto('BTCUSDT');
+    orders = []; exits = [];
+    globalThis.S = { klines: { BTCUSDT: { '15m': seq.slice() } }, klinesT: { BTCUSDT: { '15m': times.slice() } } };
+  };
+  try {
+    // confirm=1：edge 挂起不开；新 15m 根收盘（仍带内）→ 执行开空
+    setup(1);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandUp });
+    ok('实盘 confirm=1 edge挂起不开仓', orders.length === 0);
+    globalThis.S.klines.BTCUSDT['15m'].push(150);
+    globalThis.S.klinesT.BTCUSDT['15m'].push(times.length * 900000);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandHold });
+    ok('实盘 confirm=1 收盘带内→执行开空', orders.length === 1 && orders[0].side === 'short');
+
+    // confirm=2：第 1 根确认不开，第 2 根确认才开
+    setup(2);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandUp });
+    ok('实盘 confirm=2 edge挂起', orders.length === 0);
+    globalThis.S.klines.BTCUSDT['15m'].push(150);
+    globalThis.S.klinesT.BTCUSDT['15m'].push(times.length * 900000);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandHold });
+    ok('实盘 confirm=2 第1根确认不开', orders.length === 0);
+    globalThis.S.klines.BTCUSDT['15m'].push(152);
+    globalThis.S.klinesT.BTCUSDT['15m'].push((times.length + 1) * 900000);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandHold });
+    ok('实盘 confirm=2 第2根确认→开空', orders.length === 1 && orders[0].side === 'short');
+
+    // confirm=0（默认）：边沿立即执行，行为与改动前一致
+    setup(0);
+    runSrsiAutoTrade('BTCUSDT', { engine: mkEngine(), klineDir: kd, srsiDir: sd, band: bandUp });
+    ok('实盘 confirm=0 默认立即执行(行为不变)', orders.length === 1 && orders[0].side === 'short');
+
+    // 确认执行时同步平盈利对向仓（edge 事件整体延迟）
+    setup(1);
+    const eng = mkEngine();
+    eng.S.pos.push({ sym: 'BTCUSDT', side: 'long', pnl: 5, entry: 90, qty: 1, amt: 90, src: 'srsiAuto' });
+    runSrsiAutoTrade('BTCUSDT', { engine: eng, klineDir: kd, srsiDir: sd, band: bandUp });
+    ok('实盘 confirm=1 挂起期间不平仓', orders.length === 0 && exits.length === 0);
+    globalThis.S.klines.BTCUSDT['15m'].push(150);
+    globalThis.S.klinesT.BTCUSDT['15m'].push(times.length * 900000);
+    runSrsiAutoTrade('BTCUSDT', { engine: eng, klineDir: kd, srsiDir: sd, band: bandHold });
+    ok('实盘 confirm=1 确认后平盈利多单+开空', exits.length === 1 && exits[0].r.reason === 'SRSI自动 上带平多' && orders.length === 1 && orders[0].side === 'short');
+  } finally {
+    delete globalThis.S;
+    kchartApi.__setCfgForTest(__defaultKConfig());
+    resetSrsiAuto('BTCUSDT');
+  }
+}
+
+// ============================================================
 //  bandEdge / klineDirFromCloses / srsiDirFromKD / backtestSrsiAuto
 // ============================================================
 console.log('\n[kchart: bandEdge & 回测]');
@@ -2116,6 +2220,28 @@ console.log('\n[kchart: 回测成本模型]');
   ok('成本开关 关→等同无成本基准', Math.abs(rNo.finalEquity - r0.finalEquity) < 1e-6);
   ok('成本开关 关→期末权益≥含成本', rNo.finalEquity >= rFee.finalEquity - 1e-6);
   ok('成本开关 关→记账平仓数≥含成本', rNo.trades.filter(t => t.action.indexOf('close') === 0).length >= rFee.trades.filter(t => t.action.indexOf('close') === 0).length);
+}
+
+// GOAL27 确认 bar：回测接线（confirmBars>0 时边沿信号待 N 根收盘仍带内才执行）
+console.log('\n[kchart: GOAL27 回测确认 bar]');
+{
+  const zz = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) zz.push(140 - i * 4);
+    for (let i = 0; i < 25; i++) zz.push(40 + i * 4);
+  }
+  const mk = (arr) => { const kl = {}; for (const tf of ['15m', '1h', '30m', '4h']) kl[tf] = arr.map((c, i) => [i * 900000, c, c, c, c, 0]); return kl; };
+  const cfgBt = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoUpper: 80, srsiAutoLower: 20 };
+  const r0 = backtestSrsiAuto('BTCUSDT', mk(zz), cfgBt, 1000);
+  const r1 = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfgBt, srsiAutoConfirmBars: 1 }, 1000);
+  const rC = backtestSrsiAuto('BTCUSDT', mk(zz), { ...cfgBt, srsiAutoConfirmBars: 99 }, 1000);
+  ok('回测 confirm=0 有开仓(基线不变)', r0.trades.some(t => t.action === 'open'));
+  ok('回测 confirm=1 无错误', !r1.error);
+  const op0 = r0.trades.filter(t => t.action === 'open').length, op1 = r1.trades.filter(t => t.action === 'open').length;
+  ok('回测 confirm=1 降频生效(开仓数减少)', op1 < op0);
+  ok('回测 confirm=1 期末权益有限', isFinite(r1.finalEquity));
+  ok('回测 confirmBars=99 钳制至5 无错误', !rC.error);
+  ok('回测 confirm=1 成交数≤confirm=0', r1.trades.length <= r0.trades.length);
 }
 
 //  回测爆仓线（真实交易所 MMR 规则）：高杠杆下价格击穿强平价应被强平并诚实显示
@@ -3207,4 +3333,31 @@ if (failed > 0) process.exit(1);
   setTradeEngine(null);
   setTradeConfig({ on: false });
   cfg.symbol = 'BTCUSDT';
+}
+
+// ===== GOAL25: subHoverAt SRSI 负索引回归（触屏取值崩溃修复）=====
+{
+  console.log('\n[kchart: GOAL25 subHoverAt SRSI 负索引回归]');
+  // 空数据结构完备性
+  const empty = srsiPanelSeries([1], cfg.srsi, 150);
+  ok('srsiPanelSeries 空数据含 hooks[]', Array.isArray(empty.hooks) && Array.isArray(empty.k) && Array.isArray(empty.d) && Array.isArray(empty.crossings));
+
+  const sym = 'BTCUSDT', tf = '5m';
+  const n = 500;
+  const closes = [], opens = [], highs = [], lows = [], vols = [], times = [];
+  for (let i = 0; i < n; i++) { closes.push(100 + i); opens.push(99 + i); highs.push(101 + i); lows.push(98 + i); vols.push(1); times.push(1600000000000 + i * 300000); }
+  const prevWin = globalThis.window;
+  globalThis.window = { S: {
+    klinesO: { [sym]: { [tf]: opens } }, klinesH: { [sym]: { [tf]: highs } }, klinesL: { [sym]: { [tf]: lows } },
+    klines: { [sym]: { [tf]: closes } }, klinesV: { [sym]: { [tf]: vols } }, klinesT: { [sym]: { [tf]: times } },
+    indicators: {}
+  } };
+  try {
+    // 线上崩点：空数据 tf → idxFromFrac=-1 → li=-1 → 旧代码 sl.hooks[-1]（hooks undefined）崩
+    const r1 = subHoverAt(0.5, sym, '10m', 'srsi', 150);
+    ok('subHoverAt 空数据tf 负索引不崩→全 null', r1 && r1.k === null && r1.d === null && r1.cross === null && r1.hook === null);
+    // bars=500 → off=0 → li=i 正常路径
+    const r2 = subHoverAt(0.5, sym, tf, 'srsi', 500);
+    ok('subHoverAt SRSI 全量→K/D 有值', r2 && r2.k != null && r2.d != null);
+  } finally { globalThis.window = prevWin; }
 }

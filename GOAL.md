@@ -108,3 +108,28 @@
 - **桌面回归踩坑**：setupTabNav 初版无条件激活分组切换——桌面无 Tab 条但 trade/bt/settings 块被 display:none（用户看不到交易面板！）。修=matchMedia(pointer:coarse) 不匹配直接 return（桌面全部块默认显示）。**教训：PWA 触屏特性的 JS 激活必须与 CSS media 条件同步**
 - 线上 e2e（1.5.43）：桌面 Tab 隐藏+全块显示 ✓；手机 Tab flex+K线组 7/7+切设置/交易/回测显隐正确+pwa_tab 记忆 ✓；thumb bottom=53px（tab 49px+边距）随公式 ✓；0 PAGEERROR ✓
 - 测试：kchart 906/indicators 319/全套无 FAIL（Tab 为纯 DOM 逻辑，e2e 为准）
+
+# GOAL27 — SRSI 时机降频确认 bar（GOAL17-D 二.2，回应 GOAL16-B 成本问题）
+
+> GOAL16-B 实锤：15m 带反手死因=0.13%/往返成本×1.2笔/日（年吞 ~80% 权益）。需笔/年<100 或降频。本 GOAL 给 SRSI 自动交易（实盘+回测）加「确认 bar」：带边沿信号后 N 根 15m 收盘仍满足带内条件才执行（0=关=现行为），滤掉「信号后立即出带」的假边沿，降频省成本。
+
+## 子任务
+- [x] A. 纯函数 srsiConfirmPass(k,d,upper,lower,side,count,confirmBars)→{inBand,fire,count,active}（kchart.js，单测）
+- [x] B. 回测接线：backtestSrsiAuto 加 config.srsiAutoConfirmBars（钳 0-5），edge→pending{side,idx,count}（新 edge 替换旧），每根收盘 srsiConfirmPass 推进：fire→_execEdge(平盈利对向+开仓)；出带→作废；超窗(+5)防御作废。confirm=0 走原路径（_execEdge 逐行搬移）
+- [x] C. 实盘接线：runSrsiAutoTrade 抽 _execEdgeLive；edge 时 confirm>0 → st.pendingConfirm={side,barT,count,setTs}（_autoState 存活）；每秒推进：新 15m 根（getTFData().t[last]>barT）→ srsiPanelSeries(c,srsi15,150)[len-2]=刚收盘根 k/d → srsiConfirmPass；超时 (N×15+30)min 作废；resetSrsiAuto 清 pendingConfirm
+- [x] D. UI+persist：设置面板 #ktSrsiConfirm + 回测面板 #ktBtConfirm（0-5，默认 0）+绑定+同步；btCfg.confirmBars/_btOverlayFor/applyBtSnapshot nums 接线；回测条件展示加确认 bar 行
+- [x] E. 长窗验证：(9) 365d 窗口 confirm=0/1/2/3 对比（笔数/成本占比/净值）；目标笔数降、净不劣化
+- [x] F. test→bump 1.5.44→build→deploy→线上 e2e（设置项渲染/默认 0 行为不变）→脱敏版→汇报
+
+## 执行记录（2026-09-15，GOAL27 完成）
+
+- **实施**：纯函数 srsiConfirmPass + 实盘/回测双接线（pending{side,idx/barT,count} 镜像 pendingRev 模式）；实盘确认根=srsiPanelSeries(c,srsi15,150) 取 **[len-2]**（buildSrsiOverview 只返回最新一行，不能用）；confirm=0 路径为 _execEdge/_execEdgeLive 逐行搬移（零行为变化）。UI：设置面板「确认bar」+回测面板「确认bar」双输入（0-5 默认 0）+persist+回测条件展示行
+- **踩坑（重要）**：srsiConfirmPass 返回 {fire:true,active:false}（消费）与作废 {active:false} 同为 active=false，推进逻辑首版 `if(!cp.active) 作废` 把 fire 也误杀→确认永不执行（回测 confirm≥1 全部 0 笔的假象、实盘 3 用例 FAIL）。修复=**推进逻辑 fire 优先于 active**（实盘+回测两处）；教训：**多标志返回值先查终态再查非终态**
+- **测试**：kchart 928（+25：srsiConfirmPass 11 / 实盘 6：confirm=1 挂起·执行·confirm=2 两帧·confirm=0 不变·平盈利对向延迟 / 回测 6：降频生效·钳制）+ indicators 319 全绿
+- **红线核对（版本对比法）**：vision 数据 BTCUSDT 永续（(9) 365d 窗口，23 万根 15m，(9) 参数近似：perp/follow/1000/7x/15%/maxSame10/带90-10/filter/费 0.045%/滑 0.020%/funding 计入），**git stash 前后 confirm=0 全部 10 字段逐位一致**（opens=570/liq=79/finalEq=533.7672/net=-466.2328/maxDD=79.43%/winRate=0.9735/fee/funding/reverseOpens=0）→ 零行为变化严格证明；(9) 基线自动保持
+- **长窗验证（confirm 0/1/2/3 对比，同窗同参）**：笔数 570→355→267→172（÷3.3）；强平 79→57→46→32；净收益 **-466→-261→-160→+46.84（转正）**；maxDD 79.4%→75.8%→68.4%→42.3%。降频滤假边沿显著降成本/回撤，confirm=2~3 净值翻正——建议实盘用 confirm=2（笔数÷2.1、净+$306）或 confirm=3（笔数÷3.3、转正）
+- **线上 e2e（1.5.44）**：#ktSrsiConfirm/#ktBtConfirm 渲染+min/max 0-5 ✓；persist 闭环（0→2→0 / 0→3→0 落盘 bySymbol.BTCUSDT / bt_cfg）✓；版本徽章 v1.5.44 ✓；0 PAGEERROR ✓。踩坑：persist 结构=bySymbol.<SYM>，e2e 读顶层键误判未落盘（读对位置后闭环）
+
+## 红线
+- **默认 confirm=0 零行为变化**：版本对比法核对（stash 前后同参同数据逐位一致）+ (9) 基线精神核对
+- kchart.js 缩进陷阱：改前核对函数边界；版本必 bump（PWA 缓存门控）

@@ -309,6 +309,7 @@ export function defaultKConfig() {
     srsiAutoExitK: 0,           // 中轨离场(0=关；30~80：K从下方上穿≥此值平多、K从上方下穿≤100-此值平空——均值回归亏损单不再扛到强平)
     srsiAutoMaxHoldBars: 0,     // 最长持仓(0=关；单位 15m 根数，超过即市价离场；实盘按等价时间)
     srsiAutoRevConfirm: 3,      // 防爆反手确认阈值%：危险信号触发后，需价格逆向突破此幅度确认趋势破位才开反手(revconf)，避免接飞刀
+    srsiAutoConfirmBars: 0,     // GOAL27 确认 bar：带边沿信号后需 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行，降频省成本）
     srsiAutoCloseManual: false, // 自动可平人工单：关=仅平自动单；开=盈利的反向人工单也可被自动平仓（仍仅净盈利才平）
     srsiAutoBonusBig: 3,        // 大方向一致加成比例（%）—— 仅用于 #2 方向合力展示
     srsiAutoBonusMid: 2,        // 中方向一致加成比例（%）
@@ -432,6 +433,7 @@ function normalizeCfg(c) {
   if (typeof c.srsiAutoExitK !== 'number' || !(c.srsiAutoExitK >= 30 && c.srsiAutoExitK <= 80)) c.srsiAutoExitK = 0;
   if (typeof c.srsiAutoMaxHoldBars !== 'number' || !(c.srsiAutoMaxHoldBars >= 1 && c.srsiAutoMaxHoldBars <= 2000)) c.srsiAutoMaxHoldBars = 0;
   if (typeof c.srsiAutoRevConfirm !== 'number' || !(c.srsiAutoRevConfirm >= 0 && c.srsiAutoRevConfirm <= 20)) c.srsiAutoRevConfirm = 3;
+  if (typeof c.srsiAutoConfirmBars !== 'number' || !(c.srsiAutoConfirmBars >= 0 && c.srsiAutoConfirmBars <= 5)) c.srsiAutoConfirmBars = 0;
   if (typeof c.srsiAutoReversePct !== 'number' || !(c.srsiAutoReversePct >= 0 && c.srsiAutoReversePct <= 100)) c.srsiAutoReversePct = 0;
   if (typeof c.srsiAutoReverseLev !== 'number' || !(c.srsiAutoReverseLev >= 0 && c.srsiAutoReverseLev <= 30)) c.srsiAutoReverseLev = 0;
   if (typeof c.srsiAutoDangerAlarm !== 'boolean') c.srsiAutoDangerAlarm = true;
@@ -5004,7 +5006,7 @@ export function applyBtSnapshot(bt, eff) {
     if (eff && eff.srsi) cfg.srsi = { ...cfg.srsi, ...eff.srsi };
     cfg.srsiOptSource = cfg.srsiOptSource || {};
     ['15m', '30m', '1h', '4h'].forEach(tf => { if (cfg.srsiByTf && cfg.srsiByTf[tf]) cfg.srsiOptSource[tf] = 'optimized'; });
-    const nums = { lev: 'srsiAutoLev', pct: 'srsiAutoBasePct', maxSame: 'srsiAutoMaxSame', upper: 'srsiAutoUpper', lower: 'srsiAutoLower', reversePct: 'srsiAutoReversePct', reverseLev: 'srsiAutoReverseLev', revConfirm: 'srsiAutoRevConfirm', stopPct: 'srsiAutoStopPct', adaptiveLevMin: 'srsiAutoAdaptiveLevMin', atrStopMult: 'srsiAutoAtrStopMult', capUsdt: 'srsiAutoOpenCapUsdt', capCoin: 'srsiAutoOpenCapCoin' };
+    const nums = { lev: 'srsiAutoLev', pct: 'srsiAutoBasePct', maxSame: 'srsiAutoMaxSame', upper: 'srsiAutoUpper', lower: 'srsiAutoLower', reversePct: 'srsiAutoReversePct', reverseLev: 'srsiAutoReverseLev', revConfirm: 'srsiAutoRevConfirm', confirmBars: 'srsiAutoConfirmBars', stopPct: 'srsiAutoStopPct', adaptiveLevMin: 'srsiAutoAdaptiveLevMin', atrStopMult: 'srsiAutoAtrStopMult', capUsdt: 'srsiAutoOpenCapUsdt', capCoin: 'srsiAutoOpenCapCoin' };
     for (const [k, ck] of Object.entries(nums)) if (typeof bt[k] === 'number' && isFinite(bt[k])) cfg[ck] = bt[k];
     const bools = { hotStop: 'srsiAutoHotStop', adaptiveLev: 'srsiAutoAdaptiveLev', atrStop: 'srsiAutoAtrStop' };
     for (const [k, ck] of Object.entries(bools)) if (typeof bt[k] === 'boolean') cfg[ck] = bt[k];
@@ -5095,6 +5097,7 @@ function renderQuickTrade() {
       <label class="kt-mini">本金比例%<input id="ktSrsiBase" class="kt-num" type="number" min="1" max="100" step="1"/></label>
       <label class="kt-mini">杠杆x<input id="ktSrsiLev" class="kt-num" type="number" min="1" max="30" step="1"/></label>
       <label class="kt-mini">同方向最多<input id="ktSrsiMax" class="kt-num" type="number" min="1" max="10" step="1"/>单</label>
+      <label class="kt-mini">确认bar<input id="ktSrsiConfirm" class="kt-num" type="number" min="0" max="5" step="1"/> (0=关·GOAL27)</label>
       <label class="kt-mini"><input id="ktSrsiCloseManual" type="checkbox"/>自动可平人工单</label>
       <label class="kt-mini">上限带(0=15m优选)<input id="ktSrsiUp" class="kt-num" type="number" min="0" max="100" step="1"/></label>
       <label class="kt-mini">下限带(0=15m优选)<input id="ktSrsiLo" class="kt-num" type="number" min="0" max="50" step="1"/></label>
@@ -5161,6 +5164,7 @@ function renderQuickTrade() {
           <label class="kt-mini">开仓比例%<input id="ktBtPct" class="kt-num" type="number" min="1" max="100" step="1"/></label>
           <label class="kt-mini">杠杆x<input id="ktBtLev" class="kt-num" type="number" min="1" max="30" step="1"/></label>
           <label class="kt-mini">同方向最多<input id="ktBtMax" class="kt-num" type="number" min="1" max="10" step="1"/>单</label>
+          <label class="kt-mini">确认bar<input id="ktBtConfirm" class="kt-num" type="number" min="0" max="5" step="1"/> (0=关)</label>
           <label class="kt-mini">上限带<input id="ktBtUp" class="kt-num" type="number" min="50" max="100" step="1"/></label>
           <label class="kt-mini">下限带<input id="ktBtLo" class="kt-num" type="number" min="0" max="50" step="1"/></label>
           <label class="kt-mini">开仓上限U<input id="ktBtCapU" class="kt-num" type="number" min="0" step="1"/> (0不限)</label>
@@ -5277,6 +5281,8 @@ function renderQuickTrade() {
     b.querySelector('#ktSrsiRevLev').addEventListener('input', () => { cfg.srsiAutoReverseLev = Math.max(0, Math.min(30, +b.querySelector('#ktSrsiRevLev').value || 0)); persist(); });
     const _revConfEl = b.querySelector('#ktSrsiRevConfirm');
     if (_revConfEl) _revConfEl.addEventListener('input', () => { cfg.srsiAutoRevConfirm = Math.max(0, Math.min(20, +_revConfEl.value || 0)); persist(); });
+    const _confBarsEl = b.querySelector('#ktSrsiConfirm');
+    if (_confBarsEl) _confBarsEl.addEventListener('input', () => { cfg.srsiAutoConfirmBars = Math.max(0, Math.min(5, Math.round(+_confBarsEl.value || 0))); persist(); });
     b.querySelector('#ktSrsiDangerAlarm').addEventListener('change', () => { cfg.srsiAutoDangerAlarm = !!b.querySelector('#ktSrsiDangerAlarm').checked; persist(); });
     b.querySelector('#ktSrsiHotStop').addEventListener('change', () => { cfg.srsiAutoHotStop = !!b.querySelector('#ktSrsiHotStop').checked; persist(); });
     b.querySelector('#ktSrsiAdaptiveLev').addEventListener('change', () => { cfg.srsiAutoAdaptiveLev = !!b.querySelector('#ktSrsiAdaptiveLev').checked; persist(); });
@@ -5313,6 +5319,7 @@ function renderQuickTrade() {
     b.querySelector('#ktBtPct').addEventListener('input', () => { _btSet({ pct: _clampNum(b.querySelector('#ktBtPct').value, 1, 100, 10) }); });
     b.querySelector('#ktBtLev').addEventListener('input', () => { _btSet({ lev: _clampNum(b.querySelector('#ktBtLev').value, 1, 30, 5) }); });
     b.querySelector('#ktBtMax').addEventListener('input', () => { _btSet({ maxSame: _clampNum(b.querySelector('#ktBtMax').value, 1, 10, 3) }); });
+    b.querySelector('#ktBtConfirm').addEventListener('input', () => { _btSet({ confirmBars: Math.max(0, Math.min(5, Math.round(+b.querySelector('#ktBtConfirm').value || 0))) }); });
     b.querySelector('#ktBtUp').addEventListener('input', () => { _btSet({ upper: _clampNum(b.querySelector('#ktBtUp').value, 50, 100, 90) }); });
     b.querySelector('#ktBtLo').addEventListener('input', () => { _btSet({ lower: _clampNum(b.querySelector('#ktBtLo').value, 0, 50, 10) }); });
     b.querySelector('#ktBtCapU').addEventListener('input', () => { _btSet({ capUsdt: Math.max(0, +b.querySelector('#ktBtCapU').value || 0) }); });
@@ -5431,6 +5438,8 @@ function renderQuickTrade() {
   if (revPctEl) revPctEl.value = cfg.srsiAutoReversePct;
   if (revLevEl) revLevEl.value = cfg.srsiAutoReverseLev;
   if (revConfEl) revConfEl.value = cfg.srsiAutoRevConfirm;
+  const confBarsEl = bar.querySelector('#ktSrsiConfirm');
+  if (confBarsEl) confBarsEl.value = cfg.srsiAutoConfirmBars;
   if (alarmEl) alarmEl.checked = !!cfg.srsiAutoDangerAlarm;
   const hotStopEl = bar.querySelector('#ktSrsiHotStop');
   if (hotStopEl) hotStopEl.checked = !!cfg.srsiAutoHotStop;
@@ -5454,6 +5463,7 @@ function renderQuickTrade() {
   _btVal('ktBtPct', _btCfg.pct);
   _btVal('ktBtLev', _btCfg.lev);
   _btVal('ktBtMax', _btCfg.maxSame);
+  _btVal('ktBtConfirm', _btCfg.confirmBars);
   _btVal('ktBtUp', _btCfg.upper);
   _btVal('ktBtLo', _btCfg.lower);
   _btVal('ktBtCapU', _btCfg.capUsdt);
@@ -5590,9 +5600,9 @@ function _autoState(sym) {
 export function resetSrsiAuto(sym) {
   if (sym) {
     const s = _srsiAuto[sym];
-    if (s) { s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; }
+    if (s) { s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.pendingConfirm = null; }
   } else {
-    Object.keys(_srsiAuto).forEach(k => { const s = _srsiAuto[k]; s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; });
+    Object.keys(_srsiAuto).forEach(k => { const s = _srsiAuto[k]; s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.pendingConfirm = null; });
   }
 }
 
@@ -5934,6 +5944,20 @@ export function srsiAutoBandState(sym, row) {
   return { band: be.band, edge: be.edge, k, d };
 }
 
+// GOAL27 确认 bar 纯函数：带边沿信号后，逐根检查「收盘根仍满足带内条件」的确认推进。
+// side='short'(上带：K&D 均>upper) / 'long'(下带：K&D 均<lower)；count=已确认根数；confirmBars=所需确认根数(>0)。
+// 返回 { inBand, fire, count, active }：inBand=本根是否仍带内；fire=确认已满可执行；
+// count=推进后计数（inBand=false→0）；active=挂单是否继续保留（inBand=false→false；fire→消费）。单测进 tests/kchart.test.mjs
+export function srsiConfirmPass(k, d, upper, lower, side, count, confirmBars) {
+  const inBand = side === 'short'
+    ? (k != null && d != null && k > upper && d > upper)
+    : (k != null && d != null && k < lower && d < lower);
+  if (!inBand) return { inBand: false, fire: false, count: 0, active: false };
+  const c = (count|0) + 1;
+  const fire = c >= confirmBars;
+  return { inBand: true, fire, count: c, active: !fire };
+}
+
 // 主执行入口（每秒调用）。inj 仅用于单测注入（engine/band/klineDir/srsiDir）
 export function runSrsiAutoTrade(sym, inj) {
   sym = sym || cfg.symbol;
@@ -6063,16 +6087,45 @@ export function runSrsiAutoTrade(sym, inj) {
     if (!dec.open) return;
     _tryOpen(dec.side, dec.rev);
   };
+  // GOAL27 确认 bar（实盘）：srsiAutoConfirmBars>0 时边沿事件挂起，待 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行，行为不变）
+  const _confirmNL = (cfg.srsiAutoConfirmBars != null) ? Math.max(0, Math.min(5, Math.floor(+cfg.srsiAutoConfirmBars || 0))) : 0;
+  st.pendingConfirm = _confirmNL > 0 ? (st.pendingConfirm || null) : null;
+  const _execEdgeLive = (side) => {
+    if (side === 'short') {
+      // 平盈利多单；多单亏损时仅跳过平仓（不操作），空单照开
+      // srsiAutoCloseManual 关：仅平自动单；开：盈利的反向人工单也可被自动平（仍仅净盈利才平）
+      const longPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'long' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
+      if (longPos && longPos.pnl > 0) engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
+      _attemptOpen('short');
+    } else {
+      const shortPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'short' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
+      if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
+      _attemptOpen('long');
+    }
+  };
+  const _t15live = (getTFData(sym, '15m') || {});
+  const _ts15 = _t15live.t || [];
   if (_canTrade && bs.edge === 'enterUpper') {
-    // 平盈利多单；多单亏损时仅跳过平仓（不操作），空单照开
-    // srsiAutoCloseManual 关：仅平自动单；开：盈利的反向人工单也可被自动平（仍仅净盈利才平）
-    const longPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'long' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-    if (longPos && longPos.pnl > 0) engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
-    _attemptOpen('short');
+    if (_confirmNL > 0 && _ts15.length) st.pendingConfirm = { side: 'short', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now() };
+    else if (_confirmNL <= 0) _execEdgeLive('short');
   } else if (_canTrade && bs.edge === 'enterLower') {
-    const shortPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'short' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-    if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
-    _attemptOpen('long');
+    if (_confirmNL > 0 && _ts15.length) st.pendingConfirm = { side: 'long', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now() };
+    else if (_confirmNL <= 0) _execEdgeLive('long');
+  }
+  // 挂单确认推进（每秒检查；新 15m 根出现=前根收盘，检查刚收盘根最终 K/D 仍带内；超时作废）
+  if (_confirmNL > 0 && st.pendingConfirm && _ts15.length >= 2) {
+    const pc = st.pendingConfirm;
+    const _lastT = _ts15[_ts15.length - 1];
+    if (Date.now() - pc.setTs > (_confirmNL * 15 + 30) * 60 * 1000) st.pendingConfirm = null;
+    else if (_lastT > pc.barT) {
+      const _sl15 = srsiPanelSeries(_t15live.c || [], (cfg.srsiByTf && cfg.srsiByTf['15m']) || cfg.srsi, 150);
+      const _kc = _sl15.k[_sl15.k.length - 2], _dc = _sl15.d[_sl15.d.length - 2];
+      const _ebC = resolveEntryBands(cfg);
+      const cp = srsiConfirmPass(_kc, _dc, _ebC.upper, _ebC.lower, pc.side, pc.count, _confirmNL);
+      if (cp.fire) { st.pendingConfirm = null; _execEdgeLive(pc.side); }        // fire 优先于 active（fire 时 active=false=挂单被消费）
+      else if (!cp.active) st.pendingConfirm = null;                            // 收盘根出带→作废
+      else { pc.count = cp.count; pc.barT = _lastT; }                           // 未满根数→计数递进
+    }
   }
   // 宽保护性止损(ATR)：持仓的 stopPx 被突破即平仓（落于爆仓线内侧，截真趋势破位）。默认关。
   if (cfg.srsiAutoAtrStop) {
@@ -6315,6 +6368,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   const holdBars = (typeof config.srsiAutoMaxHoldBars === 'number' && config.srsiAutoMaxHoldBars >= 1) ? config.srsiAutoMaxHoldBars : 0;
   const revConfirm = (typeof config.srsiAutoRevConfirm === 'number' && config.srsiAutoRevConfirm > 0) ? config.srsiAutoRevConfirm : 3;
   const pendingRev = { long: null, short: null }; // revconf：危险信号触发后待价格确认才开的反手挂单
+  let pendingConfirm = null; // GOAL27 确认 bar 挂单 {side, idx, count}
+  const _confirmN = (config.srsiAutoConfirmBars != null) ? Math.max(0, Math.min(5, Math.floor(+config.srsiAutoConfirmBars || 0))) : 0;
   const liqLog = []; // 强平单归因日志：开仓/强平时刻的技术面上下文（供第三方 AI 找爆仓共同点）
   const openLog = []; // 全部开仓快照（含未爆仓，作对照组）：开仓时技术面上下文 + 是否最终爆仓
   const grossPnl = (side, entry, exit, amtUsdt, useLev) => (side === 'long' ? (exit - entry) : (entry - exit)) / entry * (useLev || effLev) * amtUsdt;
@@ -6629,14 +6684,36 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
         else if (i - pend.idx > 200) pendingRev[ps] = null; // 超时(~50h)未确认作废
       }
     }
-    if (_canTrade && be.edge === 'enterUpper') {
-      const lp = positions.find(p => p.side === 'long' && _netClose(p, price * (1 - slipAt(i))) > 0);
-      if (lp) { const slip = slipAt(i); if (_settleClose(lp, price * (1 - slip), slip)) positions = positions.filter(p => p !== lp); }
-      _attemptOpen('short');
-    } else if (_canTrade && be.edge === 'enterLower') {
-      const sp = positions.find(p => p.side === 'short' && _netClose(p, price * (1 + slipAt(i))) > 0);
-      if (sp) { const slip = slipAt(i); if (_settleClose(sp, price * (1 + slip), slip)) positions = positions.filter(p => p !== sp); }
-      _attemptOpen('long');
+    // GOAL27 确认 bar：confirmBars>0 时边沿事件挂起，待 N 根 15m 收盘仍满足带内条件才执行（0=立即执行，行为不变）
+    const _execEdge = (side) => {
+      if (side === 'short') {
+        const lp = positions.find(p => p.side === 'long' && _netClose(p, price * (1 - slipAt(i))) > 0);
+        if (lp) { const slip = slipAt(i); if (_settleClose(lp, price * (1 - slip), slip)) positions = positions.filter(p => p !== lp); }
+        _attemptOpen('short');
+      } else {
+        const sp = positions.find(p => p.side === 'short' && _netClose(p, price * (1 + slipAt(i))) > 0);
+        if (sp) { const slip = slipAt(i); if (_settleClose(sp, price * (1 + slip), slip)) positions = positions.filter(p => p !== sp); }
+        _attemptOpen('long');
+      }
+    };
+    if (_confirmN > 0 && _canTrade) {
+      if (be.edge) {
+        // 新边沿替换旧挂单（armed 已翻转不重复触发；反向边沿=旧信号前提失效）
+        pendingConfirm = { side: be.edge === 'enterUpper' ? 'short' : 'long', idx: i, count: 0 };
+      } else if (pendingConfirm) {
+        const pc = pendingConfirm;
+        if (i - pc.idx > _confirmN + 5) pendingConfirm = null; // 防御：数据缺口超窗作废
+        else {
+          const cp = srsiConfirmPass(k, d, upper, lower, pc.side, pc.count, _confirmN);
+          if (cp.fire) { pendingConfirm = null; _execEdge(pc.side); } // fire 优先于 active（fire 时 active=false=挂单被消费）
+          else if (!cp.active) pendingConfirm = null; // 收盘根出带→作废
+          else pc.count = cp.count; // 未满根数→计数递进
+        }
+      }
+    } else if (_confirmN <= 0 && _canTrade && be.edge === 'enterUpper') {
+      _execEdge('short');
+    } else if (_confirmN <= 0 && _canTrade && be.edge === 'enterLower') {
+      _execEdge('long');
     }
   }
   // ---- 期末：所有未平仓按末价平仓计入（盈+亏都计），并保留明细供「净收益」栏展示 ----
@@ -6732,6 +6809,7 @@ function _btCfgDefaults() {
     pct: 10,                 // 开仓比例 %
     lev: 5,                  // 杠杆 x
     maxSame: 3,              // 同方向最多连开单
+    confirmBars: 0,          // GOAL27 确认 bar：边沿信号后需 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行）
     upper: 0,                // 开仓上限带（0=使用 15m 优选带）
     lower: 0,                // 开仓下限带（0=使用 15m 优选带）
     capUsdt: 0,              // 开仓上限 U（0=不限）
@@ -6790,7 +6868,7 @@ function _btOverlayFor(cfg, bt) {
     srsiAutoW4h: bt.w4h, srsiAutoW1h: bt.w1h, srsiAutoW30m: bt.w30m,
     srsiBtOptTfs: bt.optTfs,
     srsiAutoDanger: bt.danger, srsiAutoReversePct: bt.reversePct, srsiAutoReverseLev: bt.reverseLev, srsiAutoHotStop: !!bt.hotStop,
-    srsiAutoStopPct: bt.stopPct || 0, srsiAutoRevConfirm: bt.revConfirm || 3,
+    srsiAutoStopPct: bt.stopPct || 0, srsiAutoRevConfirm: bt.revConfirm || 3, srsiAutoConfirmBars: bt.confirmBars || 0,
     srsiAutoAdaptiveLev: !!bt.adaptiveLev, srsiAutoAdaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN,
     srsiAutoAtrStop: !!bt.atrStop, srsiAutoAtrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT,
     srsiAutoExitK: bt.exitK || 0, srsiAutoMaxHoldBars: bt.holdBars || 0
@@ -6998,6 +7076,8 @@ export function buildBacktestConditions(days) {
     '杠杆：' + lev + 'x' + (bt.adaptiveLev ? ('（自适应杠杆开：波动放大自动降杠杆，下限 ' + (bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN) + 'x）') : ''),
     (bt.atrStop ? ('宽保护性止损(ATR)：开，止损距离 = ' + (bt.atrStopMult || THRESH.ATR_STOP_MULT) + '×受监督ATR%（落于爆仓线内侧，截真趋势破位）') : '宽保护性止损(ATR)：关'),
     '同方向最多连开：' + bt.maxSame + ' 单',
+    '确认 bar：' + (bt.confirmBars > 0 ? (bt.confirmBars + ' 根 15m 收盘仍带内才执行（GOAL27 降频）') : '关（0=边沿立即执行）'),
+    '确认 bar：' + (bt.confirmBars > 0 ? (bt.confirmBars + ' 根 15m 收盘仍带内才执行（GOAL27 降频）') : '关（0=边沿立即执行）'),
     (function () {
       const _eb = resolveEntryBands({ srsiAutoUpper: bt.upper, srsiAutoLower: bt.lower, srsiByTf: cfg.srsiByTf, srsi: cfg.srsi });
       return '上下限带：上 ' + _eb.upper + ' / 下 ' + _eb.lower + (_eb.auto ? '（自动=15m优选带）' : '');
