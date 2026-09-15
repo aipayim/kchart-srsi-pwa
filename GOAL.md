@@ -20,4 +20,15 @@
 ## 子任务
 - [x] A. 角标位置修复：drawMain 组合角标 by=H-PAD_B-26（整画布底=落到 MACD 子图）→ by=PAD_T+MAIN_H-26（主图区内右下角，与左居中信号卡对角呼应，半透明背景条保可读）
 - [x] B. 设计稿暂停记录（v1 说明页否/v2 青品红 HUD 已固化保留/v3 冷钢铁不认同——待用户给方向再启）
-- [ ] C. test/build → 1.5.35 → deploy → 验证 → 汇报
+- [x] C. test/build → 1.5.35 → deploy → 验证 → 汇报
+- 线上 e2e（1.5.35）：主图区右下角标背景像素 11555 ✓ 归位确认；双仓全绿；脱敏版 cbdc699 已 push
+
+# GOAL21 — 持久化根因防御 + 主图底部状态带
+
+> 反馈：①「Alpha基石实盘」「SRSI应用回测参数」刷新丢勾选 ②「α信号/实盘信号」chip 不持久 ③组合角标压 SRSI 下限带（建议 SRSI0 下方腾位置）④「α空7% 54s前」压上限带。
+
+## 子任务
+- [x] A. 根因排查：Node 往返测试（persist→loadCfg）全部字段保留 ✓ → 丢态在浏览器时序（checkbox 视觉恢复缺位+启动早期陈旧写入覆盖）
+- [x] B. 修复：renderQuickTrade 每次重绘按 cfg 对齐 ktSrsiAuto/ktSrsiApplyBt/ktAlphaLive 勾选视觉（时序无关）；loadCfg 尾部 800ms 快照固化 persist（防早期覆盖）
+- [x] C. 主图底部状态带 STATUS_H=22：分隔虚线+SRSI0 线下方专用信息条；组合实盘角标→带左、α 信号角标（α空7%·54s前）→带右；子图 y0 下移、BASE_H+22 全链自适应——不再压 K 线/上限带/下限带
+- [ ] D. test/build → 1.5.36 → deploy → 验证 → 汇报

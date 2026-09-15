@@ -111,7 +111,8 @@ const PAD_T = 14, PAD_B = 16;
 const MAIN_H = 320;          // 主图固定高度
 const SUB_H = 120;           // 每个 RSI/SRSI/MACD 子图高度
 const SUB_GAP = 22;          // 子图标题栏+间距
-const BASE_H = MAIN_H + PAD_T + PAD_B;
+const STATUS_H = 22;         // GOAL21：主图底部状态带（组合实盘/α 信号角标专用，不再压 K 线与 SRSI 带）
+const BASE_H = MAIN_H + PAD_T + PAD_B + STATUS_H;
 
 const STATE_KEY = 'smartTrader_kchart';
 
@@ -600,6 +601,12 @@ export function loadCfg(symOverride) {
   }
   applyPwaOverlay(sym);   // PWA 模式：用私有键(smartTrader_kchart 之外的按币数据)覆盖，置于 normalize 之后确保为最终权威来源，免疫主系统/跨实例对共享键的覆盖（修复切币丢失优选参数）
   _store.lastSymbol = sym;
+
+  // GOAL21：启动快照固化——浏览器环境下 800ms 后把恢复态重新落盘，防止启动早期其它实例/组件的陈旧写入覆盖用户勾选
+  if (typeof document !== 'undefined' && typeof window !== 'undefined' && window.requestAnimationFrame) {
+    setTimeout(() => { try { persist(); } catch (e) {} }, 800);
+  }
+
 }
 export function persist() {
   if (!_store) _store = readStore();
@@ -2899,7 +2906,7 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
 function syncCanvasSize() {
   if (!_cv) return;
   const nSub = buildSubList().length;
-  const H = BASE_H + nSub * (SUB_H + SUB_GAP);
+  const H = BASE_H + nSub * (SUB_H + SUB_GAP); // GOAL21：BASE_H 已含 STATUS_H
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   let bw, bh;
   if (typeof _cv.getBoundingClientRect === 'function') {
@@ -2940,7 +2947,7 @@ export function renderKChart() {
 
   // 子图
   const subList = buildSubList();
-  let y0 = PAD_T + MAIN_H + 6;
+  let y0 = PAD_T + MAIN_H + STATUS_H + 2; // GOAL21：子图下移，让出主图底部状态带
   const regs = [];
   subList.forEach((sub, idx) => {
     const y1 = y0 + SUB_H;
@@ -3310,7 +3317,7 @@ function drawMain(ctx, sym, tf, H) {
       // 更新透明化：信号随 K 线刷新周期重算（默认 60s），显示数据年龄避免误以为逐 tick 实时
       const ageS = Math.max(0, Math.round((Date.now() - (A.updatedT || 0)) / 1000));
       const ageTxt = ageS < 60 ? ageS + 's前' : Math.round(ageS / 60) + 'm前';
-      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}% · ${ageTxt}`, W - PAD_R - 4, PAD_T + 12);
+      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}% · ${ageTxt}`, W - PAD_R - 4, PAD_T + MAIN_H + 15); // GOAL21：移主图底部状态带右（原右上压 SRSI 上限带）
       ctx.textAlign = 'left';
       ctx.restore();
     }
@@ -3324,6 +3331,14 @@ function drawMain(ctx, sym, tf, H) {
   const _alphaLiveOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();
   const _showSrsi = cfg.sigOverlay && cfg.srsiAutoOn;   // 勾 SRSI 自动 → 显示 SRSI 信号
   const _showAlpha = cfg.sigOverlay && _alphaLiveOn;    // 勾 Alpha 基石实盘 → 显示 Alpha 信号
+  // GOAL21：主图底部状态带（分隔线 + 左右角标区背景，SRSI 0 线下方的专用信息条）
+  if (typeof window !== 'undefined') {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(139,155,180,.25)'; ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(PAD_L, PAD_T + MAIN_H + 2); ctx.lineTo(W - PAD_R, PAD_T + MAIN_H + 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
   // GOAL16：主图盯盘信号卡（manualSignal：Alpha方向+SRSI带时机+ATR止损止盈，明确三元组）
   if (cfg.sigOverlay && typeof window !== 'undefined') {
     try {
@@ -3421,12 +3436,12 @@ function drawMain(ctx, sym, tf, H) {
       const label = '组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp;
       const tw = ctx.measureText(label).width;
       // GOAL14：右下角 + 半透明背景条（GOAL20 修复：原 H-PAD_B-26 是整画布底=落到 MACD 子图区；正确=主图区内右下角，与左居中信号卡对角呼应）
-      const bx = W - PAD_R - 4 - tw - 10, by = PAD_T + MAIN_H - 26;
+      const bx = PAD_L + 6, by = PAD_T + MAIN_H + 4; // GOAL21：移主图底部状态带左（原主图右下压 SRSI 下限带）
       ctx.fillStyle = 'rgba(16,22,30,.72)';
       ctx.fillRect(bx, by, tw + 12, 18);
       ctx.strokeStyle = 'rgba(46,204,113,.35)'; ctx.strokeRect(bx, by, tw + 12, 18);
       ctx.fillStyle = '#2ecc71';
-      ctx.fillText(label, W - PAD_R - 8, by + 13);
+      ctx.fillText(label, PAD_L + 12, by + 13);
       ctx.textAlign = 'left';
     }
     ctx.restore();
@@ -5249,6 +5264,11 @@ function renderQuickTrade() {
   q('ktLev').value = _lev; q('ktLevV').textContent = _lev + 'x';
   _useFixed = cfg.ktUseFixed; _safeguard = cfg.ktSafe; // GOAL17：从 cfg 恢复
   q('ktFixed').checked = _useFixed; q('ktSafe').checked = _safeguard;
+  // GOAL21：策略勾选视觉对齐（用户反馈刷新丢勾选——此前恢复只在 setSrsiAutoOn/alphaLab 路径，主路径缺失）
+  const _q = (id) => bar.querySelector('#' + id);
+  const sa2 = _q('ktSrsiAuto'); if (sa2) sa2.checked = !!cfg.srsiAutoOn;
+  const ab2 = _q('ktSrsiApplyBt'); if (ab2) ab2.checked = !!cfg.srsiAutoApplyBt;
+  const al2 = _q('ktAlphaLive'); if (al2) al2.checked = !!(cfg.alphaLiveOn && typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
   q('ktPct').value = _sizePct; q('ktPctV').textContent = _sizePct + '%';
   q('ktFixedAmt').value = _fixedAmt;
   q('ktPct').style.display = _useFixed ? 'none' : '';
