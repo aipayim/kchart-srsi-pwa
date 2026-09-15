@@ -446,6 +446,10 @@ function initPwaTrade() {
   localPE = new PaperEngine({ stateRef: () => globalThis.S, onLog: () => {}, getSlip: () => 0.0002 });
   localPE.seedSim(pwaSim);
   api.setTradeEngine(localPE);
+  // GOAL18-C：PAD 横屏自动展开交易面板（触屏+横屏+宽屏一次性检测）
+  if (window.matchMedia && window.matchMedia('(pointer:coarse) and (orientation:landscape) and (min-width:900px)').matches) {
+    try { api.setTradePanelOpen(true); } catch (e) {}
+  }
   const onEl = document.getElementById('pwaTradeOn');
   // GOAL17：快捷交易开关持久化（刷新恢复用户选择）
   const savedOn = localStorage.getItem('pwa_trade_on');

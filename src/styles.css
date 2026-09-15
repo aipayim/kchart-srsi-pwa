@@ -668,3 +668,12 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 
 /* GOAL13：交易面板折叠容器（仿交易纪律分析，默认收缩+记忆） */
 .kchart-discwrap.closed .kchart-tradebar{display:none}
+
+/* GOAL18-B：手机/PAD 拇指区快捷条（触屏设备固定底部，≥44px 目标） */
+#ktThumbBar{display:none;position:fixed;bottom:0;left:0;right:0;z-index:9999;gap:8px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:rgba(7,11,20,.92);backdrop-filter:blur(8px);border-top:1px solid rgba(34,211,238,.18)}
+#ktThumbBar button{flex:1;min-height:44px;border-radius:12px;border:1px solid var(--border);background:var(--card2);color:var(--text);font-size:14px;font-weight:600;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent}
+#ktThumbBar .kt-tb-long{background:rgba(46,204,113,.16);border-color:rgba(46,204,113,.5);color:#2ecc71}
+#ktThumbBar .kt-tb-short{background:rgba(255,77,109,.14);border-color:rgba(255,77,109,.5);color:#ff4d6d}
+#ktThumbBar .kt-tb-close{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.45);color:#f59e0b}
+#ktThumbBar .kt-tb-panel{flex:0 0 72px}
+@media (pointer:coarse){#ktThumbBar{display:flex!important}}

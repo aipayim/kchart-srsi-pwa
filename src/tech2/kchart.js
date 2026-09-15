@@ -3930,6 +3930,13 @@ export function initKChart() {
       const H = _cv.__logicalH || BASE_H;
       return { lx: (e.clientX - rect.left) * (W / rect.width), ly: (e.clientY - rect.top) * (H / rect.height) };
     };
+    // GOAL18-A：触屏取值（touch→hover 同路径；复用 mainHoverAt/subHoverAt 绘制；点按显示、移动更新、松手保持 2s 后清除）
+    const _touchClear = () => { if (_touchT) { clearTimeout(_touchT); _touchT = null; } };
+    let _touchT = null;
+    const touchLocal = (e) => { const t = e.touches[0] || e.changedTouches[0]; return t ? { x: t.clientX, y: t.clientY, lx: t.clientX - _cv.getBoundingClientRect().left, ly: t.clientY - _cv.getBoundingClientRect().top } : null; };
+    _cv.addEventListener('touchstart', (e) => { const p = touchLocal(e); if (!p) return; _hover = p; renderKChart(); e.preventDefault(); }, { passive: false });
+    _cv.addEventListener('touchmove', (e) => { const p = touchLocal(e); if (!p) return; _hover = p; renderKChart(); e.preventDefault(); }, { passive: false });
+    _cv.addEventListener('touchend', () => { _touchClear(); _touchT = setTimeout(() => { _hover = null; renderKChart(); }, 2000); }, { passive: true });
     _cv.addEventListener('mousemove', (e) => {
       _hover = toLocal(e);
       // 区分拖动与点击：mousedown 后位移过大视为拖动（点击监听据此忽略）
@@ -4836,6 +4843,19 @@ export function setSrsiAutoOn(on) {
     if (cfg.alphaLiveOn && !window.__alphaLab.isLive()) { try { window.__alphaLab.startLive(); } catch (e) {} }
     alEl.checked = cfg.alphaLiveOn && window.__alphaLab.isLive();
   } else if (alEl) alEl.checked = false;
+  // GOAL18-B：手机/PAD 拇指区快捷条（触屏设备固定底部，≥44px；复用防误触+现有开平仓路径）
+  let tb = document.getElementById('ktThumbBar');
+  if (!tb && typeof document !== 'undefined') {
+    tb = document.createElement('div');
+    tb.id = 'ktThumbBar';
+    tb.innerHTML = '<button id="ktTbLong" class="kt-tb-long">▲ 开多</button><button id="ktTbClose" class="kt-tb-close">平仓</button><button id="ktTbShort" class="kt-tb-short">▼ 开空</button><button id="ktTbPanel" class="kt-tb-panel">🧭 面板</button>';
+    document.body.appendChild(tb);
+    tb.querySelector('#ktTbLong').addEventListener('click', () => kchartTradeOpen('long'));
+    tb.querySelector('#ktTbShort').addEventListener('click', () => kchartTradeOpen('short'));
+    tb.querySelector('#ktTbClose').addEventListener('click', () => openOrderManager({ tab: 'positions' }));
+    tb.querySelector('#ktTbPanel').addEventListener('click', () => kToggleTradePanel());
+  }
+  if (tb) tb.style.display = (typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer:coarse)').matches) ? 'flex' : 'none';
   const stEl = document.getElementById('ktPanelState');
   if (stEl) {
     const sOn = cfg.srsiAutoOn, aOn = typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive();

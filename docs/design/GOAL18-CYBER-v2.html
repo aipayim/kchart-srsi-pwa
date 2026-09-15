@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SRSI OS · 赛博设计稿 v2 — 1:1 全页面</title>
+<style>
+:root{--bg:#04060c;--pn:rgba(10,16,30,.72);--cy:#00e5ff;--mg:#ff2d95;--gr:#00ff9d;--rd:#ff3b5c;--am:#ffb300;--pu:#b388ff;--tx:#d7e5f5;--tx2:#5f7a95;--line:rgba(0,229,255,.16)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--tx);font:13px/1.5 'SF Mono',ui-monospace,'Cascadia Code',Consolas,monospace;overflow-x:hidden}
+/* 全局氛围：网格 + 扫描 + 暗角 + 噪点 */
+body::before{content:'';position:fixed;inset:0;background:linear-gradient(rgba(0,229,255,.03) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.03) 1px,transparent 1px);background-size:44px 44px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse at 50% -20%,rgba(0,229,255,.08),transparent 55%),radial-gradient(ellipse at 100% 110%,rgba(255,45,149,.06),transparent 50%);pointer-events:none;z-index:0}
+.scan{position:fixed;inset:0;pointer-events:none;z-index:99;background:repeating-linear-gradient(0deg,rgba(0,0,0,.12) 0 1px,transparent 1px 3px);mix-blend-mode:overlay;opacity:.5}
+.app{position:relative;z-index:1;max-width:1440px;margin:0 auto;padding:10px 12px 90px}
+/* 顶栏 */
+.top{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--pn);border:1px solid var(--line);clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px));backdrop-filter:blur(10px)}
+.logo{font-weight:800;font-size:15px;letter-spacing:2px;color:var(--cy);text-shadow:0 0 14px rgba(0,229,255,.6)}
+.logo b{color:var(--mg);text-shadow:0 0 14px rgba(255,45,149,.55)}
+.price{font-size:20px;font-weight:800;color:var(--gr);text-shadow:0 0 16px rgba(0,255,157,.45);font-variant-numeric:tabular-nums}
+.pct{font-size:12px;color:var(--gr)}
+.chip{font-size:10.5px;padding:4px 12px;border:1px solid var(--line);color:var(--tx2);letter-spacing:1px;clip-path:polygon(6px 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%,0 6px);cursor:pointer;transition:.15s;background:transparent}
+.chip.on{color:var(--cy);border-color:var(--cy);background:rgba(0,229,255,.07);box-shadow:0 0 12px rgba(0,229,255,.25),inset 0 0 12px rgba(0,229,255,.06)}
+.chip.g.on{color:var(--gr);border-color:var(--gr);background:rgba(0,255,157,.07);box-shadow:0 0 12px rgba(0,255,157,.25)}
+.sp{flex:1}
+.ver{font-size:9px;color:var(--tx2);letter-spacing:1px}
+/* 主区布局 */
+.main{display:grid;grid-template-columns:1fr 232px;gap:10px;margin-top:10px}
+.panel{background:var(--pn);border:1px solid var(--line);position:relative;backdrop-filter:blur(8px)}
+.panel::before{content:'';position:absolute;top:-1px;left:-1px;width:14px;height:14px;border-top:2px solid var(--cy);border-left:2px solid var(--cy);opacity:.7}
+.panel::after{content:'';position:absolute;bottom:-1px;right:-1px;width:14px;height:14px;border-bottom:2px solid var(--cy);border-right:2px solid var(--cy);opacity:.7}
+.ph{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:10px;letter-spacing:2px;color:var(--tx2);border-bottom:1px solid var(--line)}
+.ph b{color:var(--tx)}
+.ph .dot{width:6px;height:6px;background:var(--gr);border-radius:50%;box-shadow:0 0 8px var(--gr);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.chart{height:430px;position:relative}
+canvas{width:100%;height:100%;display:block}
+/* 信号卡（左居中 HUD） */
+.sig{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:225px;background:rgba(4,8,16,.88);border:1px solid rgba(0,255,157,.5);box-shadow:0 0 24px rgba(0,255,157,.14),inset 0 0 20px rgba(0,255,157,.04);padding:11px 13px;clip-path:polygon(0 0,calc(100% - 12px) 0,100% 12px,100% 100%,12px 100%,0 calc(100% - 12px));animation:floaty 4s ease-in-out infinite}
+@keyframes floaty{0%,100%{transform:translateY(-50%)}50%{transform:translateY(calc(-50% - 4px))}}
+.sig .k{font-size:9px;color:var(--tx2);letter-spacing:2px}
+.sig .a{font-size:19px;font-weight:800;color:var(--gr);text-shadow:0 0 16px rgba(0,255,157,.5);margin:3px 0}
+.sig .tm{display:inline-block;font-size:9px;padding:1px 8px;margin-left:6px;color:var(--gr);border:1px solid rgba(0,255,157,.5);background:rgba(0,255,157,.08);vertical-align:2px;letter-spacing:1px}
+.sig .r{font-size:10px;color:var(--tx);opacity:.85;margin-top:2px}
+.sig .sl{font-size:10px;margin-top:6px;font-variant-numeric:tabular-nums;color:var(--am)}
+.sig .flow{height:2px;margin-top:8px;background:linear-gradient(90deg,transparent,var(--gr),transparent);background-size:50% 100%;animation:flow 1.6s linear infinite}
+@keyframes flow{0%{background-position:-50% 0}100%{background-position:150% 0}}
+/* 右栏融合卡 */
+.side{display:flex;flex-direction:column;gap:10px}
+.fcard{background:var(--pn);border:1px solid var(--line);padding:9px 11px;clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,10px 100%,0 calc(100% - 10px))}
+.fcard .t{font-size:9px;color:var(--tx2);letter-spacing:2px;display:flex;justify-content:space-between}
+.fcard .v{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;margin-top:2px}
+.fcard .s{font-size:9px;color:var(--tx2);margin-top:2px}
+.bars{display:flex;gap:3px;margin-top:7px;align-items:flex-end;height:26px}
+.bars i{flex:1;background:linear-gradient(180deg,var(--cy),rgba(0,229,255,.15));opacity:.8;animation:eq 1.4s ease-in-out infinite}
+.bars i:nth-child(2n){animation-delay:.2s;background:linear-gradient(180deg,var(--mg),rgba(255,45,149,.15))}
+.bars i:nth-child(3n){animation-delay:.45s}
+@keyframes eq{0%,100%{height:30%}50%{height:95%}}
+/* 子图区 */
+.subs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:10px}
+.sub .sc{height:88px}
+.sub .sv{font-size:10px;margin-top:4px;color:var(--tx2)}
+.sub .sv b{color:var(--cy)}
+/* 底部交易面板 */
+.trade{margin-top:10px;display:grid;grid-template-columns:1fr 300px;gap:10px}
+.lev{display:flex;align-items:center;gap:10px;padding:4px 0}
+.lev input[type=range]{flex:1;accent-color:var(--cy)}
+.lev b{color:var(--cy);font-size:16px;min-width:34px;text-align:right}
+.amt{display:flex;gap:8px;margin:8px 0}
+.amt div{flex:1;border:1px solid var(--line);padding:5px 9px;font-size:10px;color:var(--tx2)}
+.amt b{display:block;font-size:14px;color:var(--tx);margin-top:2px}
+.btns{display:flex;gap:8px;margin-top:8px}
+.btns button{flex:1;min-height:42px;font-family:inherit;font-size:13px;font-weight:800;letter-spacing:1px;cursor:pointer;border:0;clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.bL{background:linear-gradient(135deg,rgba(0,255,157,.2),rgba(0,255,157,.05));color:var(--gr);border:1px solid rgba(0,255,157,.6)!important;box-shadow:0 0 18px rgba(0,255,157,.15)}
+.bS{background:linear-gradient(135deg,rgba(255,59,92,.2),rgba(255,59,92,.05));color:var(--rd);border:1px solid rgba(255,59,92,.6)!important;box-shadow:0 0 18px rgba(255,59,92,.15)}
+.bC{background:rgba(255,179,0,.1);color:var(--am);border:1px solid rgba(255,179,0,.5)!important}
+/* 持仓行 */
+.pos{display:flex;justify-content:space-between;font-size:10.5px;padding:5px 0;border-top:1px dashed rgba(95,122,149,.25);font-variant-numeric:tabular-nums}
+.pos .pn{color:var(--gr)} .pos .pn.neg{color:var(--rd)}
+.tick{animation:tick 1s steps(2) infinite}
+@keyframes tick{0%{opacity:1}50%{opacity:.55}}
+@media(max-width:1000px){.main{grid-template-columns:1fr}.side{flex-direction:row;overflow-x:auto}.fcard{min-width:150px}.subs{grid-template-columns:1fr 1fr}.trade{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="scan"></div>
+<div class="app">
+  <div class="top">
+    <span class="logo">SRSI<b>_OS</b></span>
+    <span class="chip on">BTCUSDT ▾</span>
+    <span class="price" id="px">61,284.5</span><span class="pct">+2.14%</span>
+    <span class="chip">5m</span><span class="chip on">15m</span><span class="chip">1h</span><span class="chip">4h</span><span class="chip">1d</span>
+    <span class="sp"></span>
+    <span class="chip on">α信号✓</span><span class="chip on">实盘信号✓</span><span class="chip g on">盯盘✓</span>
+    <span class="chip">🧭交易面板</span><span class="chip">📋纪律</span>
+    <span class="ver">v2.0 // GRID-LINK</span>
+  </div>
+
+  <div class="main">
+    <div class="panel">
+      <div class="ph"><span class="dot"></span>MAIN // 15m · 300根 · SRSI R14/S9 <b style="margin-left:auto;color:var(--gr)">Alpha◆多</b><span style="color:var(--rd)">SRSI▲2</span></div>
+      <div class="chart">
+        <canvas id="cv"></canvas>
+        <div class="sig">
+          <div class="k">BTCUSDT · 15m SRSI</div>
+          <div class="a">做多<span class="tm">时机优</span></div>
+          <div class="r">Alpha多头·15m超卖回升=顺势回调买点</div>
+          <div class="sl">SL 60,400 / TP 63,200 · EMA↑</div>
+          <div class="flow"></div>
+        </div>
+      </div>
+    </div>
+    <div class="side">
+      <div class="fcard"><div class="t">期末权益<span>回测365d</span></div><div class="v" style="color:var(--gr);text-shadow:0 0 14px rgba(0,255,157,.4)">+136.9%</div><div class="s">Sharpe 1.13 · DD 18.1%</div><div class="bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+      <div class="fcard"><div class="t">资金费率<span>双所</span></div><div class="v" style="color:var(--mg)">-0.012%</div><div class="s tick">更新 4s 前</div></div>
+      <div class="fcard"><div class="t">持仓量 OI<span>双所</span></div><div class="v">$18.42B</div><div class="s">5点 +0.8% 流入</div></div>
+      <div class="fcard"><div class="t">多空比<span>账户</span></div><div class="v" style="color:var(--cy)">53.4 / 46.6</div><div class="s">Taker 买 1.08</div></div>
+      <div class="fcard"><div class="t">恐惧贪婪<span>情绪</span></div><div class="v" style="color:var(--am)">71 贪婪</div></div>
+      <div class="fcard"><div class="t">AI 战绩<span>paper</span></div><div class="v" style="color:var(--pu)">62%</div><div class="s">+148.2 / 87笔</div></div>
+    </div>
+  </div>
+
+  <div class="subs">
+    <div class="panel sub"><div class="ph">SRSI // 15m</div><div class="sc"><canvas id="s1"></canvas></div><div class="sv">K <b>23.4</b> D <b>31.2</b> · 钩<b style="color:var(--gr)">金钩✓</b> · 超卖回升</div></div>
+    <div class="panel sub"><div class="ph">MACD // 15m</div><div class="sc"><canvas id="s2"></canvas></div><div class="sv">DIF <b>-12.1</b> DEA <b>-18.7</b> · 柱收敛↑</div></div>
+    <div class="panel sub"><div class="ph">RSI // 15m</div><div class="sc"><canvas id="s3"></canvas></div><div class="sv">RSI <b>38.6</b> · 离超卖区</div></div>
+  </div>
+
+  <div class="trade">
+    <div class="panel">
+      <div class="ph">⚡ 快捷合约 // 模拟真实交易</div>
+      <div style="padding:10px 14px">
+        <div class="lev"><span style="font-size:10px;color:var(--tx2)">杠杆</span><input type="range" min="1" max="30" value="10"><b>10x</b></div>
+        <div class="amt">
+          <div>现货 USDT 池<b>$2,840.22</b></div>
+          <div>永续 U 本位<b>$1,190.50</b></div>
+          <div>BTC 库存<b>0.0185</b></div>
+        </div>
+        <div class="btns"><button class="bL">▲ 币本位 开多</button><button class="bC">平仓</button><button class="bS">▼ U本位 开空</button></div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph">◈ 持仓 // HEDGE <span style="margin-left:auto;color:var(--cy);cursor:pointer">订单管理 →</span></div>
+      <div style="padding:8px 12px">
+        <div class="pos"><span>BTC 多 10x</span><span>@60,120</span><span class="pn">+$194.2 (+1.9%)</span></div>
+        <div class="pos"><span>ETH 空 5x</span><span>@3,412</span><span class="pn neg">-$12.8 (-0.4%)</span></div>
+        <div class="pos"><span style="color:var(--tx2)">今日 AI 已用 3/20 · 预设 标准</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// 动态 K 线（随机漫步 + 发光蜡烛 + Alpha/SRSI 信号点 + 网格 + 尾端脉冲）
+function candles(cv, n, base, vol) {
+  const ctx = cv.getContext('2d');
+  const dpr = devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  cv.width = W * dpr; cv.height = H * dpr; ctx.scale(dpr, dpr);
+  let p = base; const data = [];
+  for (let i = 0; i < n; i++) { const o = p; p *= 1 + (Math.random() - 0.47) * vol; const c = p; data.push([o, c, Math.min(o,c)*(1+Math.random()*vol*.6), Math.max(o,c)*(1-Math.random()*vol*.6)]); }
+  const lo = Math.min(...data.map(d=>d[3])), hi = Math.max(...data.map(d=>d[2]));
+  const Y = v => H - 26 - (v - lo) / (hi - lo) * (H - 40);
+  const X = i => 8 + i / (n - 1) * (W - 30);
+  let t = 0;
+  (function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = 'rgba(0,229,255,.07)'; ctx.lineWidth = 1;
+    for (let y = 20; y < H - 20; y += 44) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+    for (let x = 0; x < W; x += 66) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
+    const cw = (W - 38) / n * 0.62;
+    data.forEach(([o, c, h, l], i) => {
+      const up = c >= o, x = X(i);
+      ctx.strokeStyle = up ? 'rgba(0,255,157,.75)' : 'rgba(255,59,92,.75)';
+      ctx.fillStyle = up ? 'rgba(0,255,157,.28)' : 'rgba(255,59,92,.28)';
+      if (i >= n - 3) { ctx.shadowColor = up ? '#00ff9d' : '#ff3b5c'; ctx.shadowBlur = 12; }
+      ctx.beginPath(); ctx.moveTo(x, Y(h)); ctx.lineTo(x, Y(l)); ctx.stroke();
+      const y1 = Y(Math.max(o, c)), y2 = Y(Math.min(o, c));
+      ctx.fillRect(x - cw / 2, y1, cw, Math.max(1.5, y2 - y1)); ctx.shadowBlur = 0;
+    });
+    // EMA 线
+    ctx.beginPath(); ctx.strokeStyle = 'rgba(255,45,149,.55)'; ctx.lineWidth = 1.4;
+    let e = data[0][1];
+    data.forEach(([o, c], i) => { e = e * 0.94 + c * 0.06; i ? ctx.lineTo(X(i), Y(e)) : ctx.moveTo(X(i), Y(e)); });
+    ctx.stroke(); ctx.lineWidth = 1;
+    // Alpha ◆ 信号点
+    [Math.floor(n*0.3), Math.floor(n*0.62)].forEach(i => { const x = X(i), y = Y(data[i][3]) + 14;
+      ctx.fillStyle = '#00e5ff'; ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 14;
+      ctx.beginPath(); ctx.moveTo(x, y-6); ctx.lineTo(x+6, y); ctx.lineTo(x, y+6); ctx.lineTo(x-6, y); ctx.closePath(); ctx.fill(); ctx.shadowBlur = 0; });
+    // 尾端脉冲
+    const lx = X(n - 1), ly = Y(data[n-1][1]);
+    const r = 3 + Math.sin(t / 12) * 2.2;
+    ctx.strokeStyle = 'rgba(0,255,157,.8)'; ctx.shadowColor = '#00ff9d'; ctx.shadowBlur = 16;
+    ctx.beginPath(); ctx.arc(lx, ly, r + 4, 0, 7); ctx.stroke();
+    ctx.fillStyle = '#00ff9d'; ctx.beginPath(); ctx.arc(lx, ly, 2.4, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+    // 价格尾线
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(0,255,157,.35)';
+    ctx.beginPath(); ctx.moveTo(0, ly); ctx.lineTo(W, ly); ctx.stroke(); ctx.setLineDash([]);
+    t++;
+  })();
+}
+setInterval(() => { const el = document.getElementById('px'); const v = 61000 + Math.random() * 500; el.textContent = v.toLocaleString('en-US', { minimumFractionDigits: 1 }); }, 900);
+function sub(cv, col, seed) { const ctx = cv.getContext('2d'); const dpr = devicePixelRatio || 1; const W = cv.clientWidth, H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; ctx.scale(dpr, dpr);
+  ctx.strokeStyle = col + '55'; ctx.beginPath();
+  let v = 0.5; for (let i = 0; i < 60; i++) { v = Math.min(.92, Math.max(.08, v + (Math.sin(i * seed) + Math.random() - .5) * .09)); i ? ctx.lineTo(i / 59 * W, H - v * H) : ctx.moveTo(0, H - v * H); }
+  ctx.stroke(); ctx.strokeStyle = 'rgba(0,229,255,.1)'; ctx.strokeRect(0, H * .2, W, H * .6); }
+window.addEventListener('resize', () => location.reload());
+setTimeout(() => { candles(document.getElementById('cv'), 90, 60000, 0.012); sub(document.getElementById('s1'), '#00e5ff', .35); sub(document.getElementById('s2'), '#ff2d95', .5); sub(document.getElementById('s3'), '#b388ff', .42); }, 60);
+</script>
+</body>
+</html>
