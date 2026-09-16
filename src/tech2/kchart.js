@@ -286,7 +286,6 @@ export function defaultKConfig() {
     srsiAutoOn: false,          // SRSI 自动交易总开关
     tradePanelOpen: false,      // GOAL13：交易面板展开状态（记忆）
     ruleMonitorOpen: false,     // 规则监测面板展开状态（记忆；v1.5.52 起同时是 HUD 悬浮卡总开关）
-    ruleMonitorRmOpen: false,   // v1.5.52：HUD 内「📋 规则监测」区展开状态
     ruleHudPos: null,           // v1.5.52：HUD 拖动后位置 {x,y}（相对 .kchart-box px；null=CSS 默认）
     sigOverlay: true,           // GOAL13：主图实盘信号层（Alpha/SRSI 信号映射，总开关）
     btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
@@ -419,7 +418,6 @@ function normalizeCfg(c) {
   if (!['alpha', 'srsi', 'combo'].includes(c.btStrategy)) c.btStrategy = 'alpha';
   if (typeof c.tradePanelOpen !== 'boolean') c.tradePanelOpen = false; // GOAL13：交易面板默认收缩
   if (typeof c.ruleMonitorOpen !== 'boolean') c.ruleMonitorOpen = false; // 规则监测面板默认收缩
-  if (typeof c.ruleMonitorRmOpen !== 'boolean') c.ruleMonitorRmOpen = false; // v1.5.52：HUD 内 RM 区展开状态
   if (!c.ruleHudPos || typeof c.ruleHudPos !== 'object' || typeof c.ruleHudPos.x !== 'number' || typeof c.ruleHudPos.y !== 'number') c.ruleHudPos = null; // v1.5.52：HUD 位置（保留对象或 null）
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
@@ -1035,7 +1033,6 @@ export function discLiveInfo(sym, analysis) {
 }
 
 let _lastDiscAnalysis = null;
-let _lastDiscEnergy = null; // v1.5.52：renderTradeDiscipline 末尾缓存 {shortFactors, multiTf}，供 HUD 动力卡复用
 
 // ---- 方向基准死区滞回状态（每 币|基准周期 一份，仅内存，不持久化）----
 // 由 updateHorizonState 在 renderKChart 每次推进（DOM 未重建也推进，保证 CONFIRM 计数正确），
@@ -1390,7 +1387,6 @@ export function renderTradeDiscipline(hz, capMin) {
   `;
 
   // v1.5.52：缓存能量场数据（HUD 动力卡用）；面板已收起（HUD 接管）时跳过球初始化，避免抢走 HUD 球的 RAF
-  _lastDiscEnergy = { shortFactors, multiTf };
   const _discWrapEl = document.getElementById('kchartDiscWrap');
   const _discWrapClosed = !!(_discWrapEl && _discWrapEl.classList.contains('closed'));
   if (!_discWrapClosed) initEnergyBall(box, shortFactors, multiTf, sym);
@@ -1681,60 +1677,15 @@ function initEnergyBall(box, shortFactors, multiTf, sym, size) {
   _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
 }
 
-// ============ v1.5.52 HUD 悬浮卡（动力卡 + 规则监测，absolute 贴主图 canvas，可拖动）============
-let _hudCardSig = ''; // HUD 动力卡 DOM 重建签名（避免每 tick 重建 innerHTML + 能量球）
-
-// 判决块「信号指示」行：与 renderTradeDiscipline 同逻辑，数据源 _lastDiscAnalysis（同款类名 disc-signal-*）
-function hudSignalHtml(a) {
-  const entry = (a && a.entry) || { dir: '观望' };
-  const _dirLong = String(entry.dir || '').startsWith('看多');
-  const _dirShort = String(entry.dir || '').startsWith('看空');
-  const _dirClear = _dirLong || _dirShort;
-  const _tsevAct = a && a.tsev ? a.tsev.actionable : null; // null = 未启用
-  let _sigCls, _sigTxt;
-  if (_dirClear) {
-    if (_tsevAct === true) { _sigCls = 'disc-signal-go'; _sigTxt = '✅ 可交易信号（TSEV 置信达标、方向明确）'; }
-    else if (_tsevAct === false) { _sigCls = 'disc-signal-wait'; _sigTxt = '⚠ 方向' + (_dirLong ? '偏多' : '偏空') + '（TSEV 置信不足，谨慎轻仓）'; }
-    else { _sigCls = 'disc-signal-wait'; _sigTxt = '⏳ 方向' + (_dirLong ? '偏多' : '偏空') + '（经典逻辑，TSEV 未启用）'; }
-  } else {
-    _sigCls = 'disc-signal-wait'; _sigTxt = '⏸ 观望 / 信号不足（样本少 · 置信低 · 方向分歧）';
-  }
-  return `<div class="disc-signal ${_sigCls}">${_sigTxt}</div>`;
-}
-
-// HUD 卡实时价（每 tick 由 renderDiscHud 末尾直接改写 textContent；span id=discHudPrice 避开纪律面板 #kchartDiscPrice）
-function updateHudLivePrice(card, analysis) {
-  const el = card.querySelector('#discHudPrice');
-  if (!el) return;
-  const info = discLiveInfo(cfg.symbol, analysis);
-  if (!info) { el.textContent = '—'; return; }
-  el.textContent = info.price.toFixed(2);
-  el.className = 'disc-price-val ' + info.priceCls;
-  const distEl = card.querySelector('#discHudDist');
-  if (distEl) {
-    const tTxt = info.toTarget != null ? ('目标 <b class="' + info.targetCls + '">' + (info.toTarget >= 0 ? '+' : '') + info.toTarget.toFixed(2) + '%</b>') : '';
-    const sTxt = info.toStop != null ? ('止损 <b class="' + info.stopCls + '">' + (info.toStop >= 0 ? '+' : '') + info.toStop.toFixed(2) + '%</b>') : '';
-    distEl.innerHTML = (tTxt + (tTxt && sTxt ? ' · ' : '') + sTxt) || '—';
-  }
-}
-
-// HUD 事件（幂等：data-hud-bound；close/RM 折叠用 data-act 事件委托，拖动用 pointer events + hudClampPos 钳制）
+// HUD 事件绑定（幂等）：✕ 关闭 + 标题栏拖动（位置 clamp + cfg.ruleHudPos 持久化）
 function bindHudEvents(hud) {
   if (!hud || hud.dataset.hudBound) return;
   hud.dataset.hudBound = '1';
   hud.addEventListener('click', (e) => {
     const t = e.target.closest('[data-act]');
-    if (!t) return;
-    if (t.dataset.act === 'close') {
+    if (t && t.dataset.act === 'close') {
       // 复用既有总开关（window.kToggleRuleMonitor 已双绑 main.js/kchartApp.js — GOAL13 红线）
       if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
-    } else if (t.dataset.act === 'rmToggle') {
-      cfg.ruleMonitorRmOpen = !cfg.ruleMonitorRmOpen;
-      persist();
-      const rb = document.getElementById('discHudRmBody');
-      const ra = document.getElementById('discHudRmArrow');
-      if (rb) rb.style.display = cfg.ruleMonitorRmOpen ? '' : 'none';
-      if (ra) ra.textContent = cfg.ruleMonitorRmOpen ? '▾' : '▸';
     }
   });
   const bar = hud.querySelector('#discHudBar');
@@ -1765,79 +1716,24 @@ function bindHudEvents(hud) {
   bar.addEventListener('pointercancel', endDrag);
 }
 
-// HUD 主渲染：renderKChart / refreshPanels 尾部（updateRuleMonitorTick 旁）调用；开关 = cfg.ruleMonitorOpen
 export function renderDiscHud() {
   if (typeof document === 'undefined') return;
   const hud = document.getElementById('discHud');
   if (!hud) return;
-  const body = document.getElementById('discHudBody');
-  const card = document.getElementById('discHudCard');
-  const show = !!cfg.ruleMonitorOpen && !!body && !!card;
-  const discWrap = document.getElementById('kchartDiscWrap');
-  if (!show) {
-    hud.style.display = 'none';
-    // HUD 关闭 → 恢复纪律面板展开状态（不触碰 cfg.discOpen 本身）
-    if (discWrap) discWrap.classList.toggle('closed', !cfg.discOpen);
-    return;
-  }
+  // HUD = 悬浮的「规则监测」卡；能量球/动力卡始终留在交易纪律分析原位（v1.5.53 修正）
+  const body = document.getElementById('discHudRmBody');
+  const show = !!cfg.ruleMonitorOpen && !!body;
+  if (!show) { hud.style.display = 'none'; return; }
   hud.style.display = '';
-  // HUD 开启 → 纪律面板临时收起（动力卡由 HUD 提供）
-  if (discWrap) discWrap.classList.add('closed');
   const kbox = hud.parentElement;
   // 位置：优先拖动后保存的 cfg.ruleHudPos（相对 .kchart-box px），否则 CSS 默认 top/left
   if (cfg.ruleHudPos && typeof cfg.ruleHudPos.x === 'number' && typeof cfg.ruleHudPos.y === 'number') {
     hud.style.left = cfg.ruleHudPos.x + 'px';
     hud.style.top = cfg.ruleHudPos.y + 'px';
   } else { hud.style.left = ''; hud.style.top = ''; }
-  // body 高度跟随主图容器（34 ≈ bar 高 + padding）
   // 高度上限：容器高与视口高取小（主图容器常远超视口——同屏意义下以视口为准），再减 bar+padding 余量
   const hCap = Math.max(120, Math.min(kbox ? kbox.clientHeight : 99999, (typeof innerHeight !== 'undefined' ? innerHeight : 99999)) - 34);
   if (kbox) body.style.maxHeight = hCap + 'px';
-  // ---- 下半部 RM 区：展开/收起状态 ----
-  const rmBody = document.getElementById('discHudRmBody');
-  const rmArrow = document.getElementById('discHudRmArrow');
-  if (rmBody) rmBody.style.display = cfg.ruleMonitorRmOpen ? '' : 'none';
-  if (rmArrow) rmArrow.textContent = cfg.ruleMonitorRmOpen ? '▾' : '▸';
-  // ---- 上半部动力卡（判决块 + 能量球，同纪律面板类名）----
-  const a = _lastDiscAnalysis;
-  const en = _lastDiscEnergy;
-  const energyReady = !!(en && en.shortFactors && en.shortFactors.length);
-  const sigNow = (a && a.entry)
-    ? (a.entry.dir + a.entry.conf + '|' + String(a.entry.reason || '').length + '|s' + (a.sizing ? a.sizing.mult : 0))
-    : (a ? 'noentry' : 'none');
-  if (!a || !card) {
-    if (card && _hudCardSig !== 'empty') { card.innerHTML = '<div class="kchart-disc-empty">⏳ 数据不足</div>'; _hudCardSig = 'empty'; }
-  } else if (_hudCardSig !== sigNow || !card.querySelector('canvas')) {
-    // 重建 DOM（能量球在卡内复用同 id discEnergyBall/discEnergyTip：initEnergyBall 用 box.querySelector 卡内查找不冲突）
-    const entry = a.entry || {};
-    const dirColor = String(entry.dir || '').startsWith('看多') ? 'disc-bull' : String(entry.dir || '').startsWith('看空') ? 'disc-bear' : 'disc-neutral';
-    const confColor = entry.confLabel === '高' ? 'conf-high' : entry.confLabel === '中' ? 'conf-mid' : 'conf-low';
-    card.innerHTML = `
-      <div class="disc-block disc-block-verdict">
-        <div class="disc-action ${dirColor}">
-          <span class="disc-dir">${entry.dir}</span>
-          <span class="disc-conf ${confColor}">${entry.confLabel} · ${entry.conf}</span>
-          <span class="disc-risk">${entry.risk}</span>
-        </div>
-        ${hudSignalHtml(a)}
-        <div class="disc-reason">${esc(entry.reason)}</div>
-        <div class="disc-nowprice">当前价: <span id="discHudPrice">—</span> <span id="discHudDist" class="disc-dist"></span></div>
-        <div class="disc-plan"><span class="disc-plan-item">入场: ${entry.entryCue}</span><span class="disc-plan-item">目标: ${entry.target != null ? entry.target.toFixed(2) : '—'}</span><span class="disc-plan-item">止损: ${entry.stop != null ? entry.stop.toFixed(2) : '—'}</span><span class="disc-plan-item disc-plan-size">建议仓位: ×${a.sizing.mult}</span></div>
-      </div>
-      ${energyReady ? `
-      <div class="disc-block disc-block-energyball">
-        <div class="disc-blk-label">短线多空能量场（≤4h 多维加权·含钩反转）</div>
-        <div class="disc-energy-wrap">
-          <canvas id="discEnergyBall" width="220" height="220"></canvas>
-          <div id="discEnergyTip" class="disc-energy-tip" style="display:none"></div>
-        </div>
-        <div class="disc-energy-verdict">短线共识: ${en.multiTf.verdict}（加权${(en.multiTf.ratio * 100).toFixed(0)}%多）${en.multiTf.hookOverride ? ' · ⚠ 低位带+1h钩反转动能' : ''}</div>
-        <div class="disc-energy-hint">悬停/点击球上节点看五因子明细</div>
-      </div>` : ''}`;
-    _hudCardSig = sigNow;
-    if (energyReady) initEnergyBall(card, en.shortFactors, en.multiTf, cfg.symbol, 220); // size=220 → 内联样式 220px，命中检测 getBoundingClientRect 自适应
-  }
-  if (a) updateHudLivePrice(card, a);
   bindHudEvents(hud);
 }
 

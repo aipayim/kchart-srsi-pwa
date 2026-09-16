@@ -740,9 +740,3 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .disc-hud-x{cursor:pointer;padding:0 4px;opacity:.7;font-size:12px}
 .disc-hud-x:hover{opacity:1}
 .disc-hud-body{padding:6px 8px 8px;overflow-y:auto;font-size:10px}
-.disc-hud-card .disc-block{margin:0 0 6px;background:rgba(255,255,255,.03);border:none;padding:6px 8px}
-.disc-hud-card .disc-energy-wrap{display:flex;justify-content:center}
-.disc-hud-card canvas{width:220px;height:220px}
-.disc-hud-rm{margin-top:2px;border-top:1px dashed var(--border);padding-top:4px}
-.disc-hud-rmhead{font-size:10px;font-weight:700;color:var(--accent);cursor:pointer;padding:2px 0;user-select:none}
-.disc-hud-rmbody{max-height:46vh;overflow-y:auto;margin-top:4px;font-size:9px}
