@@ -634,13 +634,16 @@ function ruleStateBadge(st) {
   return '<span class="rm-badge rm-off">–</span>';
 }
 export function renderRuleMonitor() {
-  const box = (typeof document !== 'undefined') && document.getElementById('kchartRuleMonitor');
+  // v1.5.52 HUD 模式：存在 #discHudRmBody 时渲染进 HUD 内的 RM 区（流内 #kchartRuleMonitor 保留为无 HUD 时的回退）
+  const _hudBody = (typeof document !== 'undefined') && document.getElementById('discHudRmBody');
+  const box = _hudBody || ((typeof document !== 'undefined') && document.getElementById('kchartRuleMonitor'));
   if (!box) return;
   const wrap = document.getElementById('ruleMonitorWrap');
   const cfg = cfgNow || (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.getConfig());
   if (!cfg) return;
   const open = !!cfg.ruleMonitorOpen;
-  if (wrap) wrap.classList.toggle('closed', !open);
+  // HUD 模式：RM 内容在悬浮卡内展开，流内面板永久收起（避免陈旧内容露出；kToggleRuleMonitor 变为 HUD 总开关）
+  if (wrap) wrap.classList.toggle('closed', !open || !!_hudBody);
   if (!open) { box.innerHTML = ''; _rm.lastRenderSig = ''; return; }
   const snap = _rm.lastSnapshot;
   if (!snap || !snap.ok) {
@@ -774,10 +777,22 @@ export function kToggleRuleMonitor() {
   cfg.ruleMonitorOpen = !cfg.ruleMonitorOpen;
   if (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.__persist) window.kchartApi.__persist();
   forceRender();
+  try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 开/关即时反馈（不等下一 tick）
 }
 
 // 单测钩子
 export function __ruleMonitorTestState() { return { mode: _rm.mode, n: _rm.signals.length, signals: _rm.signals }; }
+
+// v1.5.52 纯函数：HUD 卡位置 clamp 到主图容器内（留 4px 边距；卡片宽/高超过容器则贴左上 4px）。
+// 非数字输入返回默认位置 {x:4,y:4}。
+export function hudClampPos(x, y, w, h, bw, bh) {
+  if (![x, y, w, h, bw, bh].every(v => typeof v === 'number' && isFinite(v))) return { x: 4, y: 4 };
+  const cx = bw - w - 4, cy = bh - h - 4;
+  return {
+    x: Math.max(4, Math.min(cx < 4 ? 4 : cx, x)),
+    y: Math.max(4, Math.min(cy < 4 ? 4 : cy, y))
+  };
+}
 
 // ============================================================
 // P2：一键优选 + 参数版本化
@@ -785,7 +800,7 @@ export function __ruleMonitorTestState() { return { mode: _rm.mode, n: _rm.signa
 // 双窗一致（近窗 45d + 长窗 90d 相对基线都正贡献）才推荐；人工确认才应用。
 // 版本化：rv-<ts>-<hash8>，localStorage 版本表（小）+ 应用即写 cfg（引擎每秒读 cfg 立即生效）。
 // ============================================================
-import { backtestSrsiAuto, fetchKlinesRange } from './kchart.js';
+import { backtestSrsiAuto, fetchKlinesRange, renderDiscHud } from './kchart.js';
 
 const OPT_DIMS = [
   { key: 'srsiAutoRegimeGate', label: 'regime闸门', values: ['off', 'confirm', 'size', 'tconf'] },

@@ -135,6 +135,16 @@
   </div>
   <div class="kchart-box" data-tab-block="kline">
     <canvas id="kchartCanvas"></canvas>
+    <div id="discHud" class="disc-hud" style="display:none">
+      <div class="disc-hud-bar" id="discHudBar">🧭 动力 · 规则监测<span class="disc-hud-x" data-act="close">✕</span></div>
+      <div class="disc-hud-body" id="discHudBody">
+        <div class="disc-hud-card" id="discHudCard"></div>
+        <div class="disc-hud-rm">
+          <div class="disc-hud-rmhead" data-act="rmToggle">📋 规则监测 <span id="discHudRmArrow">▸</span></div>
+          <div class="disc-hud-rmbody" id="discHudRmBody" style="display:none"></div>
+        </div>
+      </div>
+    </div>
   </div>
   <div class="kchart-settings closed" id="pwaSettings" data-tab-block="settings">
     <div class="kchart-ovhead" onclick="document.getElementById('pwaSettings').classList.toggle('closed')">⚙ 模拟真实交易设置（本地持久化）<span class="kchart-ovarrow">▾</span></div>
