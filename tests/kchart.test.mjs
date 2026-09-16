@@ -8,8 +8,9 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
+import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
 let passed = 0, failed = 0;
@@ -3392,6 +3393,117 @@ ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信�
     const r2 = subHoverAt(0.5, sym, tf, 'srsi', 500);
     ok('subHoverAt SRSI 全量→K/D 有值', r2 && r2.k != null && r2.d != null);
   } finally { globalThis.window = prevWin; }
+}
+
+console.log('\n[kchart: GOAL29 srsiAutoRegime regime 三态闸门]');
+{
+  // —— 合成序列构造：波动相位 + 漂移方向 ——
+  // 高波：400 根微幅 ±0.02 + 末 80 根大幅 ±2 → 当前 ATR% 为全窗最大 → 'high'
+  const hi = [];
+  for (let i = 0; i < 400; i++) hi.push(100 + (i % 2 ? 0.02 : -0.02));
+  for (let i = 0; i < 80; i++) hi.push(100 + (i % 2 ? 2 : -2));
+  const rHi = srsiAutoRegime(hi, hi[hi.length - 1]);
+  ok('srsiAutoRegime 高波→high', rHi.state === 'high' && rHi.minOk === true);
+  ok('srsiAutoRegime high 时 atrPct>=p75', rHi.atrPct != null && rHi.p75 != null && rHi.atrPct >= rHi.p75);
+
+  // 低波阴跌：130 根大幅 ±2 + 350 根幅度线性衰减(2→0.02)且逐根 -0.02 阴跌 → 当前 ATR% 全窗最小 + 价<EMA200 → 'lowdrift'
+  const ld = [];
+  let p = 100;
+  for (let i = 0; i < 130; i++) ld.push(100 + (i % 2 ? 2 : -2));
+  for (let i = 0; i < 350; i++) {
+    const amp = 2 - (2 - 0.02) * (i / 349);
+    p = p - 0.02;
+    ld.push(p + (i % 2 ? amp : -amp));
+  }
+  const rLd = srsiAutoRegime(ld, ld[ld.length - 1]);
+  ok('srsiAutoRegime 低波阴跌→lowdrift', rLd.state === 'lowdrift');
+  ok('srsiAutoRegime lowdrift 时 atrPct<p25 且 价<ema200', rLd.atrPct < rLd.p25 && rLd.ema200 != null && ld[ld.length - 1] < rLd.ema200);
+
+  // 低波但价在 EMA200 上方（阴跌改阴涨）→ 'mid'
+  const mid = [];
+  p = 100;
+  for (let i = 0; i < 130; i++) mid.push(i % 2 ? 102 : 98);
+  for (let i = 0; i < 350; i++) {
+    const amp = 2 - (2 - 0.02) * (i / 349);
+    p = p + 0.02; // 阴涨：波动衰减但价在上沿
+    mid.push(p + (i % 2 ? amp : -amp));
+  }
+  const rMid = srsiAutoRegime(mid, mid[mid.length - 1]);
+  ok('srsiAutoRegime 低波未阴跌→mid', rMid.state === 'mid');
+
+  // 中波（介于 P25~P75）：三段构造 200 微幅 + 200 大幅 + 80 中幅 → 当前(中幅)落在分布中段
+  const mm2 = [];
+  for (let i = 0; i < 200; i++) mm2.push(100 + (i % 2 ? 0.1 : -0.1));
+  for (let i = 0; i < 200; i++) mm2.push(100 + (i % 2 ? 2 : -2));
+  for (let i = 0; i < 80; i++) mm2.push(100 + (i % 2 ? 1 : -1));
+  const rMm = srsiAutoRegime(mm2, mm2[mm2.length - 1]);
+  ok('srsiAutoRegime 中波→mid', rMm.state === 'mid' && rMm.atrPct >= rMm.p25 && rMm.atrPct < rMm.p75);
+
+  // 冷启动：样本不足 → state=null/minOk=false
+  const cold = [];
+  for (let i = 0; i < 100; i++) cold.push(100 + (i % 2 ? 1 : -1));
+  const rCold = srsiAutoRegime(cold, cold[cold.length - 1]);
+  ok('srsiAutoRegime 冷启动→null', rCold.state === null && rCold.minOk === false);
+  ok('srsiAutoRegime 空输入→null 不抛', srsiAutoRegime([], null).state === null);
+  // w 覆盖：限制窗口（仍 ≥MINN）仍能分类
+  const rW = srsiAutoRegime(hi, hi[hi.length - 1], { w: 400 });
+  ok('srsiAutoRegime w=400 覆盖仍 high', rW.state === 'high');
+  // w < MINN 时闸门永不激活（防小窗口噪声）
+  const rTiny = srsiAutoRegime(hi, hi[hi.length - 1], { w: 100 });
+  ok('srsiAutoRegime w=100<MINN→null', rTiny.state === null && rTiny.minOk === false);
+  // THRESH 常量存在
+  ok('THRESH REGIME_GATE 常量', THRESH.REGIME_GATE_W === 480 && THRESH.REGIME_GATE_MINN === 360 && THRESH.REGIME_GATE_MID_SIZE === 0.5 && THRESH.REGIME_GATE_MID_CONFIRM === 1);
+  // 默认零行为：cfg 默认 gate=off / W=480
+  const dc = __defaultKConfig();
+  ok('cfg 默认 srsiAutoRegimeGate=off', dc.srsiAutoRegimeGate === 'off' && dc.srsiAutoRegimeW === 480);
+}
+
+console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
+{
+  // 合成 K 线：2400 根 15m（100 天）→ 600 根 1h，波动相位使 regime 可分类
+  const n15 = 2400;
+  const t0 = Date.UTC(2024, 0, 1);
+  const k15 = [], k1h = [], k30 = [], k4h = [];
+  const mkBar = (t, c) => [t, c, c * 1.001, c * 0.999, c, 0];
+  let c15 = 100;
+  for (let i = 0; i < n15; i++) {
+    const t = t0 + i * 15 * 60000;
+    const phase = i < n15 - 320 ? 0.02 : 2; // 末 320 根高波
+    c15 = c15 + (i % 2 ? phase : -phase) * (0.5 + Math.sin(i / 50) * 0.5);
+    k15.push(mkBar(t, c15));
+  }
+  const agg = (rows, minutes) => {
+    const ms = minutes * 60000; const out = []; let cur = null;
+    for (const r of rows) { const b = Math.floor(r[0] / ms) * ms;
+      if (!cur || cur[0] !== b) { if (cur) out.push(cur); cur = [b, r[1], Math.max(r[1], r[2]), Math.min(r[1], r[3]), r[4], 0]; }
+      else { cur[2] = Math.max(cur[2], r[2]); cur[3] = Math.min(cur[3], r[3]); cur[4] = r[4]; } }
+    if (cur) out.push(cur); return out;
+  };
+  for (const b of agg(k15, 60)) k1h.push(b);
+  for (const b of agg(k15, 30)) k30.push(b);
+  for (const b of agg(k15, 240)) k4h.push(b);
+  const srsi = (r, s) => ({ rsiPeriod: r, stochPeriod: s, smoothK: 2, smoothD: 3, overbought: 80, oversold: 20 });
+  const base = { ...__defaultKConfig(), srsiAutoMode: 'follow', srsiAutoBtMode: 'perp', srsiAutoPrincipal: 1000,
+    srsiAutoBasePct: 10, srsiAutoLev: 3, srsiAutoMaxSame: 3, srsiAutoUpper: 90, srsiAutoLower: 10,
+    srsiAutoW4h: 0, srsiAutoW1h: 0, srsiAutoW30m: 0, srsiAutoDanger: 'none',
+    srsiAutoUseCost: true, srsiAutoFeeRate: 0.00045, srsiAutoSlipBase: 0.0002, srsiAutoUseFunding: false,
+    srsiByTf: { '15m': srsi(14, 9), '30m': srsi(5, 14), '1h': srsi(21, 21), '4h': srsi(5, 5) } };
+  const kl = { '15m': k15, '1h': k1h, '30m': k30, '4h': k4h };
+  const rOff = backtestSrsiAuto('T', kl, base, 1000, null, []);
+  ok('回测 gate 默认 off → regimeStats=null', rOff.regimeStats === null);
+  const rOff2 = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'off' }, 1000, null, []);
+  ok('回测 gate off 显式=默认零行为', rOff2.finalEquity === rOff.finalEquity && rOff2.trades.length === rOff.trades.length);
+  const rBlk = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'block' }, 1000, null, []);
+  ok('回测 gate block → regimeStats.mode=block', rBlk.regimeStats && rBlk.regimeStats.mode === 'block');
+  ok('回测 gate block 遥测字段齐全', ['high', 'mid', 'lowdrift', 'na', 'blockedOpens'].every(k => typeof rBlk.regimeStats[k] === 'number'));
+  ok('回测 gate block 开仓数 ≤ off', rBlk.trades.filter(t => t.action === 'open').length <= rOff.trades.filter(t => t.action === 'open').length);
+  const rCf = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'confirm' }, 1000, null, []);
+  ok('回测 gate confirm → mode=confirm', rCf.regimeStats && rCf.regimeStats.mode === 'confirm');
+  const rSz = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'size', srsiAutoRegimeW: 480 }, 1000, null, []);
+  ok('回测 gate size → mode=size/w=480', rSz.regimeStats && rSz.regimeStats.mode === 'size' && rSz.regimeStats.w === 480);
+  // 非法 gate 值 → 回退 off（与 sanitize 同口径）
+  const rBad = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'bogus' }, 1000, null, []);
+  ok('回测 gate 非法值→off', rBad.regimeStats === null && rBad.finalEquity === rOff.finalEquity);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);

@@ -85,6 +85,12 @@ export const THRESH = {
   SLIP_K: 0.1,                      // 波动滑点: slip = base + SLIP_K×ATR%
   SLIP_CAP: 0.01,                   // 滑点上限(1%)
 
+  // GOAL29 regime 三态闸门（SRSI 卫星）：高波(1h ATR%≥滚动P75)照常 / 中波(P25~P75)降频或减仓 / 低波阴跌(<P25 且 价<1h EMA200)禁开新仓
+  REGIME_GATE_W: 480,               // 分位滚动窗（1h 根数，≈20 天；实盘受 KLINE_LIMIT=500 缓存约束）
+  REGIME_GATE_MINN: 360,            // 分位冷启动最少样本（不足则闸门不生效，行为同 off）
+  REGIME_GATE_MID_SIZE: 0.5,        // 中波减仓系数（mode=size）
+  REGIME_GATE_MID_CONFIRM: 1,       // 中波额外确认根数（mode=confirm）
+
   // ---- 离场参数 (legacy.js tick) ----
   // P2-1: 保本出/阶梯止盈/跟踪止损由"固定margin%"改为 ATR% 基准(价格×lev→margin%),
   //       仍以 RP 预设值(P.bp/P.tp, 即 margin% floor)兜底, 避免低波时过度收紧;
