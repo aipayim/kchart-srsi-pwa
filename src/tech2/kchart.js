@@ -1683,7 +1683,7 @@ function bindHudEvents(hud) {
   hud.dataset.hudBound = '1';
   hud.addEventListener('click', (e) => {
     const t = e.target.closest('[data-act]');
-    if (t && t.dataset.act === 'close') {
+    if (t && (t.dataset.act === 'close' || t.dataset.act === 'toggle')) {
       // 复用既有总开关（window.kToggleRuleMonitor 已双绑 main.js/kchartApp.js — GOAL13 红线）
       if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
     }
@@ -1720,20 +1720,27 @@ export function renderDiscHud() {
   if (typeof document === 'undefined') return;
   const hud = document.getElementById('discHud');
   if (!hud) return;
-  // HUD = 悬浮的「规则监测」卡；能量球/动力卡始终留在交易纪律分析原位（v1.5.53 修正）
+  // HUD = 悬浮「规则监测」卡，两态（v1.5.55）：mini=主图左侧居中的「监测」小签；open=仪表盘展开。
+  // 能量球/动力卡始终留在交易纪律分析原位（v1.5.53 修正）。
   const body = document.getElementById('discHudRmBody');
-  const show = !!cfg.ruleMonitorOpen && !!body;
-  if (!show) { hud.style.display = 'none'; return; }
+  if (!body) return;
+  const open = !!cfg.ruleMonitorOpen;
   hud.style.display = '';
+  hud.classList.toggle('mini', !open);
   const kbox = hud.parentElement;
-  // 位置：优先拖动后保存的 cfg.ruleHudPos（相对 .kchart-box px），否则 CSS 默认 top/left
+  // 位置：优先拖动后保存的 cfg.ruleHudPos（相对 .kchart-box px）；否则主图左侧居中（展开/收起高度变化后重算）
   if (cfg.ruleHudPos && typeof cfg.ruleHudPos.x === 'number' && typeof cfg.ruleHudPos.y === 'number') {
     hud.style.left = cfg.ruleHudPos.x + 'px';
     hud.style.top = cfg.ruleHudPos.y + 'px';
-  } else { hud.style.left = ''; hud.style.top = ''; }
-  // 高度上限：容器高与视口高取小（主图容器常远超视口——同屏意义下以视口为准），再减 bar+padding 余量
-  const hCap = Math.max(120, Math.min(kbox ? kbox.clientHeight : 99999, (typeof innerHeight !== 'undefined' ? innerHeight : 99999)) - 34);
-  if (kbox) body.style.maxHeight = hCap + 'px';
+  } else if (kbox) {
+    hud.style.left = '8px';
+    hud.style.top = Math.max(8, Math.round((kbox.clientHeight - hud.offsetHeight) / 2)) + 'px';
+  }
+  if (open) {
+    // 高度上限：容器高与视口高取小（主图容器常远超视口——同屏意义下以视口为准），再减 bar+padding 余量
+    const hCap = Math.max(120, Math.min(kbox ? kbox.clientHeight : 99999, (typeof innerHeight !== 'undefined' ? innerHeight : 99999)) - 34);
+    if (kbox) body.style.maxHeight = hCap + 'px';
+  }
   bindHudEvents(hud);
 }
 

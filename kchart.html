@@ -129,14 +129,12 @@
     <div class="kchart-tradebar" id="kchartTradeBar"></div>
   </div>
   <div class="kchart-maintools" id="kchartMainTools" data-tab-block="kline"></div>
-  <div class="kchart-discwrap closed" id="ruleMonitorWrap" data-tab-block="kline">
-    <div class="kchart-ovhead" onclick="window.kToggleRuleMonitor()">📋 规则监测（影子计算 · 信号簿 · 点击展开/收起）<span id="ruleMonitorState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
     <div id="kchartRuleMonitor" class="rule-monitor"></div>
   </div>
   <div class="kchart-box" data-tab-block="kline">
     <canvas id="kchartCanvas"></canvas>
             <div id="discHud" class="disc-hud" style="display:none">
-          <div class="disc-hud-bar" id="discHudBar">📋 规则监测<span class="disc-hud-x" data-act="close">✕</span></div>
+          <div class="disc-hud-bar" id="discHudBar"><span class="hud-title" id="hudTitle">📋 规则监测</span><span class="hud-min" data-act="toggle">监测</span></div>
           <div class="disc-hud-body" id="discHudRmBody"></div>
         </div>
       </div>

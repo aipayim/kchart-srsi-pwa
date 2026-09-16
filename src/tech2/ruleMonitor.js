@@ -644,7 +644,7 @@ export function renderRuleMonitor() {
   const open = !!cfg.ruleMonitorOpen;
   // HUD 模式：RM 内容在悬浮卡内以仪表盘形态展开，流内面板永久收起（避免陈旧内容露出；kToggleRuleMonitor 变为 HUD 总开关）
   if (wrap) wrap.classList.toggle('closed', !open || !!_hudBody);
-  if (!open) { box.innerHTML = ''; _rm.lastRenderSig = ''; stopRmGauge(); return; }
+  if (!open) { stopRmGauge(); return; } // v1.5.55 mini 态：body/签名均保留 → 展开首帧直接复用 canvas（sameNode），数据 2s 内自动刷新
   const snap = _rm.lastSnapshot;
   if (!snap || !snap.ok) {
     if (_hudBody) { updateHudBarTitle(null); stopRmGauge(); }
@@ -919,30 +919,22 @@ export function drawRmGauge(ctx, W, H, anim, target) {
 }
 
 // ---- 画布尺寸（box.clientWidth 去内边距，≤340；DPR 适配；不存在/宽度变了即重建）----
-function gaugeCanvasW(box) {
-  let W = (box && box.clientWidth) || 298;
-  try {
-    if (typeof getComputedStyle !== 'undefined' && box) {
-      const cs = getComputedStyle(box);
-      W -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
-    }
-  } catch (e) {}
-  return Math.max(200, Math.min(340, Math.floor(W)));
-}
+const GAUGE_W = 298; // 固定逻辑分辨率 + CSS width:100% 等比缩放 → 展开即终尺寸，无先小后大跳变（v1.5.55）
 function setupGaugeCanvas(box) {
   if (typeof document === 'undefined' || !box) return null;
   let cv = document.getElementById('rmGaugeCv');
-  const W = gaugeCanvasW(box);
-  if (!cv || cv.parentElement !== box || +cv.dataset.w !== W) {
+  if (!cv || cv.parentElement !== box) {
     if (cv) cv.remove();
     cv = document.createElement('canvas');
     cv.id = 'rmGaugeCv';
-    cv.dataset.w = String(W);
     box.insertBefore(cv, box.querySelector('.rm-gbtns') || null);
-    const dpr = Math.max(1, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
-    _rmGauge.dpr = dpr;
-    cv.width = W * dpr; cv.height = GAUGE_H * dpr;
-    cv.style.width = W + 'px'; cv.style.height = GAUGE_H + 'px';
+  }
+  const dpr = Math.max(1, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
+  _rmGauge.dpr = dpr;
+  if (+cv.dataset.w !== GAUGE_W) {
+    cv.dataset.w = String(GAUGE_W);
+    cv.width = GAUGE_W * dpr; cv.height = GAUGE_H * dpr;
+    cv.style.width = '100%'; cv.style.height = 'auto'; // 显示尺寸交给 CSS，绘制坐标恒定
   }
   return cv;
 }
@@ -1006,11 +998,10 @@ function updateHudBarTitle(snap) {
   if (typeof document === 'undefined') return;
   const bar = document.getElementById('discHudBar');
   if (!bar) return;
-  let t = bar.querySelector('.hud-title');
+  let t = bar.querySelector('#hudTitle') || bar.querySelector('.hud-title');
   if (!t) {
-    while (bar.firstChild && bar.firstChild.nodeType === 3) bar.removeChild(bar.firstChild); // 去掉原「📋 规则监测」文本节点
     t = document.createElement('span');
-    t.className = 'hud-title';
+    t.className = 'hud-title'; t.id = 'hudTitle';
     bar.insertBefore(t, bar.firstChild || null);
   }
   const p = snap && snap.price;
