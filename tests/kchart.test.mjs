@@ -3518,6 +3518,79 @@ console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
   ok('回测 tconf AIS types 遥测', rTc.regimeStats.types && typeof rTc.regimeStats.types.range === 'number' && typeof rTc.regimeStats.types['trend-up'] === 'number');
   ok('回测 tconf emaTf=1d 记录', rTc.regimeStats.emaTf === '1d');
   ok('回测 tconf 开仓数 ≤ off', rTc.trades.filter(t => t.action === 'open').length <= rOff.trades.filter(t => t.action === 'open').length);
+
+  // ---- GOAL31-D PD-A 危险拦截（predictDanger 开仓前拦截）----
+  console.log('\n[kchart: GOAL31-D PD-A 危险拦截（predictDanger 开仓前拦截）]');
+  // 默认 off：cfg 默认值
+  const dcPd = __defaultKConfig();
+  ok('cfg 默认 srsiAutoPdBlockOn=false', dcPd.srsiAutoPdBlockOn === false);
+
+  // 回测集成（V 形合成 K 线，与 GOAL27 回测同数据模式——必有真实开仓，断言不空转）
+  const closesPd = [];
+  for (let v = 0; v < 8; v++) {
+    for (let i = 0; i < 25; i++) closesPd.push(140 - i * 4);
+    for (let i = 0; i < 25; i++) closesPd.push(40 + i * 4);
+  }
+  const mkPd = (arr) => arr.map((c, i) => [i * 900000, c, c, c, c, 0]);
+  const klPd = { '15m': mkPd(closesPd), '1h': mkPd(closesPd), '30m': mkPd(closesPd), '4h': mkPd(closesPd) };
+  const basePd = { ...__defaultKConfig(), srsiAutoUseCost: false, srsiAutoUpper: 80, srsiAutoLower: 20 };
+  const rPdBase = backtestSrsiAuto('BTCUSDT', klPd, basePd, 1000);
+  const rPdOff = backtestSrsiAuto('BTCUSDT', klPd, { ...basePd, srsiAutoPdBlockOn: false }, 1000);
+  const nOpenBase = rPdBase.trades.filter(t => t.action === 'open').length;
+  ok('合成数据有真实开仓（非空转）', nOpenBase > 0);
+  ok('回测 PD off 显式=默认（零行为变化）', rPdOff.finalEquity === rPdBase.finalEquity && rPdOff.trades.length === rPdBase.trades.length);
+  ok('回测 PD off 遥测 pdBlockOn=false/pdBlocked=0', rPdBase.pdBlockOn === false && rPdBase.pdBlocked === 0);
+
+  // 开：拦截危险单（同 fork /tmp/goal31-btsa.mjs ctx：dir/k15/priceVsEma1h/priceVsEma15/recentCandlePct/emaOpp2Weak）
+  const rPdOn = backtestSrsiAuto('BTCUSDT', klPd, { ...basePd, srsiAutoPdBlockOn: true }, 1000);
+  const nOpenOn = rPdOn.trades.filter(t => t.action === 'open').length;
+  ok('回测 PD on 遥测 pdBlockOn=true/pdBlocked>0', rPdOn.pdBlockOn === true && rPdOn.pdBlocked > 0);
+  ok('回测 PD on 实际拦截（开仓数变少）', nOpenOn < nOpenBase);
+
+  // 反手单不拦：danger=reverse 时反手开仓数不受 PD 开关影响（PD 钩子仅拦 isRev=false 普通单）
+  const rRevOff = backtestSrsiAuto('BTCUSDT', klPd, { ...basePd, srsiAutoDanger: 'reverse' }, 1000);
+  const rRevOn = backtestSrsiAuto('BTCUSDT', klPd, { ...basePd, srsiAutoDanger: 'reverse', srsiAutoPdBlockOn: true }, 1000);
+  const nRevOff = rRevOff.trades.filter(t => t.reverse).length;
+  const nRevOn = rRevOn.trades.filter(t => t.reverse).length;
+  ok('合成数据 reverse 模式有反手单（非空转）', nRevOff > 0);
+  ok('回测 reverse 模式 PD on/off 反手单数一致（反手不拦）', nRevOn === nRevOff);
+
+  // 回测条件导出：PD 行 + JSON 字段
+  const bcPd = buildBacktestConditions(7);
+  ok('回测条件含 危险拦截(PD-A) 行', bcPd.human.indexOf('危险拦截(PD-A)：') >= 0);
+  ok('回测条件 JSON 含 pdBlockOn=false', bcPd.json.btCfg.pdBlockOn === false);
+
+  // 实盘路径：bandUp(k=95 空侧 K15≥85 命中) + kd 全 long（emaOpp2 命中）→ score 2 → 拦截
+  const tfsPd = ['5m', '10m', '15m', '30m', '1h', '4h'];
+  const cfgPdOn = __defaultKConfig();
+  cfgPdOn.symbol = 'BTCUSDT'; cfgPdOn.srsiAutoOn = true; cfgPdOn.srsiAutoPdBlockOn = true;
+  tfsPd.forEach(tf => cfgPdOn.srsiOptSource[tf] = 'optimized');
+  kchartApi.__setCfgForTest(cfgPdOn);
+  resetSrsiAuto('BTCUSDT');
+  let pdOrders = [];
+  const mkEngPd = () => ({
+    S: { prices: { 'BTCUSDT': { last: 100 } }, pos: [] },
+    getPerpSub: () => ({ id: 'perp', bal: 1000, coins: { 'BTCUSDT': 10 } }),
+    placeOrder: (o) => { pdOrders.push(o); return { extra: {} }; },
+    exitPosition: () => {}
+  });
+  const kdPd = { '1h': 'long', '30m': 'long', '15m': 'long' };
+  const sdPd = { '4h': 'short', '1h': 'short', '30m': 'short' };
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngPd(), klineDir: kdPd, srsiDir: sdPd, band: { edge: 'enterUpper', band: 'upper', k: 95, d: 92 } });
+  ok('实盘 PD on 危险单被拦截（K15超买+EMA背离=2因子）', pdOrders.length === 0);
+  // 下带多单（k=5 超卖命中 1 因子；EMA 无背离）→ score 1 < 2 → 放行
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngPd(), klineDir: kdPd, srsiDir: sdPd, band: { edge: 'enterLower', band: 'lower', k: 5, d: 5 } });
+  ok('实盘 PD on 非危险单放行（仅1因子）', pdOrders.length === 1 && pdOrders[0].side === 'long');
+  // off → 零行为变化（照常开空）
+  const cfgPdOffLive = __defaultKConfig();
+  cfgPdOffLive.symbol = 'BTCUSDT'; cfgPdOffLive.srsiAutoOn = true;
+  tfsPd.forEach(tf => cfgPdOffLive.srsiOptSource[tf] = 'optimized');
+  kchartApi.__setCfgForTest(cfgPdOffLive);
+  resetSrsiAuto('BTCUSDT');
+  pdOrders = [];
+  runSrsiAutoTrade('BTCUSDT', { engine: mkEngPd(), klineDir: kdPd, srsiDir: sdPd, band: { edge: 'enterUpper', band: 'upper', k: 95, d: 92 } });
+  ok('实盘 PD off 零行为变化（照常开空）', pdOrders.length === 1 && pdOrders[0].side === 'short');
+  kchartApi.__setCfgForTest(__defaultKConfig());
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
