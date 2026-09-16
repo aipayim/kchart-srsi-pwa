@@ -3559,6 +3559,11 @@ console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
   const bcPd = buildBacktestConditions(7);
   ok('回测条件含 危险拦截(PD-A) 行', bcPd.human.indexOf('危险拦截(PD-A)：') >= 0);
   ok('回测条件 JSON 含 pdBlockOn=false', bcPd.json.btCfg.pdBlockOn === false);
+  // 导出全量字段（对账盲区修复）：regime 闸门/热停/硬止损/中轨离场/最长持仓/连开递减
+  ok('回测条件含 regime 闸门行', bcPd.human.indexOf('regime 闸门：') >= 0);
+  ok('回测条件 JSON 含 regimeGate/regimeW/regimeEmaTf', bcPd.json.btCfg.regimeGate === 'off' && typeof bcPd.json.btCfg.regimeW === 'number' && bcPd.json.btCfg.regimeEmaTf === '1h');
+  ok('回测条件含 热停/硬止损/中轨离场/最长持仓 行', ['热停开：', '硬止损%：', '中轨离场：', '最长持仓：', '同向连开递减'].every(k => bcPd.human.indexOf(k) >= 0));
+  ok('回测条件 JSON 含 hotStop/stopPct/exitK/holdBars/stackDecay', bcPd.json.btCfg.hotStop === false && bcPd.json.btCfg.stopPct === 0 && bcPd.json.btCfg.exitK === 0 && bcPd.json.btCfg.holdBars === 0 && typeof bcPd.json.btCfg.stackDecay === 'number');
 
   // 实盘路径：bandUp(k=95 空侧 K15≥85 命中) + kd 全 long（emaOpp2 命中）→ score 2 → 拦截
   const tfsPd = ['5m', '10m', '15m', '30m', '1h', '4h'];

@@ -682,3 +682,38 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 #ktThumbBar .kt-tb-close{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.45);color:#f59e0b}
 #ktThumbBar .kt-tb-panel{flex:0 0 72px}
 @media (pointer:coarse){#ktThumbBar{display:flex}}
+
+/* ===================== 规则监测面板（影子计算 + 信号簿） ===================== */
+.rule-monitor{margin-top:4px;display:flex;flex-direction:column;gap:5px}
+.rm-empty{font-size:10px;color:var(--text2);padding:4px}
+.rm-topline{display:flex;flex-wrap:wrap;align-items:center;gap:4px}
+.rm-sym{font-size:10px;font-weight:bold;color:var(--text)}
+.rm-price{font-size:10px;color:var(--gold)}
+.rm-chip{font-size:9px;padding:1px 6px;border:1px solid var(--border);border-radius:8px;background:var(--card2);color:var(--text2)}
+.rm-chip.rm-on{color:var(--green);border-color:rgba(0,230,118,.4)}
+.rm-chip.rm-offc{color:var(--text2)}
+.rm-verdict{font-size:10px;padding:4px 6px;border-radius:5px;background:var(--card2);border:1px solid var(--border)}
+.rm-verdict.rm-act-open{border-color:rgba(0,230,118,.5);color:var(--green)}
+.rm-verdict.rm-act-confirm{border-color:rgba(255,215,64,.5);color:var(--gold)}
+.rm-verdict.rm-act-wait{color:var(--text2)}
+.rm-table{width:100%;border-collapse:collapse;font-size:9px}
+.rm-table td{padding:2px 4px;border-bottom:1px solid var(--border);vertical-align:top}
+.rm-rule-name{white-space:nowrap;color:var(--text);width:1%}
+.rm-rule-detail{color:var(--text2)}
+.rm-badge{display:inline-block;width:14px;text-align:center;font-weight:bold}
+.rm-badge.rm-pass{color:var(--green)}
+.rm-badge.rm-fail{color:var(--red)}
+.rm-badge.rm-active{color:var(--gold)}
+.rm-badge.rm-off{color:var(--text2)}
+.rm-stats{border:1px solid var(--border);border-radius:5px;padding:5px 6px;background:var(--card2)}
+.rm-stats-title{font-size:10px;color:var(--text);margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.rm-clear{margin-left:auto;font-size:9px;padding:1px 8px;background:var(--card);border:1px solid var(--border);color:var(--text2);border-radius:5px;cursor:pointer;font-family:inherit}
+.rm-clear:hover{color:var(--red);border-color:var(--red)}
+.rm-stats-grid{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:9px;color:var(--text2)}
+.rm-stats-grid b{color:var(--text)}
+.rm-compare{font-size:9px;color:var(--text2);margin-top:3px}
+.rm-compare .rm-good{color:var(--green)}
+.rm-compare .rm-bad{color:var(--red)}
+.rm-byblock{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.rm-dim{font-size:9px;color:var(--text2)}
+.rm-note{margin-top:3px;opacity:.8}

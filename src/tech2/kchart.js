@@ -15,6 +15,7 @@ import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
 import { fundingPayment, FUNDING_HOURS } from '../engine/funding.js';
 import { regimeStrategy } from '../engine/regimeParams.js';
+import { updateRuleMonitorTick, renderRuleMonitor, kToggleRuleMonitor, ruleMonitorClear, __ruleMonitorTestState } from './ruleMonitor.js';
 import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights } from '../engine/disciplineAnalysis.js';
 
 // ---- TSEV 权重（全局：dev 下 /data 训练 或 生产 /tsev-weights.json 快照；本机：IndexedDB 由 localLoop 训练）----
@@ -284,6 +285,7 @@ export function defaultKConfig() {
     // ---- SRSI 自动交易 ----
     srsiAutoOn: false,          // SRSI 自动交易总开关
     tradePanelOpen: false,      // GOAL13：交易面板展开状态（记忆）
+    ruleMonitorOpen: false,     // 规则监测面板展开状态（记忆）
     sigOverlay: true,           // GOAL13：主图实盘信号层（Alpha/SRSI 信号映射，总开关）
     btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
     srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
@@ -414,6 +416,7 @@ function normalizeCfg(c) {
   if (typeof c.srsiAutoApplyBt !== 'boolean') c.srsiAutoApplyBt = false;
   if (!['alpha', 'srsi', 'combo'].includes(c.btStrategy)) c.btStrategy = 'alpha';
   if (typeof c.tradePanelOpen !== 'boolean') c.tradePanelOpen = false; // GOAL13：交易面板默认收缩
+  if (typeof c.ruleMonitorOpen !== 'boolean') c.ruleMonitorOpen = false; // 规则监测面板默认收缩
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
@@ -504,7 +507,7 @@ function pruneOptHistory() {
   } catch (e) {}
 }
 function _isQuotaErr(e) { return !!e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014); }
-function _safeSetItem(key, str) {
+export function _safeSetItem(key, str) {
   try { localStorage.setItem(key, str); return true; }
   catch (e) {
     if (_isQuotaErr(e)) { pruneOptHistory(); try { localStorage.setItem(key, str); return true; } catch (_) {} }
@@ -3003,6 +3006,7 @@ export function renderKChart() {
   const hz = updateHorizonState(sym, allPriceMap, capMin);
   renderSrsiOverview(hz, capMin);
   renderTradeDiscipline(hz, capMin);
+  updateRuleMonitorTick(); // 规则监测：影子计算 + 信号簿边沿检测（内2s节流）+ 面板渲染（签名守卫）
   renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（受签名守卫保护，无变化不重建）
 }
 
@@ -3020,6 +3024,7 @@ export function refreshPanels() {
   const hz = updateHorizonState(cfg.symbol, allPriceMap, capMin);
   if (ov) renderSrsiOverview(hz, capMin);
   if (box) renderTradeDiscipline(hz, capMin);
+  updateRuleMonitorTick(); // 规则监测：主系统/PWA 每秒 tick 走这里（renderKChart 不每秒重绘）
 }
 
 function getTFData(sym, tf) {
@@ -4925,6 +4930,11 @@ export const kchartApi = {
   toggleOverview,
   setKDisc,
   toggleKDisc,
+  kToggleRuleMonitor,
+  renderRuleMonitor,
+  ruleMonitorClear,
+  srsiAutoStateOf,
+  __ruleMonitorTestState,
   manualSignal,
   kToggleTradePanel,
   setSigOverlay,
@@ -5040,9 +5050,10 @@ export function setSrsiAutoOn(on) {
   if (typeof document !== 'undefined') {
     const aEl = document.getElementById('ktSrsiAuto');
     if (aEl) aEl.checked = cfg.srsiAutoOn;
-  const abEl = bar.querySelector('#ktSrsiApplyBt');
+  // fix(1.5.50): 原 bar.querySelector —— bar 未定义致 setSrsiAutoOn 必抛 ReferenceError（GOAL9 引入的笔误，元素 id 全局唯一）
+  const abEl = document.querySelector('#ktSrsiApplyBt');
   if (abEl) abEl.checked = !!cfg.srsiAutoApplyBt;
-  const alEl = bar.querySelector('#ktAlphaLive');
+  const alEl = document.querySelector('#ktAlphaLive');
   // GOAL17：Alpha 基石实盘勾选持久化——刷新后按 cfg 自动恢复 live
   if (alEl && typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.startLive) {
     if (cfg.alphaLiveOn && !window.__alphaLab.isLive()) { try { window.__alphaLab.startLive(); } catch (e) {} }
@@ -5748,6 +5759,8 @@ export function resetSrsiAuto(sym) {
     Object.keys(_srsiAuto).forEach(k => { const s = _srsiAuto[k]; s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.pendingConfirm = null; });
   }
 }
+// 规则监测（影子层）只读读取实盘带状态机状态（不推进；推进只发生在 srsiAutoBandState/runSrsiAutoTrade）
+export function srsiAutoStateOf(sym) { return _srsiAuto[sym] || null; }
 
 // 当前危险信号状态（供 SRSI 自动页红色光晕提醒；与防爆/反手开关解耦，仅纯信号识别）
 let _dangerNow = false;
@@ -7370,9 +7383,18 @@ export function buildBacktestConditions(days) {
     })(),
     (bt.pdBlockOn ? ('危险拦截(PD-A)：开（predictDanger 多因子≥2 命中→拦截该笔普通开仓，反手单不拦；因子：1h EMA偏离≥' + THRESH.PREDICT_EMA1H_PCT + '% / 15m EMA偏离≥' + THRESH.PREDICT_EMA15_PCT + '% / K15超买卖(' + THRESH.PREDICT_K15_LONG + '/' + THRESH.PREDICT_K15_SHORT + ') / 近根振幅≥' + THRESH.PREDICT_CANDLE_PCT + '% / EMA120背离；GOAL31-D）') : '危险拦截(PD-A)：关（默认）'),
     '杠杆：' + lev + 'x' + (bt.adaptiveLev ? ('（自适应杠杆开：波动放大自动降杠杆，下限 ' + (bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN) + 'x）') : ''),
+    (function () {
+      const g = bt.regimeGate || 'off';
+      const lbl = g === 'confirm' ? '中波降频(+1确认bar)' : g === 'size' ? '中波减仓×0.5' : g === 'block' ? '仅低波阴跌禁开' : g === 'tconf' ? '趋势市升确认(AIS regime·tconf，tconfdc2 组合=tconf+1d EMA+确认bar 2)' : '关';
+      return 'regime 闸门：' + lbl + '｜分位滚动窗 ' + (bt.regimeW || THRESH.REGIME_GATE_W) + ' 根1h｜阴跌EMA ' + (bt.regimeEmaTf === '1d' ? '1d' : '1h') + '（GOAL29）';
+    })(),
+    '热停开：' + (bt.hotStop ? '开（1h ATR > 1.3×sma20 时禁止新开普通单，反手仍允许）' : '关'),
+    '硬止损%：' + (bt.stopPct || 0) + (bt.stopPct ? '' : '（0=关）'),
+    '中轨离场：' + (bt.exitK || 0) + (bt.exitK ? '（K 下穿 100-此值平多 / 上穿此值平空）' : '（0=关）'),
+    '最长持仓：' + (bt.holdBars || 0) + (bt.holdBars ? ' 根 15m，超过即市价离场' : '（0=关）'),
+    '同向连开递减：每仓 ×' + (cfg.srsiAutoStackDecay != null ? cfg.srsiAutoStackDecay : 1) + '（继承实盘设置；第n笔=基准×decay^(n-1)）｜满仓前保留 ' + (cfg.srsiAutoStackFront != null ? cfg.srsiAutoStackFront : 1) + ' 笔',
     (bt.atrStop ? ('宽保护性止损(ATR)：开，止损距离 = ' + (bt.atrStopMult || THRESH.ATR_STOP_MULT) + '×受监督ATR%（落于爆仓线内侧，截真趋势破位）') : '宽保护性止损(ATR)：关'),
     '同方向最多连开：' + bt.maxSame + ' 单',
-    '确认 bar：' + (bt.confirmBars > 0 ? (bt.confirmBars + ' 根 15m 收盘仍带内才执行（GOAL27 降频）') : '关（0=边沿立即执行）'),
     '确认 bar：' + (bt.confirmBars > 0 ? (bt.confirmBars + ' 根 15m 收盘仍带内才执行（GOAL27 降频）') : '关（0=边沿立即执行）'),
     (function () {
       const _eb = resolveEntryBands({ srsiAutoUpper: bt.upper, srsiAutoLower: bt.lower, srsiByTf: cfg.srsiByTf, srsi: cfg.srsi });
@@ -7400,7 +7422,10 @@ export function buildBacktestConditions(days) {
       useCost: bt.useCost, feePct: bt.feePct, slipPct: bt.slipPct, useFunding: bt.useCost,
       optTfs: autoTfs, optEnabled: bt.optEnabled, optIntervalH: bt.optIntervalH, optIntervalOn: bt.optIntervalOn, optNoTradeH: bt.optNoTradeH,
       danger: bt.danger || 'none', reversePct: bt.reversePct || 0, reverseLev: bt.reverseLev || 0, pdBlockOn: !!bt.pdBlockOn,
-      adaptiveLev: !!bt.adaptiveLev, adaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN, atrStop: !!bt.atrStop, atrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT
+      adaptiveLev: !!bt.adaptiveLev, adaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN, atrStop: !!bt.atrStop, atrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT,
+      regimeGate: bt.regimeGate || 'off', regimeW: bt.regimeW || THRESH.REGIME_GATE_W, regimeEmaTf: bt.regimeEmaTf === '1d' ? '1d' : '1h',
+      hotStop: !!bt.hotStop, stopPct: bt.stopPct || 0, exitK: bt.exitK || 0, holdBars: bt.holdBars || 0,
+      stackDecay: (cfg.srsiAutoStackDecay != null ? cfg.srsiAutoStackDecay : 1), stackFront: (cfg.srsiAutoStackFront != null ? cfg.srsiAutoStackFront : 1)
     },
     srsiTfParams: srsiTfParams,
     srsiByTf: cfg.srsiByTf, srsiOptSource: cfg.srsiOptSource, autoTfs: autoTfs

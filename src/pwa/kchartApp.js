@@ -132,6 +132,8 @@ globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
 globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
 globalThis.kToggleOverview = () => api.toggleOverview();
 globalThis.kToggleDisc = () => api.toggleKDisc();
+globalThis.kToggleRuleMonitor = () => api.kToggleRuleMonitor();
+globalThis.ruleMonitorClear = () => api.ruleMonitorClear();
 globalThis.kToggleTradePanel = () => api.kToggleTradePanel();
 globalThis.setSigOverlay = (on) => api.setSigOverlay(on);
 globalThis.setDiscEvidence = (v) => api.setDiscEvidence(v);

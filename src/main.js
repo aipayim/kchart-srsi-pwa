@@ -85,6 +85,8 @@ window.setKOverview = (v) => kchartApi.setKOverview(v);
 window.kToggleOverview = () => kchartApi.toggleOverview();
 window.setKDisc = (v) => kchartApi.setKDisc(v);
 window.kToggleDisc = () => kchartApi.toggleKDisc();
+window.kToggleRuleMonitor = () => kchartApi.kToggleRuleMonitor();
+window.ruleMonitorClear = () => kchartApi.ruleMonitorClear();
 window.kToggleTradePanel = () => kchartApi.kToggleTradePanel();
 window.setSigOverlay = (on) => kchartApi.setSigOverlay(on);
 window.setDiscEvidence = (v) => kchartApi.setDiscEvidence(v);
