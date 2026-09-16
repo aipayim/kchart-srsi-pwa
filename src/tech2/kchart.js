@@ -346,6 +346,7 @@ export let cfg = defaultKConfig();
 
 // ---- 内部状态 ----
 let _cv = null, _ctx = null;
+let _acMonitorRect = null; // v1.5.56：行动卡右上角「监测」热区（canvas 坐标，mousedown/touchstart 命中 → toggle 规则监测 HUD）
 let _hover = null;
 let _hoverLock = false;       // GOAL25：长按锁定十字线（再次点按解锁，不清除）
 let _resizeObs = null;
@@ -1725,10 +1726,12 @@ export function renderDiscHud() {
   const body = document.getElementById('discHudRmBody');
   if (!body) return;
   const open = !!cfg.ruleMonitorOpen;
+  // v1.5.56：mini DOM 小签取消（收起态 HUD 隐藏，入口=行动卡右上角「监测」canvas 热区）
+  if (!open) { hud.style.display = 'none'; hud.classList.remove('mini'); bindHudEvents(hud); return; }
   hud.style.display = '';
-  hud.classList.toggle('mini', !open);
+  hud.classList.remove('mini');
   const kbox = hud.parentElement;
-  // 位置：优先拖动后保存的 cfg.ruleHudPos（相对 .kchart-box px）；否则主图左侧居中（展开/收起高度变化后重算）
+  // 位置：优先拖动后保存的 cfg.ruleHudPos（相对 .kchart-box px）；否则主图左侧居中（盖住行动卡，展开即全量信息）
   if (cfg.ruleHudPos && typeof cfg.ruleHudPos.x === 'number' && typeof cfg.ruleHudPos.y === 'number') {
     hud.style.left = cfg.ruleHudPos.x + 'px';
     hud.style.top = cfg.ruleHudPos.y + 'px';
@@ -3507,8 +3510,31 @@ function drawMain(ctx, sym, tf, H) {
     ctx.fillText(ruleTxt, PAD_L + 13, cy28 + 62);
     ctx.fillStyle = ac.stop != null ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
     ctx.fillText(entryTxt, PAD_L + 13, cy28 + 75);
+    // v1.5.56：右上角「监测」开关热区（规则监测 HUD 入口；展开态显示「收起」）
+    const mgW = 36, mgH = 14;
+    const mgX = PAD_L + 6 + w28 - mgW - 5, mgY = cy28 + 4;
+    const mgOn = !!cfg.ruleMonitorOpen;
+    ctx.fillStyle = mgOn ? 'rgba(88,166,255,.28)' : 'rgba(88,166,255,.14)';
+    ctx.fillRect(mgX, mgY, mgW, mgH);
+    ctx.strokeStyle = '#58a6ff'; ctx.globalAlpha = .85; ctx.strokeRect(mgX, mgY, mgW, mgH); ctx.globalAlpha = 1;
+    ctx.font = 'bold 9px sans-serif'; ctx.fillStyle = '#58a6ff'; ctx.textAlign = 'center';
+    ctx.fillText(mgOn ? '收起' : '监测', mgX + mgW / 2, mgY + 10);
+    _acMonitorRect = { x: mgX, y: mgY, w: mgW, h: mgH };
+    try { window.__acMonitorRect = _acMonitorRect; } catch (e) {} // 调试/测试暴露
     ctx.restore();
+  } else {
+    // 行动卡未绘制（sigOverlay 关/数据未就绪）→ 兜底「监测」小签（主图左侧中点），入口常驻
+    _acMonitorRect = null;
+    const mgW = 36, mgH = 14, mgX = PAD_L + 6, mgY = Math.round((PAD_T + mainBottom) / 2) - 7;
+    const mgOn = !!cfg.ruleMonitorOpen;
+    ctx.fillStyle = mgOn ? 'rgba(88,166,255,.28)' : 'rgba(88,166,255,.14)';
+    ctx.fillRect(mgX, mgY, mgW, mgH);
+    ctx.strokeStyle = '#58a6ff'; ctx.globalAlpha = .85; ctx.strokeRect(mgX, mgY, mgW, mgH); ctx.globalAlpha = 1;
+    ctx.font = 'bold 9px sans-serif'; ctx.fillStyle = '#58a6ff'; ctx.textAlign = 'center';
+    ctx.fillText(mgOn ? '收起' : '监测', mgX + mgW / 2, mgY + 10);
+    _acMonitorRect = { x: mgX, y: mgY, w: mgW, h: mgH };
   }
+  try { window.__acMonitorRect = _acMonitorRect; } catch (e) {} // 调试/测试暴露
   if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
     ctx.save();
     const LT = (_showSrsi || cfg.srsiAutoApplyBt) ? (window.__srsiLiveTrades || []) : [];
@@ -4167,6 +4193,18 @@ export function initKChart() {
         return;
       }
       const p = touchLocal(e); if (!p) return;
+      // v1.5.56：行动卡右上角「监测」热区 → toggle 规则监测 HUD（触屏路径；CSS→内部像素→逻辑，独立换算）
+      if (_acMonitorRect) {
+        const _r = _cv.getBoundingClientRect();
+        const _dpr = (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1;
+        const mx = (p.x - _r.left) * (_cv.width / _r.width) / _dpr;
+        const my = (p.y - _r.top) * (_cv.height / _r.height) / _dpr;
+        if (mx >= _acMonitorRect.x && mx <= _acMonitorRect.x + _acMonitorRect.w && my >= _acMonitorRect.y && my <= _acMonitorRect.y + _acMonitorRect.h) {
+          if (_longT) { clearTimeout(_longT); _longT = null; }
+          if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
+          return;
+        }
+      }
       _hoverLock = false;                     // 再次点按=解锁（并作为新取值点）
       _hover = p; renderKChart();
       if (_longT) clearTimeout(_longT);
@@ -4207,6 +4245,17 @@ export function initKChart() {
     });
     _cv.addEventListener('mousedown', (e) => {
       const p = toLocal(e);
+      // v1.5.56：行动卡右上角「监测」热区 → toggle 规则监测 HUD（CSS→内部像素→逻辑坐标，独立于 toLocal/__logicalH）
+      if (_acMonitorRect) {
+        const _r = _cv.getBoundingClientRect();
+        const _dpr = (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1;
+        const mx = (e.clientX - _r.left) * (_cv.width / _r.width) / _dpr;
+        const my = (e.clientY - _r.top) * (_cv.height / _r.height) / _dpr;
+        if (mx >= _acMonitorRect.x && mx <= _acMonitorRect.x + _acMonitorRect.w && my >= _acMonitorRect.y && my <= _acMonitorRect.y + _acMonitorRect.h) {
+          if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
+          return;
+        }
+      }
       _press = p; _pressMoved = false;
       const reg = _subRegions.find(r => p.ly >= r.y0 && p.ly <= r.y0 + SUB_GAP && p.lx >= PAD_L && p.lx <= W - PAD_R);
       if (reg) _drag = { fromIdx: reg.idx, startX: p.lx, startY: p.ly, curY: p.ly, moved: false };
