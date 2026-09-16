@@ -130,6 +130,39 @@
 - **长窗验证（confirm 0/1/2/3 对比，同窗同参）**：笔数 570→355→267→172（÷3.3）；强平 79→57→46→32；净收益 **-466→-261→-160→+46.84（转正）**；maxDD 79.4%→75.8%→68.4%→42.3%。降频滤假边沿显著降成本/回撤，confirm=2~3 净值翻正——建议实盘用 confirm=2（笔数÷2.1、净+$306）或 confirm=3（笔数÷3.3、转正）
 - **线上 e2e（1.5.44）**：#ktSrsiConfirm/#ktBtConfirm 渲染+min/max 0-5 ✓；persist 闭环（0→2→0 / 0→3→0 落盘 bySymbol.BTCUSDT / bt_cfg）✓；版本徽章 v1.5.44 ✓；0 PAGEERROR ✓。踩坑：persist 结构=bySymbol.<SYM>，e2e 读顶层键误判未落盘（读对位置后闭环）
 
+# GOAL28 — 人工盯盘优化：信号图例 + 主图行动卡（2026-09-16 用户确认实施）
+
+> 背景：主图菱形有三来源（Alpha 实盘信号/死钩金钩/纪律确认）无图例说明含义不明；用户人工盯盘规则（5m+15m带反手）被 GOAL16-B 实锤为负期望，需把 Alpha 方向券+行动卡画进主图。纯显示层，不改交易逻辑。
+
+## 子任务
+- [x] A. 侦察：manualSignal 信号卡（GOAL19）/drawMain 绘制点/菱形三来源绘制点/alphaSignalProvider 方向/srsiAutoBandState 带界
+- [x] B. 信号图例：主图角落常驻图例（◆青=α开多 ◆橙=α开空 ◇灰=平仓 ◆红=死钩 ◆绿=金钩 ▲▼=SRSI开关）+ hover 浮框说明
+- [x] C. 行动卡：信号卡升级为「现在该做什么」——基石方向(α权重%)+用户规则状态(15m带内交叉否)+若交叉→可入场(方向/仓位/止损1.5×ATR/目标2×ATR 具体价)+反向→灰「与基石反向·仅提示勿动」
+- [x] D. 方向券显示：带交叉=α同向→绿「可入场」；反向→灰提示（GOAL16-B 教训编码进图）
+- [x] E. test（基线 kchart 928）→ bump 1.5.45 → build → deploy → 线上 e2e → GOAL.md 记录 → 脱敏版同步 → push
+
+## 执行记录（2026-09-16，v1.5.45 已部署）
+- **A 侦察**：旧信号卡=drawMain 内 GOAL19 块（数据计算+44px 三行卡）；主图菱形三来源=`__alphaLiveMarks`(◆#22d3ee多/◆#f59e0b空/◇#8899aa灰空心平) + `__srsiLiveTrades`(▲#2ecc71/▼#ff6b6b+灰点) + SRSI 子图钩菱形(◆#FF5252死钩/◆#00E676金钩，drawSrsiPanel)；带界=resolveEntryBands(cfg)（srsiAutoUpper/Lower 或 15m SRSI 80/20）；右上角占用=锁定徽章 PAD_T+4、hover 汇总栏 PAD_T+36、SRSI 回测角标 PAD_T+26。
+- **B 图例**：`drawSigLegend(ctx)` 右上角常驻（右对齐 y=PAD_T+24，与锁定徽章/汇总栏垂直错开），六段分色图标+标签+半透明背景条；色值与实际绘制点严格一致。SRSI 回测计数角标 PAD_T+26→PAD_T+40 避让。hover 说明：drawMainDetail 新增「标记」行（该 bar 时间窗 [t, t+tfMs) 内命中的 α/SRSI 实盘标记，条件与主图绘制一致）。
+- **C+D 行动卡**：新纯函数 `actionCardData()`（导出，25 单测）——带边沿交叉判定与 GOAL16-B 验证版同语义（K 升破 lower→upExit/跌破 upper→dnExit），verdict 四态 enter(绿可入场做多/做空)/reverse(灰勿动·与基石反向·免成本皆负)/noBase(灰观望·基石中性)/idle(金等待带交叉)；stop=1.5×ATR、target=2×ATR（GOAL28 定版）；带界用 resolveEntryBands 实际值（含用户自定义带）。绘制替换旧卡：大字 15px verdict + 基石α方向权重% + K,D 带内状态 + 规则提示 + 入场/止损/目标具体价 + 仓「卫星 10-15%×5-7x」。数据挂 `window.__actionCard`（旧 `__manualSignal` 保留兼容）。
+- **测试基建修正**：kchart.test.mjs 统计行原在文件中部（3259 行），GOAL16 之后的 24 个用例执行但不计入统计——移至文件末尾；kchart 928→**977 全绿**（928+24 隐形+25 新增）。全套 1118 通过。
+- **部署+线上 e2e（iPhone13 仿真）**：1.5.45 已上线 srsi.openapi.im。验证：图例三色像素命中（cyan 13/orange 11/red 82）、行动卡 idle 金色大字 173px、enter/reverse/idle 三状态行动卡区域 hash 各不相同（真实渲染）、0 PAGEERROR。踩坑：e2e 里 `document.querySelector('canvas')` 选中纪律面板 discEnergyBall(300×300×dpr3=900×900) 而非 kchartCanvas——像素验证必须 `getElementById('kchartCanvas')`；defineProperty 锁定 `__actionCard` 时 setter 必须 `set:()=>{}`（否则 render 重算覆盖注入值）。
+- **红线核对**：纯显示层零交易逻辑改动（runSrsiAutoTrade/manualSignal/alphaCore 均未动）；无新 onclick；版本 bump 1.5.45（PWA 缓存门控生效）；dev server 已重启。
+
+# GOAL29 — regime 闸门接 SRSI 卫星（用户红线：本地回测验证有效后才可部署）
+
+> Q2 确认：高波（ATR≥75分位）→照常开；中波→降频(confirm+1)或减仓；低波阴跌（价<EMA200 且 ATR 低分位）→禁开新仓。依据：SRSI 短线 2020/2022 高波年有肉、2025 低波阴跌年被假边沿磨损。
+
+## 子任务
+- [ ] A. 长窗回测（vision 2019-2026）：regime 三态对 SRSI 卫星的增益验证（正贡献才继续）
+- [ ] B. 实施：srsiAutoOn 之上加 regime 开关（复用 regimeParams/受监督 ATR 分位）
+- [ ] C. 仅当 A 正贡献：test→bump→build→deploy→e2e→脱敏版；若 A 负贡献→记录结论不部署
+
+# GOAL30 — 数据补 2019 + Alpha 2019 起完整报告（排队中）
+- [ ] A. Binance vision 补 2019 现货+永续数据（永续 2019-09-08 上线，实际 Q4 起）
+- [ ] B. Alpha 现货/永续 2019 起完整报告（goal11 fork 引擎）
+- [ ] C. 之后新因子（WorldQuant 101 等）必须走四关，不直接进实盘
+
 ## 红线
 - **默认 confirm=0 零行为变化**：版本对比法核对（stash 前后同参同数据逐位一致）+ (9) 基线精神核对
 - kchart.js 缩进陷阱：改前核对函数边界；版本必 bump（PWA 缓存门控）

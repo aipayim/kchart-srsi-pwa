@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
 
@@ -3256,9 +3256,6 @@ ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信�
   delete globalThis.localStorage;
 }
 
-console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
-if (failed > 0) process.exit(1);
-
 // ===== GOAL16: manualSignal（方向+时机+风控三元组）=====
 {
   ok('manualSignal: Alpha多+超卖回升→做多优', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: 530, emaFast: 100, emaSlow: 90 }); return r.action === 'long' && r.timing === '优'; })());
@@ -3271,6 +3268,41 @@ if (failed > 0) process.exit(1);
   ok('manualSignal: 无ATR→stop/target null', (() => { const r = manualSignal({ alphaDir: 'long', k15: 22, d15: 18, prevK15: 15, price: 61200, atr: null }); return r.stop === null && r.target === null; })());
   ok('manualSignal: 坏价格→null', manualSignal({ alphaDir: 'long', price: 0 }) === null);
   ok('manualSignal: EMA趋势标记', (() => { const up = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 105, emaSlow: 95 }); const dn = manualSignal({ alphaDir: 'long', k15: 50, d15: 48, prevK15: 52, price: 100, atr: 1, emaFast: 95, emaSlow: 105 }); return up.trend === 'up' && dn.trend === 'dn'; })());
+}
+
+// ===== GOAL28: actionCardData（行动卡数据：基石方向+用户规则状态+方向券）=====
+{
+  console.log('\n[kchart: GOAL28 actionCardData]');
+  ok('actionCard: 坏价格→null', actionCardData({ alphaDir: 'long', price: 0 }) === null);
+  ok('actionCard: 坏价格 NaN→null', actionCardData({ price: NaN }) === null);
+  ok('actionCard: 带界缺省回退 80/20', (() => { const r = actionCardData({ price: 100 }); return r.upper === 80 && r.lower === 20; })());
+  ok('actionCard: 自定义带界生效', (() => { const r = actionCardData({ price: 100, upper: 90, lower: 10 }); return r.upper === 90 && r.lower === 10; })());
+  // 带边沿交叉判定（GOAL16-B 规则语义）
+  ok('actionCard: K升破下带→upExit', actionCardData({ price: 100, prevK15: 15, k15: 22, d15: 18 }).cross === 'upExit');
+  ok('actionCard: K跌破上带→dnExit', actionCardData({ price: 100, prevK15: 85, k15: 78, d15: 82 }).cross === 'dnExit');
+  ok('actionCard: 带内无穿越→none', actionCardData({ price: 100, prevK15: 50, k15: 48, d15: 50 }).cross === 'none');
+  ok('actionCard: 自定义带界 10 交叉判定', actionCardData({ price: 100, upper: 90, lower: 10, prevK15: 8, k15: 12, d15: 9 }).cross === 'upExit');
+  // inBand 带内状态
+  ok('actionCard: K,D均<lower→lower', actionCardData({ price: 100, k15: 12, d15: 15 }).inBand === 'lower');
+  ok('actionCard: K,D均>upper→upper', actionCardData({ price: 100, k15: 85, d15: 88 }).inBand === 'upper');
+  ok('actionCard: 中带→mid', actionCardData({ price: 100, k15: 50, d15: 50 }).inBand === 'mid');
+  ok('actionCard: 读数不足→na', actionCardData({ price: 100, k15: null, d15: null }).inBand === 'na');
+  // 方向券（GOAL16-B：反向仅提示勿动）
+  ok('actionCard: upExit+α多→enter做多', (() => { const r = actionCardData({ alphaDir: 'long', price: 100, prevK15: 15, k15: 22, d15: 18 }); return r.verdict === 'enter' && r.side === 'long'; })());
+  ok('actionCard: upExit+α空→reverse', (() => { const r = actionCardData({ alphaDir: 'short', price: 100, prevK15: 15, k15: 22, d15: 18 }); return r.verdict === 'reverse' && r.side === 'long'; })());
+  ok('actionCard: dnExit+α空→enter做空', (() => { const r = actionCardData({ alphaDir: 'short', price: 100, prevK15: 85, k15: 78, d15: 82 }); return r.verdict === 'enter' && r.side === 'short'; })());
+  ok('actionCard: dnExit+α多→reverse', actionCardData({ alphaDir: 'long', price: 100, prevK15: 85, k15: 78, d15: 82 }).verdict === 'reverse');
+  ok('actionCard: 交叉+α中性→noBase', actionCardData({ alphaDir: null, price: 100, prevK15: 15, k15: 22, d15: 18 }).verdict === 'noBase');
+  ok('actionCard: 无交叉→idle', actionCardData({ alphaDir: 'long', price: 100, prevK15: 50, k15: 48, d15: 50 }).verdict === 'idle');
+  // 止损 1.5×ATR / 目标 2×ATR（GOAL28 定版）
+  ok('actionCard: 多单止损=价-1.5ATR 目标=价+2ATR', (() => { const r = actionCardData({ alphaDir: 'long', price: 1000, atr: 10, prevK15: 15, k15: 22, d15: 18 }); return r.stop === 985 && r.target === 1020; })());
+  ok('actionCard: 空单止损在上方 目标在下方', (() => { const r = actionCardData({ alphaDir: 'short', price: 1000, atr: 10, prevK15: 85, k15: 78, d15: 82 }); return r.stop === 1015 && r.target === 980; })());
+  ok('actionCard: ATR无效→stop/target null', (() => { const r = actionCardData({ alphaDir: 'long', price: 1000, atr: null, prevK15: 15, k15: 22, d15: 18 }); return r.stop === null && r.target === null; })());
+  ok('actionCard: idle无交叉→无止损目标', (() => { const r = actionCardData({ alphaDir: 'long', price: 1000, atr: 10, prevK15: 50, k15: 48, d15: 50 }); return r.stop === null && r.target === null; })());
+  // α方向归一化与权重
+  ok('actionCard: α方向非法值→null', actionCardData({ alphaDir: 'x', price: 100 }).alphaDir === null);
+  ok('actionCard: α权重非法→0', actionCardData({ price: 100, alphaW: NaN }).alphaW === 0);
+  ok('actionCard: α权重透传', actionCardData({ price: 100, alphaW: 0.53 }).alphaW === 0.53);
 }
 
 // ===== GOAL24: 拇指条强制两段确认（kchartTradeOpen/Close forceArm）=====
@@ -3361,3 +3393,6 @@ if (failed > 0) process.exit(1);
     ok('subHoverAt SRSI 全量→K/D 有值', r2 && r2.k != null && r2.d != null);
   } finally { globalThis.window = prevWin; }
 }
+
+console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
+if (failed > 0) process.exit(1);

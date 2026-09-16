@@ -3368,32 +3368,56 @@ function drawMain(ctx, sym, tf, H) {
       const alphaDir = aw16 > 0.02 ? 'long' : aw16 < -0.02 ? 'short' : (window.__alphaLab && window.__alphaLab.state && window.__alphaLab.state.dir) || null;
       const pm16 = (typeof series !== 'undefined' && series && series.ema20 != null) ? { emaFast: series.ema20, emaSlow: series.ema120 } : { emaFast: null, emaSlow: null };
       window.__manualSignal = manualSignal({ alphaDir, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, emaFast: pm16.emaFast, emaSlow: pm16.emaSlow });
+      // GOAL28：行动卡数据（带界用 resolveEntryBands 的实际带，含用户自定义带；α权重 aw16 供显示）
+      const _eb28 = resolveEntryBands(cfg);
+      window.__actionCard = actionCardData({ alphaDir, alphaW: aw16, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, upper: _eb28.upper, lower: _eb28.lower });
       window.__manualSigErr = null;
     } catch (e) { window.__manualSigErr = String(e && e.message || e).slice(0, 80); if (!window.__manualSigWarned) { window.__manualSigWarned = 1; console.log('[SIG-CARD] 计算失败:', window.__manualSigErr); } }
   }
-  if (cfg.sigOverlay && window.__manualSignal) {
-    const ms = window.__manualSignal;
+  // GOAL28：主图行动卡（大字「现在该做什么」）——基石方向(α权重%) + 用户规则状态(15m带边沿交叉) + 方向券。
+  // GOAL16-B 实锤：反向信号免成本皆负 → 反向仅灰提示勿动。纯显示层，与交易决策无耦合。
+  if (cfg.sigOverlay && window.__actionCard) {
+    const ac = window.__actionCard;
     ctx.save();
-    ctx.font = 'bold 11px sans-serif';
-    const col = ms.action === 'long' ? '#2ecc71' : ms.action === 'short' ? '#ff6b6b' : ms.action === 'hold' ? '#f59e0b' : '#8899aa';
-    const actTxt = ms.action === 'long' ? '做多' : ms.action === 'short' ? '做空' : ms.action === 'hold' ? '持仓' : '观望';
-    // GOAL17：左侧垂直居中（原左上角挡币对/周期/根数提示）；带币对+时机周期标签（切币自动跟随、全币对有效）
-    // GOAL19 修复：Y 基准=主图区（PAD_T→mainBottom）中点——旧式 (PAD_T+(H-PAD_B))/2 落进子图区域，被子图随后绘制覆盖（用户环境“不显示”根因）
-    const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m SRSI';
-    const l1 = '盯盘: ' + actTxt + '·时机' + ms.timing;
-    const l2 = ms.reason + (ms.stop != null && ms.target != null ? (' · SL ' + ms.stop.toFixed(0) + ' / TP ' + ms.target.toFixed(0)) : '') + (ms.trend === 'up' ? ' | EMA↑' : ms.trend === 'dn' ? ' | EMA↓' : '');
+    const bigTxt = ac.verdict === 'enter' ? ('可入场 ' + (ac.side === 'long' ? '做多' : '做空'))
+      : ac.verdict === 'reverse' ? '勿动·与基石反向'
+      : ac.verdict === 'noBase' ? '观望·基石中性'
+      : '等待 15m 带交叉';
+    const col = ac.verdict === 'enter' ? '#2ecc71' : ac.verdict === 'idle' ? '#f59e0b' : '#8899aa';
+    const dirTxt = ac.alphaDir === 'long' ? '多' : ac.alphaDir === 'short' ? '空' : '中性';
+    const bandTxt = ac.inBand === 'lower' ? 'K,D均在下带(< ' + ac.lower.toFixed(0) + ')'
+      : ac.inBand === 'upper' ? 'K,D均在上带(> ' + ac.upper.toFixed(0) + ')'
+      : ac.inBand === 'mid' ? 'K,D中带无交叉' : '读数不足';
+    const ruleTxt = ac.verdict === 'idle' ? '升破 ' + ac.lower.toFixed(0) + ' →多 / 跌破 ' + ac.upper.toFixed(0) + ' →空 · α同向才入场'
+      : ac.verdict === 'reverse' ? '反向信号仅提示·勿动（免成本皆负）'
+      : ac.verdict === 'noBase' ? '带交叉已现·基石无方向·观望'
+      : (ac.cross === 'upExit' ? '升破下带' : '跌破上带') + '·与基石同向·顺势入场';
+    const fmtP = (v) => (v != null && Number.isFinite(v)) ? (v >= 100 ? v.toFixed(1) : v.toFixed(3)) : '--';
+    const entryTxt = ac.stop != null && ac.target != null
+      ? '入场 ' + fmtP(ac.price) + ' / 止损 ' + fmtP(ac.stop) + ' / 目标 ' + fmtP(ac.target) + ' · 仓 卫星 10-15%×5-7x'
+      : '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x';
+    const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m 带规则';
+    const l3 = '基石 α' + dirTxt + ' ' + Math.abs(ac.alphaW * 100).toFixed(0) + '% · ' + bandTxt;
     ctx.textAlign = 'left';
-    const w1 = Math.max(Math.max(ctx.measureText(l1).width, ctx.measureText(l2).width), ctx.measureText(l0).width) + 14;
-    const mainBottom = PAD_T + MAIN_H;
-    const cy1 = (PAD_T + mainBottom) / 2 - 22;
-    ctx.fillStyle = 'rgba(16,22,30,.78)';
-    ctx.fillRect(PAD_L + 6, cy1, w1, 44);
-    ctx.strokeStyle = col; ctx.globalAlpha = .6; ctx.strokeRect(PAD_L + 6, cy1, w1, 44); ctx.globalAlpha = 1;
+    ctx.font = '9px sans-serif';
+    let w28 = Math.max(Math.max(ctx.measureText(l0).width, ctx.measureText(l3).width), Math.max(ctx.measureText(ruleTxt).width, ctx.measureText(entryTxt).width)) + 14;
+    ctx.font = 'bold 15px sans-serif';
+    w28 = Math.max(w28, ctx.measureText(bigTxt).width + 14);
+    // GOAL19 基准：Y=主图区（PAD_T→mainBottom）中点（外层已有 mainBottom，勿重复声明）
+    const cy28 = (PAD_T + mainBottom) / 2 - 40;
+    ctx.fillStyle = 'rgba(16,22,30,.8)';
+    ctx.fillRect(PAD_L + 6, cy28, w28, 80);
+    ctx.strokeStyle = col; ctx.globalAlpha = .65; ctx.strokeRect(PAD_L + 6, cy28, w28, 80); ctx.globalAlpha = 1;
     ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(160,175,190,.9)';
-    ctx.fillText(l0, PAD_L + 13, cy1 + 12);
-    ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = col; ctx.fillText(l1, PAD_L + 13, cy1 + 26);
-    ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(230,238,245,.85)';
-    ctx.fillText(l2, PAD_L + 13, cy1 + 39);
+    ctx.fillText(l0, PAD_L + 13, cy28 + 13);
+    ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = col;
+    ctx.fillText(bigTxt, PAD_L + 13, cy28 + 33);
+    ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(230,238,245,.9)';
+    ctx.fillText(l3, PAD_L + 13, cy28 + 49);
+    ctx.fillStyle = 'rgba(200,212,224,.85)';
+    ctx.fillText(ruleTxt, PAD_L + 13, cy28 + 62);
+    ctx.fillStyle = ac.stop != null ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
+    ctx.fillText(entryTxt, PAD_L + 13, cy28 + 75);
     ctx.restore();
   }
   if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
@@ -3489,7 +3513,7 @@ function drawMain(ctx, sym, tf, H) {
     }
     if (painted) {
       ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#7f8fa6'; ctx.textAlign = 'right';
-      ctx.fillText('SRSI回测信号 ' + painted, W - PAD_R - 4, PAD_T + 26);
+      ctx.fillText('SRSI回测信号 ' + painted, W - PAD_R - 4, PAD_T + 40); // GOAL28：从 PAD_T+26 下移避让右上角图例行
       ctx.textAlign = 'left';
     }
     ctx.restore();
@@ -3541,7 +3565,46 @@ function drawMain(ctx, sym, tf, H) {
   // 标题
   ctx.fillStyle = '#8b95a5'; ctx.font = '9px monospace';
   ctx.fillText(sym + ' · ' + tf + '  最近 ' + n + ' 根', PAD_L + 4, PAD_T + 10);
+  // GOAL28：主图信号图例（右上角常驻，y=PAD_T+24：与左上标题同行错开、锁定徽章(PAD_T+4)下方、hover汇总栏(PAD_T+36)上方）
+  drawSigLegend(ctx);
   return true;
+}
+
+// GOAL28：主图信号图例（右上角常驻小图例）——菱形/三角三来源分色说明，消除「分不清哪个菱形是什么」。
+// 色值与实际绘制点严格一致：α实盘菱形(GOAL13)/钩菱形(5.25 SRSI子图)/SRSI自动三角(GOAL13)。
+function drawSigLegend(ctx) {
+  ctx.save();
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const items = [
+    { icon: '◆', ic: '#22d3ee', txt: 'α多' },
+    { icon: '◆', ic: '#f59e0b', txt: 'α空' },
+    { icon: '◇', ic: '#8899aa', txt: '平仓' },
+    { icon: '◆', ic: '#FF5252', txt: '死钩' },
+    { icon: '◆', ic: '#00E676', txt: '金钩' },
+  ];
+  const GAP = 9;
+  let total = 0;
+  const segs = items.map(it => {
+    const iw = ctx.measureText(it.icon).width, tw = ctx.measureText(it.txt).width;
+    total += iw + 3 + tw + GAP;
+    return { ...it, iw, tw };
+  });
+  const iwUp = ctx.measureText('▲').width, iwDn = ctx.measureText('▼').width, twS = ctx.measureText('SRSI').width;
+  total += iwUp + iwDn + 2 + twS; // ▲▼SRSI 段（前段尾 GAP 已含在循环内）
+  const x0 = W - PAD_R - 4 - total;
+  const y = PAD_T + 24;
+  ctx.fillStyle = 'rgba(16,22,30,.55)';
+  ctx.fillRect(x0 - 5, y - 10, total + 10, 14);
+  let x = x0;
+  for (const s of segs) {
+    ctx.fillStyle = s.ic; ctx.fillText(s.icon, x, y); x += s.iw + 3;
+    ctx.fillStyle = 'rgba(200,212,224,.85)'; ctx.fillText(s.txt, x, y); x += s.tw + GAP;
+  }
+  ctx.fillStyle = '#2ecc71'; ctx.fillText('▲', x, y); x += iwUp;
+  ctx.fillStyle = '#ff6b6b'; ctx.fillText('▼', x, y); x += iwDn + 2;
+  ctx.fillStyle = 'rgba(200,212,224,.85)'; ctx.fillText('SRSI', x, y);
+  ctx.restore();
 }
 
 // ---- 子图（RSI / SRSI / MACD），SRSI 按勾选周期 ----
@@ -3840,6 +3903,24 @@ function drawMainDetail(ctx, m, lx, ly, plotW, H) {
     `高 ${fmt(m.high)}  低 ${fmt(m.low)}`,
     `量 ${fmtVol(m.vol)}${chg}`
   ];
+  // GOAL28：hover 标记说明行——该 bar 时间窗内命中的实盘信号标记（与右上角图例互证，条件与 drawMain 绘制一致）
+  try {
+    if (typeof window !== 'undefined' && m.time != null && cfg.sigOverlay) {
+      const t0 = m.time, t1 = m.time + tfMs(cfg.mainTF);
+      const hits = [];
+      if (window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive()) {
+        for (const mk of (window.__alphaLiveMarks || [])) {
+          if (mk && Number.isFinite(mk.t) && mk.t >= t0 && mk.t < t1) hits.push((mk.action === 'close' || mk.dir === 0) ? 'α平仓(基石)' : mk.dir > 0 ? 'α开多(基石实盘)' : 'α开空(基石实盘)');
+        }
+      }
+      if (cfg.srsiAutoOn) {
+        for (const tr of (window.__srsiLiveTrades || [])) {
+          if (tr && Number.isFinite(tr.t) && tr.t >= t0 && tr.t < t1) hits.push(tr.action === 'open' ? (tr.side === 'long' ? 'SRSI开多(自动)' : 'SRSI开空(自动)') : 'SRSI平仓(自动)');
+        }
+      }
+      if (hits.length) lines.push('标记 ' + hits.slice(0, 3).join(' · ') + (hits.length > 3 ? ' …' : ''));
+    }
+  } catch (e) { /* 标记行失败不影响 OHLCV 详情 */ }
   drawFloatBox(ctx, lines, lx, ly, plotW, H, { lastCol: col });
 }
 
@@ -4292,6 +4373,35 @@ export function manualSignal({ alphaDir, k15, d15, prevK15, price, atr, emaFast,
     return { ...base.short, timing: '可', reason: 'Alpha空头·15m中带：持仓/反弹后再入', trend };
   }
   return { action: 'wait', timing: '观望', reason: 'Alpha中性：无方向优势，观望', trend, stop: null, target: null };
+}
+
+// GOAL28 行动卡数据（纯函数，可单测）：「现在该做什么」三元组 = 基石方向(α权重%) + 用户规则状态(15m带边沿交叉否) + 方向券判定。
+// 规则语义与 GOAL16-B 长窗验证版一致：K 从 <lower 升破 ≥lower → upExit(规则开多)；从 >upper 跌破 ≤upper → dnExit(规则开空)。
+// 方向券（GOAL16-B 实锤：反向信号免成本皆负 → 反向仅提示勿动）：交叉方向=Alpha 同向 → enter(绿)；反向 → reverse(灰)；
+// 基石中性(无方向) → noBase(灰)；无交叉 → idle(等待)。止损=1.5×ATR、目标=2×ATR（GOAL28 定版，区别于 manualSignal 的 3×ATR）。
+export function actionCardData({ alphaDir, alphaW, k15, d15, prevK15, price, atr, upper, lower }) {
+  if (!Number.isFinite(price) || price <= 0) return null;
+  const u = Number.isFinite(upper) && upper > 0 ? upper : 80;
+  const lo = Number.isFinite(lower) && lower > 0 ? lower : 20;
+  const cross = (prevK15 != null && Number.isFinite(prevK15) && k15 != null && Number.isFinite(k15))
+    ? (prevK15 < lo && k15 >= lo ? 'upExit' : prevK15 > u && k15 <= u ? 'dnExit' : 'none')
+    : 'none';
+  const inBand = (k15 != null && Number.isFinite(k15) && d15 != null && Number.isFinite(d15))
+    ? (k15 < lo && d15 < lo ? 'lower' : k15 > u && d15 > u ? 'upper' : 'mid')
+    : 'na';
+  const crossDir = cross === 'upExit' ? 'long' : cross === 'dnExit' ? 'short' : null;
+  let verdict = 'idle';
+  if (crossDir === 'long') verdict = alphaDir === 'long' ? 'enter' : alphaDir === 'short' ? 'reverse' : 'noBase';
+  else if (crossDir === 'short') verdict = alphaDir === 'short' ? 'enter' : alphaDir === 'long' ? 'reverse' : 'noBase';
+  const atrOk = Number.isFinite(atr) && atr > 0;
+  const stop = crossDir && atrOk ? (crossDir === 'long' ? price - 1.5 * atr : price + 1.5 * atr) : null;
+  const target = crossDir && atrOk ? (crossDir === 'long' ? price + 2 * atr : price - 2 * atr) : null;
+  return {
+    cross, crossDir, inBand, verdict,
+    alphaDir: alphaDir === 'long' || alphaDir === 'short' ? alphaDir : null,
+    alphaW: Number.isFinite(alphaW) ? alphaW : 0,
+    side: crossDir, stop, target, price, upper: u, lower: lo
+  };
 }
 
 // 某周期优选角色：勾选「辅助(只做放行闸门)」的周期即闸门(gate)，其余为波段(swing)
