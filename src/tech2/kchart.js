@@ -310,8 +310,9 @@ export function defaultKConfig() {
     srsiAutoMaxHoldBars: 0,     // 最长持仓(0=关；单位 15m 根数，超过即市价离场；实盘按等价时间)
     srsiAutoRevConfirm: 3,      // 防爆反手确认阈值%：危险信号触发后，需价格逆向突破此幅度确认趋势破位才开反手(revconf)，避免接飞刀
     srsiAutoConfirmBars: 0,     // GOAL27 确认 bar：带边沿信号后需 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行，降频省成本）
-    srsiAutoRegimeGate: 'off',  // GOAL29 regime 三态闸门：off=关(默认,零行为变化) / confirm=中波降频(+1确认bar) / size=中波减仓×0.5 / block=仅低波阴跌禁开
+    srsiAutoRegimeGate: 'off',  // GOAL29 regime 三态闸门：off=关(默认,零行为变化) / confirm=中波降频(+1确认bar) / size=中波减仓×0.5 / block=仅低波阴跌禁开 / tconf=趋势市升确认(AIS regime)
     srsiAutoRegimeW: 480,       // regime 分位滚动窗（1h 根数，默认 480≈20 天）
+    srsiAutoRegimeEmaTf: '1h',  // GOAL29-A2 阴跌判定 EMA 周期：'1h'(默认) | '1d'(长窗更优，1d 数据不足自动降级 1h)
     srsiAutoCloseManual: false, // 自动可平人工单：关=仅平自动单；开=盈利的反向人工单也可被自动平仓（仍仅净盈利才平）
     srsiAutoBonusBig: 3,        // 大方向一致加成比例（%）—— 仅用于 #2 方向合力展示
     srsiAutoBonusMid: 2,        // 中方向一致加成比例（%）
@@ -436,8 +437,9 @@ function normalizeCfg(c) {
   if (typeof c.srsiAutoMaxHoldBars !== 'number' || !(c.srsiAutoMaxHoldBars >= 1 && c.srsiAutoMaxHoldBars <= 2000)) c.srsiAutoMaxHoldBars = 0;
   if (typeof c.srsiAutoRevConfirm !== 'number' || !(c.srsiAutoRevConfirm >= 0 && c.srsiAutoRevConfirm <= 20)) c.srsiAutoRevConfirm = 3;
   if (typeof c.srsiAutoConfirmBars !== 'number' || !(c.srsiAutoConfirmBars >= 0 && c.srsiAutoConfirmBars <= 5)) c.srsiAutoConfirmBars = 0;
-  if (!['off', 'confirm', 'size', 'block'].includes(c.srsiAutoRegimeGate)) c.srsiAutoRegimeGate = 'off';
+  if (!['off', 'confirm', 'size', 'block', 'tconf'].includes(c.srsiAutoRegimeGate)) c.srsiAutoRegimeGate = 'off';
   if (typeof c.srsiAutoRegimeW !== 'number' || !(c.srsiAutoRegimeW >= 60 && c.srsiAutoRegimeW <= 2000)) c.srsiAutoRegimeW = 480;
+  if (c.srsiAutoRegimeEmaTf !== '1d') c.srsiAutoRegimeEmaTf = '1h';
   if (typeof c.srsiAutoReversePct !== 'number' || !(c.srsiAutoReversePct >= 0 && c.srsiAutoReversePct <= 100)) c.srsiAutoReversePct = 0;
   if (typeof c.srsiAutoReverseLev !== 'number' || !(c.srsiAutoReverseLev >= 0 && c.srsiAutoReverseLev <= 30)) c.srsiAutoReverseLev = 0;
   if (typeof c.srsiAutoDangerAlarm !== 'boolean') c.srsiAutoDangerAlarm = true;
@@ -5212,7 +5214,8 @@ function renderQuickTrade() {
       <label class="kt-mini">杠杆x<input id="ktSrsiLev" class="kt-num" type="number" min="1" max="30" step="1"/></label>
       <label class="kt-mini">同方向最多<input id="ktSrsiMax" class="kt-num" type="number" min="1" max="10" step="1"/>单</label>
       <label class="kt-mini">确认bar<input id="ktSrsiConfirm" class="kt-num" type="number" min="0" max="5" step="1"/> (0=关·GOAL27)</label>
-      <label class="kt-mini">regime闸门<select id="ktSrsiRegime" class="kt-sel"><option value="off">关</option><option value="confirm">中波降频</option><option value="size">中波减仓</option><option value="block">仅阴跌禁开</option></select> (GOAL29)</label>
+      <label class="kt-mini">regime闸门<select id="ktSrsiRegime" class="kt-sel"><option value="off">关</option><option value="confirm">中波降频</option><option value="size">中波减仓</option><option value="block">仅阴跌禁开</option><option value="tconf">趋势升确认</option></select> (GOAL29)</label>
+      <label class="kt-mini">闸门EMA<select id="ktSrsiEmaTf" class="kt-sel"><option value="1h">1h</option><option value="1d">1d</option></select></label>
       <label class="kt-mini"><input id="ktSrsiCloseManual" type="checkbox"/>自动可平人工单</label>
       <label class="kt-mini">上限带(0=15m优选)<input id="ktSrsiUp" class="kt-num" type="number" min="0" max="100" step="1"/></label>
       <label class="kt-mini">下限带(0=15m优选)<input id="ktSrsiLo" class="kt-num" type="number" min="0" max="50" step="1"/></label>
@@ -5280,7 +5283,8 @@ function renderQuickTrade() {
           <label class="kt-mini">杠杆x<input id="ktBtLev" class="kt-num" type="number" min="1" max="30" step="1"/></label>
           <label class="kt-mini">同方向最多<input id="ktBtMax" class="kt-num" type="number" min="1" max="10" step="1"/>单</label>
           <label class="kt-mini">确认bar<input id="ktBtConfirm" class="kt-num" type="number" min="0" max="5" step="1"/> (0=关)</label>
-          <label class="kt-mini">regime闸门<select id="ktBtRegime" class="kt-sel"><option value="off">关</option><option value="confirm">中波降频</option><option value="size">中波减仓</option><option value="block">仅阴跌禁开</option></select> (GOAL29)</label>
+          <label class="kt-mini">regime闸门<select id="ktBtRegime" class="kt-sel"><option value="off">关</option><option value="confirm">中波降频</option><option value="size">中波减仓</option><option value="block">仅阴跌禁开</option><option value="tconf">趋势升确认</option></select> (GOAL29)</label>
+          <label class="kt-mini">闸门EMA<select id="ktBtEmaTf" class="kt-sel"><option value="1h">1h</option><option value="1d">1d</option></select></label>
           <label class="kt-mini">上限带<input id="ktBtUp" class="kt-num" type="number" min="50" max="100" step="1"/></label>
           <label class="kt-mini">下限带<input id="ktBtLo" class="kt-num" type="number" min="0" max="50" step="1"/></label>
           <label class="kt-mini">开仓上限U<input id="ktBtCapU" class="kt-num" type="number" min="0" step="1"/> (0不限)</label>
@@ -5401,6 +5405,8 @@ function renderQuickTrade() {
     if (_confBarsEl) _confBarsEl.addEventListener('input', () => { cfg.srsiAutoConfirmBars = Math.max(0, Math.min(5, Math.round(+_confBarsEl.value || 0))); persist(); });
     const _regimeEl = b.querySelector('#ktSrsiRegime');
     if (_regimeEl) _regimeEl.addEventListener('change', () => { cfg.srsiAutoRegimeGate = _regimeEl.value; persist(); });
+    const _emaTfEl = b.querySelector('#ktSrsiEmaTf');
+    if (_emaTfEl) _emaTfEl.addEventListener('change', () => { cfg.srsiAutoRegimeEmaTf = _emaTfEl.value; persist(); });
     b.querySelector('#ktSrsiDangerAlarm').addEventListener('change', () => { cfg.srsiAutoDangerAlarm = !!b.querySelector('#ktSrsiDangerAlarm').checked; persist(); });
     b.querySelector('#ktSrsiHotStop').addEventListener('change', () => { cfg.srsiAutoHotStop = !!b.querySelector('#ktSrsiHotStop').checked; persist(); });
     b.querySelector('#ktSrsiAdaptiveLev').addEventListener('change', () => { cfg.srsiAutoAdaptiveLev = !!b.querySelector('#ktSrsiAdaptiveLev').checked; persist(); });
@@ -5439,6 +5445,7 @@ function renderQuickTrade() {
     b.querySelector('#ktBtMax').addEventListener('input', () => { _btSet({ maxSame: _clampNum(b.querySelector('#ktBtMax').value, 1, 10, 3) }); });
     b.querySelector('#ktBtConfirm').addEventListener('input', () => { _btSet({ confirmBars: Math.max(0, Math.min(5, Math.round(+b.querySelector('#ktBtConfirm').value || 0))) }); });
     b.querySelector('#ktBtRegime').addEventListener('change', () => { _btSet({ regimeGate: b.querySelector('#ktBtRegime').value }, true); });
+    b.querySelector('#ktBtEmaTf').addEventListener('change', () => { _btSet({ regimeEmaTf: b.querySelector('#ktBtEmaTf').value }, true); });
     b.querySelector('#ktBtUp').addEventListener('input', () => { _btSet({ upper: _clampNum(b.querySelector('#ktBtUp').value, 50, 100, 90) }); });
     b.querySelector('#ktBtLo').addEventListener('input', () => { _btSet({ lower: _clampNum(b.querySelector('#ktBtLo').value, 0, 50, 10) }); });
     b.querySelector('#ktBtCapU').addEventListener('input', () => { _btSet({ capUsdt: Math.max(0, +b.querySelector('#ktBtCapU').value || 0) }); });
@@ -5561,6 +5568,8 @@ function renderQuickTrade() {
   if (confBarsEl) confBarsEl.value = cfg.srsiAutoConfirmBars;
   const regimeGateEl = bar.querySelector('#ktSrsiRegime');
   if (regimeGateEl) regimeGateEl.value = cfg.srsiAutoRegimeGate || 'off';
+  const emaTfEl = bar.querySelector('#ktSrsiEmaTf');
+  if (emaTfEl) emaTfEl.value = cfg.srsiAutoRegimeEmaTf || '1h';
   if (alarmEl) alarmEl.checked = !!cfg.srsiAutoDangerAlarm;
   const hotStopEl = bar.querySelector('#ktSrsiHotStop');
   if (hotStopEl) hotStopEl.checked = !!cfg.srsiAutoHotStop;
@@ -5586,6 +5595,7 @@ function renderQuickTrade() {
   _btVal('ktBtMax', _btCfg.maxSame);
   _btVal('ktBtConfirm', _btCfg.confirmBars);
   const _btRegimeEl = bar.querySelector('#ktBtRegime'); if (_btRegimeEl) _btRegimeEl.value = _btCfg.regimeGate || 'off';
+  const _btEmaTfEl = bar.querySelector('#ktBtEmaTf'); if (_btEmaTfEl) _btEmaTfEl.value = _btCfg.regimeEmaTf || '1h';
   _btVal('ktBtUp', _btCfg.upper);
   _btVal('ktBtLo', _btCfg.lower);
   _btVal('ktBtCapU', _btCfg.capUsdt);
@@ -6092,8 +6102,10 @@ export function srsiAutoRegime(c1h, price, opts = {}) {
   const n = atr.length;
   const last = atr[n - 1];
   const atrPct = (last != null && c[n - 1]) ? last / c[n - 1] * 100 : null;
-  const emaArr = ema(c, 200);
-  const ema200 = (emaArr[n - 1] != null && isFinite(emaArr[n - 1])) ? emaArr[n - 1] : null;
+  // GOAL29-A2：阴跌判定 EMA 周期可选（'1h' 默认 | '1d'）；1d 数据不足(<200 根)安全降级回 1h
+  const _emaC = (opts.emaTf === '1d' && Array.isArray(opts.c1d) && opts.c1d.length >= 200) ? opts.c1d : c;
+  const emaArr = ema(_emaC, 200);
+  const ema200 = (emaArr[_emaC.length - 1] != null && isFinite(emaArr[_emaC.length - 1])) ? emaArr[_emaC.length - 1] : null;
   const vals = [];
   for (let i = Math.max(0, n - W); i < n; i++) { const a = atr[i]; if (a != null && isFinite(a) && c[i] > 0) vals.push(a / c[i] * 100); }
   const minOk = vals.length >= THRESH.REGIME_GATE_MINN;
@@ -6140,7 +6152,7 @@ export function runSrsiAutoTrade(sym, inj) {
   const _recentPct = (_c15live.length >= 5) ? (_c15live[_c15live.length - 1] - _c15live[_c15live.length - 5]) / _c15live[_c15live.length - 5] * 100 : null;
   // GOAL29 regime 三态闸门：高波照常 / 中波降频或减仓 / 低波阴跌禁开新仓（off=关，零行为变化）
   const _rgGate = cfg.srsiAutoRegimeGate !== 'off';
-  const _rg = _rgGate ? srsiAutoRegime(_c1hlive.map(Number), price, { w: cfg.srsiAutoRegimeW }) : null;
+  const _rg = _rgGate ? srsiAutoRegime(_c1hlive.map(Number), price, { w: cfg.srsiAutoRegimeW, emaTf: cfg.srsiAutoRegimeEmaTf, c1d: (getTFData(sym, '1d') || {}).c }) : null;
   if (_rgGate) st.regime = _rg; // 供状态面板显示
   // #1 硬约束：15m 未优选 → 禁止自动交易（其余周期方向信息不足，按 #4 规则该减则减）
   const _canTrade = cfg.srsiOptSource['15m'] === 'optimized';
@@ -6245,8 +6257,34 @@ export function runSrsiAutoTrade(sym, inj) {
   // GOAL27 确认 bar（实盘）：srsiAutoConfirmBars>0 时边沿事件挂起，待 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行，行为不变）
   const _confirmNL = (cfg.srsiAutoConfirmBars != null) ? Math.max(0, Math.min(5, Math.floor(+cfg.srsiAutoConfirmBars || 0))) : 0;
   // GOAL29：中波降频 = 有效确认根数 +1（挂单创建时捕获当时档位 pc.n；闸门 off 时 pc.n≡_confirmNL 行为不变）
-  const _effConfirmNow = () => _confirmNL + (_rg && cfg.srsiAutoRegimeGate === 'confirm' && _rg.state === 'mid' ? THRESH.REGIME_GATE_MID_CONFIRM : 0);
-  st.pendingConfirm = _effConfirmNow() > 0 ? (st.pendingConfirm || null) : null;
+  // GOAL29-A2：tconf = 趋势市(AIS regime)升确认；AIS 类型每 1h 根缓存一次（st._tconfCache）
+  const _confirmClass = cfg.srsiAutoRegimeGate === 'confirm' || cfg.srsiAutoRegimeGate === 'tconf';
+  const _trendType = () => {
+    if (cfg.srsiAutoRegimeGate !== 'tconf' || !_rg) return null;
+    const _c1h = _c1hlive;
+    if (_c1h.length < 90) return null;
+    const _t1h = (getTFData(sym, '1h') || {}).t || [];
+    const _key = _t1h[_t1h.length - 1];
+    if (st._tconfCache && st._tconfCache.key === _key) return st._tconfCache.type;
+    const _cn = _c1h.map(Number);
+    const _line = ais(_cn, 20, 8, 32, 14, 2).line;
+    const _n = _line.length, _j = _n - 1, _j60 = _n - 61;
+    let type = null;
+    if (_j60 >= 0 && _line[_j] != null && _line[_j60] != null && _line[_j60] > 0) {
+      const slope = (_line[_j] - _line[_j60]) / _line[_j60] * 100;
+      if (Math.abs(slope) < THRESH.REGIME_DEAD_SLOPE_PCT) type = 'range';
+      else { const above = _cn[_n - 1] > _line[_j]; type = slope > 0 ? (above ? 'trend-up' : 'pullback-up') : (above ? 'pullback-down' : 'trend-down'); }
+    }
+    st._tconfCache = { key: _key, type };
+    return type;
+  };
+  const _effConfirmNow = () => {
+    if (_confirmNL > 0 && !(_confirmClass && _rg)) return _confirmNL;
+    if (cfg.srsiAutoRegimeGate === 'confirm' && _rg && _rg.state === 'mid') return _confirmNL + THRESH.REGIME_GATE_MID_CONFIRM;
+    if (cfg.srsiAutoRegimeGate === 'tconf' && _rg) { const _ty = _trendType(); if (_ty && _ty.indexOf('trend') === 0) return _confirmNL + THRESH.REGIME_GATE_MID_CONFIRM; }
+    return _confirmNL;
+  };
+  st.pendingConfirm = (_confirmNL > 0 || (_confirmClass && _rg)) ? (st.pendingConfirm || null) : null;
   const _execEdgeLive = (side) => {
     if (side === 'short') {
       // 平盈利多单；多单亏损时仅跳过平仓（不操作），空单照开
@@ -6271,7 +6309,7 @@ export function runSrsiAutoTrade(sym, inj) {
     else if (_effN0 <= 0) _execEdgeLive('long');
   }
   // 挂单确认推进（每秒检查；新 15m 根出现=前根收盘，检查刚收盘根最终 K/D 仍带内；超时作废）
-  if (st.pendingConfirm && _ts15.length >= 2) {
+  if (st.pendingConfirm && _ts15.length >= 2 && (_confirmNL > 0 || _effConfirmNow() > 0)) { // 推进门控与回测 _effConfirmAt(i)>0 同口径
     const pc = st.pendingConfirm;
     const _pcN = pc.n || _confirmNL; // 兼容旧挂单（无 n 字段时回退基础档位）
     const _lastT = _ts15[_ts15.length - 1];
@@ -6431,7 +6469,9 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   // ---- GOAL29 regime 三态闸门（与实盘 srsiAutoRegime 同口径；off=零行为变化）----
   // 高波(1h ATR%≥滚动P75)→照常；中波→confirm+1 或 减仓×0.5；低波阴跌(<P25 且 价<1h EMA200)→禁开新仓。
   // 分位窗=1h ATR% 滚动 W 根（默认 480≈20d，与实盘 KLINE_LIMIT=500 内可复算一致）；冷启动 <360 样本闸门不生效。
-  const gateMode = (config.srsiAutoRegimeGate === 'confirm' || config.srsiAutoRegimeGate === 'size' || config.srsiAutoRegimeGate === 'block') ? config.srsiAutoRegimeGate : 'off';
+  const gateMode = ['confirm', 'size', 'block', 'tconf'].includes(config.srsiAutoRegimeGate) ? config.srsiAutoRegimeGate : 'off';
+  const gateEmaTf = config.srsiAutoRegimeEmaTf === '1d' ? '1d' : '1h';
+  const n1d = gateEmaTf === '1d' ? norm('1d') : null; const c1d = n1d ? n1d.closes : null; const t1d = n1d ? n1d.times : null;
   const gateW = (typeof config.srsiAutoRegimeW === 'number' && config.srsiAutoRegimeW >= 60) ? Math.floor(config.srsiAutoRegimeW) : THRESH.REGIME_GATE_W;
   const _gateState = { high: 0, mid: 0, lowdrift: 0, na: 0, blockedOpens: 0, midSizes: 0, midConfirms: 0 };
   let _gatePct75 = null, _gatePct25 = null, _gateEma = null, _gatePct = null;
@@ -6451,7 +6491,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
       }
       if (win.length >= MINN) { _gatePct75[j] = win[Math.floor(0.75 * (win.length - 1))]; _gatePct25[j] = win[Math.floor(0.25 * (win.length - 1))]; }
     }
-    _gateEma = c1h.length ? ema(c1h, 200) : [];
+    const _gateC = (gateEmaTf === '1d' && c1d && c1d.length >= 200) ? c1d : c1h;
+    _gateEma = _gateC.length ? ema(_gateC, 200) : [];
   }
   const _regimeAt = (i) => {
     if (gateMode === 'off') return null;
@@ -6461,7 +6502,8 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
     if (ap == null) { _gateState.na++; return null; }
     if (ap >= _gatePct75[j]) return 'high';
     if (ap < _gatePct25[j]) {
-      const e = (_gateEma[j] != null && isFinite(_gateEma[j])) ? _gateEma[j] : null;
+      const je = (gateEmaTf === '1d' && t1d) ? idxLe(t1d, t15[i]) : j;
+      const e = (je >= 0 && _gateEma[je] != null && isFinite(_gateEma[je])) ? _gateEma[je] : null;
       if (e != null && c15[i] < e) return 'lowdrift';
       return 'mid';
     }
@@ -6572,7 +6614,23 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
   const pendingRev = { long: null, short: null }; // revconf：危险信号触发后待价格确认才开的反手挂单
   let pendingConfirm = null; // GOAL27 确认 bar 挂单 {side, idx, count, n}
   const _confirmN = (config.srsiAutoConfirmBars != null) ? Math.max(0, Math.min(5, Math.floor(+config.srsiAutoConfirmBars || 0))) : 0;
-  const _effConfirmAt = (i) => _confirmN + (gateMode === 'confirm' && _regimeCached(i) === 'mid' ? THRESH.REGIME_GATE_MID_CONFIRM : 0); // GOAL29：中波降频
+  // GOAL29-A2：AIS regime 类型（复刻 detectRegimeState 无 pctHis 路径，因果预计算）——tconf 用
+  const _aisLine = gateMode === 'tconf' && c1h.length >= 90 ? ais(c1h, 20, 8, 32, 14, 2).line : null;
+  const _typeAt = (i) => {
+    const j = idxLe(t1h, t15[i]);
+    if (!_aisLine || j < 60 || _aisLine[j] == null || _aisLine[j - 60] == null || !_aisLine[j - 60]) return null;
+    const slope = (_aisLine[j] - _aisLine[j - 60]) / _aisLine[j - 60] * 100;
+    if (Math.abs(slope) < THRESH.REGIME_DEAD_SLOPE_PCT) return 'range';
+    const above = c1h[j] > _aisLine[j];
+    return slope > 0 ? (above ? 'trend-up' : 'pullback-up') : (above ? 'pullback-down' : 'trend-down');
+  };
+  const _typeCache = _aisLine ? new Array(c15.length).fill(undefined) : null;
+  const _typeCached = (i) => { if (!_aisLine) return null; if (_typeCache[i] === undefined) _typeCache[i] = _typeAt(i); return _typeCache[i]; };
+  const _effConfirmAt = (i) => {
+    if (gateMode === 'confirm' && _regimeCached(i) === 'mid') return _confirmN + THRESH.REGIME_GATE_MID_CONFIRM; // GOAL29：中波降频
+    if (gateMode === 'tconf' && _typeCached(i) && _typeCached(i).indexOf('trend') === 0) return _confirmN + THRESH.REGIME_GATE_MID_CONFIRM; // GOAL29-A2：趋势市升确认
+    return _confirmN;
+  };
   const liqLog = []; // 强平单归因日志：开仓/强平时刻的技术面上下文（供第三方 AI 找爆仓共同点）
   const openLog = []; // 全部开仓快照（含未爆仓，作对照组）：开仓时技术面上下文 + 是否最终爆仓
   const grossPnl = (side, entry, exit, amtUsdt, useLev) => (side === 'long' ? (exit - entry) : (entry - exit)) / entry * (useLev || effLev) * amtUsdt;
@@ -6975,7 +7033,7 @@ export function backtestSrsiAuto(sym, klinesByTf, config, principal, windowStart
     liqLog,
     openLog,
     dangerHits, reverseOpens, reversePnl, pdHits, dangerMode: config.srsiAutoDanger || 'none',
-    regimeStats: gateMode !== 'off' ? { mode: gateMode, w: gateW, ..._gateState } : null,
+    regimeStats: gateMode !== 'off' ? { mode: gateMode, w: gateW, emaTf: gateEmaTf, ..._gateState, types: _aisLine ? (() => { const t = { range: 0, 'trend-up': 0, 'trend-down': 0, 'pullback-up': 0, 'pullback-down': 0, na: 0 }; for (let i = lo; i < c15.length; i++) { const ty = _typeCached(i); t[ty || 'na']++; } return t; })() : null } : null,
     reopt: reopt ? { enabled: true, count: reoptCount, adopt: reoptAdopt, intervalH: reoptIntervalH, noTradeH: reoptNoTradeH } : { enabled: false }
   };
 }
@@ -7016,8 +7074,9 @@ function _btCfgDefaults() {
     lev: 5,                  // 杠杆 x
     maxSame: 3,              // 同方向最多连开单
     confirmBars: 0,          // GOAL27 确认 bar：边沿信号后需 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行）
-    regimeGate: 'off',       // GOAL29 regime 三态闸门：off / confirm(中波降频+1) / size(中波减仓×0.5) / block(仅低波阴跌禁开)
+    regimeGate: 'off',       // GOAL29 regime 三态闸门：off / confirm(中波降频+1) / size(中波减仓×0.5) / block(仅低波阴跌禁开) / tconf(趋势市升确认·AIS)
     regimeW: 480,            // regime 分位滚动窗（1h 根数，默认 480≈20 天）
+    regimeEmaTf: '1h',       // GOAL29-A2 阴跌判定 EMA 周期：1h / 1d(长窗更优)
     upper: 0,                // 开仓上限带（0=使用 15m 优选带）
     lower: 0,                // 开仓下限带（0=使用 15m 优选带）
     capUsdt: 0,              // 开仓上限 U（0=不限）
@@ -7078,6 +7137,7 @@ function _btOverlayFor(cfg, bt) {
     srsiAutoDanger: bt.danger, srsiAutoReversePct: bt.reversePct, srsiAutoReverseLev: bt.reverseLev, srsiAutoHotStop: !!bt.hotStop,
     srsiAutoStopPct: bt.stopPct || 0, srsiAutoRevConfirm: bt.revConfirm || 3, srsiAutoConfirmBars: bt.confirmBars || 0,
     srsiAutoRegimeGate: bt.regimeGate || 'off', srsiAutoRegimeW: bt.regimeW || THRESH.REGIME_GATE_W,
+    srsiAutoRegimeEmaTf: bt.regimeEmaTf === '1d' ? '1d' : '1h',
     srsiAutoAdaptiveLev: !!bt.adaptiveLev, srsiAutoAdaptiveLevMin: bt.adaptiveLevMin || THRESH.ADAPTIVE_LEV_MIN,
     srsiAutoAtrStop: !!bt.atrStop, srsiAutoAtrStopMult: bt.atrStopMult || THRESH.ATR_STOP_MULT,
     srsiAutoExitK: bt.exitK || 0, srsiAutoMaxHoldBars: bt.holdBars || 0

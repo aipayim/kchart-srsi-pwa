@@ -3453,9 +3453,16 @@ console.log('\n[kchart: GOAL29 srsiAutoRegime regime 三态闸门]');
   ok('srsiAutoRegime w=100<MINN→null', rTiny.state === null && rTiny.minOk === false);
   // THRESH 常量存在
   ok('THRESH REGIME_GATE 常量', THRESH.REGIME_GATE_W === 480 && THRESH.REGIME_GATE_MINN === 360 && THRESH.REGIME_GATE_MID_SIZE === 0.5 && THRESH.REGIME_GATE_MID_CONFIRM === 1);
-  // 默认零行为：cfg 默认 gate=off / W=480
+  // 默认零行为：cfg 默认 gate=off / W=480 / emaTf=1h
   const dc = __defaultKConfig();
   ok('cfg 默认 srsiAutoRegimeGate=off', dc.srsiAutoRegimeGate === 'off' && dc.srsiAutoRegimeW === 480);
+  ok('cfg 默认 srsiAutoRegimeEmaTf=1h', dc.srsiAutoRegimeEmaTf === '1h');
+
+  // GOAL29-A2：emaTf='1d' 降级与生效
+  const rD = srsiAutoRegime(hi, hi[hi.length - 1], { emaTf: '1d', c1d: hi }); // c1d 同 hi：仍能分类
+  ok('srsiAutoRegime emaTf=1d+c1d 生效', rD.state === 'high');
+  const rDeg = srsiAutoRegime(hi, hi[hi.length - 1], { emaTf: '1d', c1d: hi.slice(0, 50) }); // c1d<200 根 → 降级回 1h
+  ok('srsiAutoRegime 1d 数据不足降级回 1h', rDeg.state === 'high');
 }
 
 console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
@@ -3504,6 +3511,13 @@ console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
   // 非法 gate 值 → 回退 off（与 sanitize 同口径）
   const rBad = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'bogus' }, 1000, null, []);
   ok('回测 gate 非法值→off', rBad.regimeStats === null && rBad.finalEquity === rOff.finalEquity);
+
+  // GOAL29-A2：tconf 集成（AIS 类型遥测 + 1d EMA 链路）
+  const rTc = backtestSrsiAuto('T', kl, { ...base, srsiAutoRegimeGate: 'tconf', srsiAutoRegimeEmaTf: '1d' }, 1000, null, []);
+  ok('回测 gate tconf → mode=tconf', rTc.regimeStats && rTc.regimeStats.mode === 'tconf');
+  ok('回测 tconf AIS types 遥测', rTc.regimeStats.types && typeof rTc.regimeStats.types.range === 'number' && typeof rTc.regimeStats.types['trend-up'] === 'number');
+  ok('回测 tconf emaTf=1d 记录', rTc.regimeStats.emaTf === '1d');
+  ok('回测 tconf 开仓数 ≤ off', rTc.trades.filter(t => t.action === 'open').length <= rOff.trades.filter(t => t.action === 'open').length);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
