@@ -717,3 +717,18 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .rm-byblock{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
 .rm-dim{font-size:9px;color:var(--text2)}
 .rm-note{margin-top:3px;opacity:.8}
+
+/* ---- 规则监测 P2：一键优选 + 参数版本化 ---- */
+.rm-opt{border:1px solid var(--border);border-radius:5px;padding:5px 6px;background:var(--card2)}
+.rm-opt-head{font-size:9px;color:var(--text2);margin-bottom:4px}
+.rm-opt-progress{font-size:10px;color:var(--gold);margin:3px 0}
+.rm-opt-table table{width:100%;border-collapse:collapse;font-size:9px;margin-bottom:3px}
+.rm-opt-table th{color:var(--text2);font-weight:normal;text-align:left;padding:1px 4px;border-bottom:1px solid var(--border)}
+.rm-opt-table td{padding:1px 4px;border-bottom:1px solid var(--border);color:var(--text2)}
+.rm-opt-table tr.rm-pick td{color:var(--green)}
+.rm-btn{font-size:9px;padding:2px 8px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:5px;cursor:pointer;font-family:inherit;margin:2px 4px 2px 0}
+.rm-btn:hover{border-color:var(--accent);color:var(--accent)}
+.rm-btn-primary{border-color:rgba(0,230,118,.5);color:var(--green)}
+.rm-sel{font-size:9px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:1px 3px;font-family:inherit;max-width:200px}
+.rm-rv{margin-top:4px}
+.rm-opt-err{margin-top:3px}

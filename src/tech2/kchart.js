@@ -15,7 +15,7 @@ import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
 import { fundingPayment, FUNDING_HOURS } from '../engine/funding.js';
 import { regimeStrategy } from '../engine/regimeParams.js';
-import { updateRuleMonitorTick, renderRuleMonitor, kToggleRuleMonitor, ruleMonitorClear, __ruleMonitorTestState } from './ruleMonitor.js';
+import { updateRuleMonitorTick, renderRuleMonitor, kToggleRuleMonitor, ruleMonitorClear, ruleOptimizeRun, ruleOptimizeApply, ruleVersionSwitch, __ruleMonitorTestState } from './ruleMonitor.js';
 import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights } from '../engine/disciplineAnalysis.js';
 
 // ---- TSEV 权重（全局：dev 下 /data 训练 或 生产 /tsev-weights.json 快照；本机：IndexedDB 由 localLoop 训练）----
@@ -4933,6 +4933,9 @@ export const kchartApi = {
   kToggleRuleMonitor,
   renderRuleMonitor,
   ruleMonitorClear,
+  ruleOptimizeRun,
+  ruleOptimizeApply,
+  ruleVersionSwitch,
   srsiAutoStateOf,
   __ruleMonitorTestState,
   manualSignal,

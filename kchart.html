@@ -129,12 +129,12 @@
     <div class="kchart-tradebar" id="kchartTradeBar"></div>
   </div>
   <div class="kchart-maintools" id="kchartMainTools" data-tab-block="kline"></div>
-  <div class="kchart-box" data-tab-block="kline">
-    <canvas id="kchartCanvas"></canvas>
-  </div>
   <div class="kchart-discwrap closed" id="ruleMonitorWrap" data-tab-block="kline">
     <div class="kchart-ovhead" onclick="window.kToggleRuleMonitor()">📋 规则监测（影子计算 · 信号簿 · 点击展开/收起）<span id="ruleMonitorState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
     <div id="kchartRuleMonitor" class="rule-monitor"></div>
+  </div>
+  <div class="kchart-box" data-tab-block="kline">
+    <canvas id="kchartCanvas"></canvas>
   </div>
   <div class="kchart-settings closed" id="pwaSettings" data-tab-block="settings">
     <div class="kchart-ovhead" onclick="document.getElementById('pwaSettings').classList.toggle('closed')">⚙ 模拟真实交易设置（本地持久化）<span class="kchart-ovarrow">▾</span></div>

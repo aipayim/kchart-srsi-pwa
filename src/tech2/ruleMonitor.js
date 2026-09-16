@@ -656,14 +656,19 @@ export function renderRuleMonitor() {
   if (pe && snap.price != null) {
     pe.textContent = '$' + fmtN(snap.price, snap.price > 100 ? 1 : 3);
   }
-  // 签名：规则判定 + 结论 + 统计摘要（不含实时价，价由上面轻量行更新）
+  // 签名：规则判定 + 结论 + 统计摘要 + 优选/版本状态（不含实时价，价由上面轻量行更新）
   const stats = computeRuleStats(_rm.signals, nowMs(), 7);
   const rulesSig = snap.rules.map(r => r.id + r.state).join(',');
+  const rvSt = readRvStore();
+  const opt = _rmOpt;
   const sig = [snap.sym, snap.autoOn ? 1 : 0, rulesSig, snap.verdict.action, snap.verdict.blockedBy, snap.verdict.reason,
     snap.band, snap.regimeState, snap.confirmN, snap.pendConfirmRaw ? snap.pendConfirmRaw.count : -1,
     snap.pd.score, stats.total, stats.backfilled, stats.fwdWinRate, stats.blocked, stats.opened,
     Object.keys(stats.byBlock).map(k => k + ':' + stats.byBlock[k].n + ':' + (stats.byBlock[k].fwdWinRate == null ? '-' : stats.byBlock[k].fwdWinRate.toFixed(2))).join('|'),
-    _rm.mode].join('|');
+    _rm.mode,
+    'opt:' + (opt.running ? 1 : 0) + (opt.error ? 'E' : '') + (opt.result ? 'R' + (opt.result.applied ? 'A' : '') + Object.keys(opt.result.changes).length : ''),
+    'rv:' + rvSt.current + ':' + rvSt.versions.length + ':' + (opt.progress ? opt.progress.phase + opt.progress.label + opt.progress.i + '/' + opt.progress.n : '')
+  ].join('|');
   if (sig === _rm.lastRenderSig) return;
   _rm.lastRenderSig = sig;
   // ---- 构建 HTML ----
@@ -695,6 +700,28 @@ export function renderRuleMonitor() {
       : stats.blockedIfAllowedWinRate > stats.fwdWinRate ? '<b class="rm-bad">拦错了？</b>被拦组若放行表现更好，考虑放宽'
         : '两组相当')
     : '待样本';
+  // ---- P2 优选区 ----
+  const fmtPnl = (s) => s ? fmtPct(s.pnlPct, 1) + '/DD' + fmtN(s.maxDD, 0) + '%/强平' + s.liqCount : '--';
+  let optHtml = '';
+  if (opt.running) {
+    const p = opt.progress || {};
+    optHtml = '<div class="rm-opt-progress">⏳ ' + esc(p.label || '') + (p.n ? ' (' + p.i + '/' + p.n + ')' : '') + '</div>';
+  } else {
+    const rows = opt.result ? opt.result.rows : [];
+    const nPick = rows.filter(r => r.pick).length;
+    optHtml = rows.length ? (
+      '<div class="rm-opt-table"><table><tr><th>维度</th><th>基线→推荐</th><th>近窗Δ</th><th>长窗Δ</th></tr>' +
+      rows.map(r => '<tr class="' + (r.pick ? 'rm-pick' : '') + '"><td>' + esc(r.label) + '</td><td>' + esc(String(r.baseValue)) + ' → ' + (r.pick ? '<b>' + esc(String(r.value)) + '</b>' : '保持') + '</td><td>' + (r.nearΔ == null ? '--' : fmtPct(r.nearΔ, 1)) + '</td><td>' + (r.longΔ == null ? '--' : fmtPct(r.longΔ, 1)) + '</td></tr>').join('') +
+      '</table><div class="rm-dim">基线 近/长: ' + fmtPnl(opt.result.base.near) + ' | ' + fmtPnl(opt.result.base.long) + '</div></div>' +
+      (nPick && !opt.result.applied ? '<button class="rm-btn rm-btn-primary" onclick="window.ruleOptimizeApply()">✓ 应用推荐（' + nPick + ' 项 · 写入 cfg 立即生效）</button> '
+        : opt.result.applied ? '<span class="rm-good">已应用</span> ' : '<span class="rm-dim">无双窗一致正贡献的候选 → 保持现配置</span> ')
+    ) : '';
+    optHtml += '<button class="rm-btn" onclick="window.ruleOptimizeRun()"' + (opt.running ? ' disabled' : '') + '>🧪 一键优选（单维轮换 × 近45d/长90d 双窗一致）</button>';
+    if (opt.error) optHtml += '<div class="rm-bad rm-opt-err">优选失败: ' + esc(opt.error) + '</div>';
+  }
+  const rvOpts = rvSt.versions.slice().reverse().map(v => '<option value="' + esc(v.id) + '"' + (v.id === rvSt.current ? ' selected' : '') + '>' + esc(v.id.replace('rv-', '') + ' ' + (v.label || '')) + '</option>').join('');
+  const rvHtml = '<div class="rm-rv"><span class="rm-dim">参数版本: <b>' + (rvSt.current ? esc(rvSt.current) : '未登记（手动配置）') + '</b></span>' +
+    (rvSt.versions.length ? ' <select class="rm-sel" id="rmRvSel">' + rvOpts + '</select> <button class="rm-btn" onclick="window.ruleVersionSwitch()">切回此版本</button>' : '') + '</div>';
   box.innerHTML = `
     <div class="rm-topline">
       <span class="rm-sym">${esc(snap.sym)}</span>
@@ -723,6 +750,11 @@ export function renderRuleMonitor() {
       <div class="rm-compare">${cmpTxt}</div>
       <div class="rm-byblock">${bbHtml}</div>
       <div class="rm-dim rm-note">放行后前瞻胜率 = 影子记为「应开」的信号，按 15m 收盘价 2×ATR/1.5×ATR 的前瞻结果；实际开仓对账 window.__srsiLiveTrades。与实盘成交级统计（S.closed）口径不同，仅作规则侧对照。</div>
+    </div>
+    <div class="rm-opt">
+      <div class="rm-opt-head">🧪 一键优选（P2）— 离散规则维度单维轮换，近/长双窗一致正贡献才推荐，人工确认应用；应用即登记参数版本可回滚</div>
+      ${optHtml}
+      ${rvHtml}
     </div>`;
   updateHeadBadge(snap.verdict.action === 'open' ? '⚡' : snap.verdict.action === 'confirm' ? '⏳' : (snap.autoOn ? '●' : '○'));
   // 重填实时价（innerHTML 重建后）
@@ -746,3 +778,227 @@ export function kToggleRuleMonitor() {
 
 // 单测钩子
 export function __ruleMonitorTestState() { return { mode: _rm.mode, n: _rm.signals.length, signals: _rm.signals }; }
+
+// ============================================================
+// P2：一键优选 + 参数版本化
+// 优选对象 = 离散规则维度（单维轮换，非全网格——防过拟合 + 控回测成本）；
+// 双窗一致（近窗 45d + 长窗 90d 相对基线都正贡献）才推荐；人工确认才应用。
+// 版本化：rv-<ts>-<hash8>，localStorage 版本表（小）+ 应用即写 cfg（引擎每秒读 cfg 立即生效）。
+// ============================================================
+import { backtestSrsiAuto, fetchKlinesRange } from './kchart.js';
+
+const OPT_DIMS = [
+  { key: 'srsiAutoRegimeGate', label: 'regime闸门', values: ['off', 'confirm', 'size', 'tconf'] },
+  { key: 'srsiAutoConfirmBars', label: '确认bar', values: [0, 1, 2] },
+  { key: 'srsiAutoPdBlockOn', label: 'PD-A拦截', values: [false, true] },
+  { key: 'srsiAutoDanger', label: '防爆模式', values: ['none', 'filter', 'smart', 'reverse'] },
+  { key: 'srsiAutoHotStop', label: '热停', values: [false, true] },
+  { key: 'srsiAutoMaxSame', label: '同向上限', values: [2, 3, 5] }
+];
+// 近窗/长窗（天）——walk-forward 语义：候选在两窗都优于基线才推荐
+const OPT_NEAR_DAYS = 45, OPT_LONG_DAYS = 90;
+const RV_LS_KEY = 'smartTrader_rv', RV_MAX = 20;
+
+// 纯函数：单维轮换候选集（排除与基线相同的值）
+export function btCandidates(base) {
+  const out = [];
+  for (const d of OPT_DIMS) {
+    for (const v of d.values) {
+      if (base[d.key] === v) continue;
+      out.push({ key: d.key, value: v, label: d.label });
+    }
+  }
+  return out;
+}
+
+// 纯函数：回测结果提分数（透明口径：主排序 pnlPct，tie-break 强平少 → 回撤小）
+export function scoreBt(r) {
+  if (!r || r.error) return null;
+  return {
+    pnlPct: +r.pnlPct || 0,
+    liqCount: r.liqCount || 0,
+    maxDD: +r.maxDD || 0,
+    opens: (r.longs || 0) + (r.shorts || 0),
+    winRate: r.winRate || 0
+  };
+}
+function btBetter(a, b) { // a 是否优于 b
+  if (a.pnlPct !== b.pnlPct) return a.pnlPct > b.pnlPct;
+  if (a.liqCount !== b.liqCount) return a.liqCount < b.liqCount;
+  return a.maxDD < b.maxDD;
+}
+
+// 纯函数：双窗一致正贡献才推荐。candScores: [{key,value,label,near,long}]
+// 返回 { changes:{key:value}, rows:[{key,label,baseValue,value,nearΔ,longΔ,pick}] }
+export function pickWinners(base, candScores) {
+  const changes = {};
+  const rows = [];
+  for (const c of candScores || []) {
+    const ok = !!(c.near && c.long &&
+      c.near.pnlPct > base.near.pnlPct && c.long.pnlPct > base.long.pnlPct);
+    rows.push({
+      key: c.key, label: c.label, value: c.value, baseValue: base[c.key],
+      nearΔ: c.near ? +(c.near.pnlPct - base.near.pnlPct).toFixed(2) : null,
+      longΔ: c.long ? +(c.long.pnlPct - base.long.pnlPct).toFixed(2) : null,
+      pick: false
+    });
+    if (!ok) continue;
+    // 同维取更优（近窗为主排序，长窗必须同号为正贡献；tie-break 与全局一致）
+    const prev = rows.find(r => r.key === c.key && r.pick);
+    if (prev) {
+      const pv = candScores.find(x => x.key === c.key && x.value === prev.value);
+      const better = btBetter({ pnlPct: c.near.pnlPct + c.long.pnlPct, liqCount: c.near.liqCount + c.long.liqCount, maxDD: c.near.maxDD + c.long.maxDD },
+        { pnlPct: pv.near.pnlPct + pv.long.pnlPct, liqCount: pv.near.liqCount + pv.long.liqCount, maxDD: pv.near.maxDD + pv.long.maxDD });
+      if (!better) continue;
+      prev.pick = false;
+    }
+    changes[c.key] = c.value;
+    const me = rows.find(r => r.key === c.key && r.value === c.value);
+    if (me) me.pick = true;
+  }
+  return { changes, rows };
+}
+
+// 纯函数：FNV-1a 32bit → 8 hex（版本指纹，稳定同步无依赖）
+export function rvHashOf(params) {
+  const s = JSON.stringify(params);
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = (h * 0x01000193) >>> 0; }
+  return ('00000000' + h.toString(16)).slice(-8);
+}
+
+// ---- 版本表（localStorage 小对象；写入走 _safeSetItem 配额自愈）----
+function readRvStore() {
+  try {
+    const raw = localStorage.getItem(RV_LS_KEY);
+    const o = raw ? JSON.parse(raw) : null;
+    if (o && Array.isArray(o.versions)) return o;
+  } catch (e) {}
+  return { current: null, versions: [] };
+}
+function writeRvStore(st) {
+  if (st.versions.length > RV_MAX) st.versions = st.versions.slice(-RV_MAX);
+  _safeSetItem(RV_LS_KEY, JSON.stringify(st));
+}
+export function rvCurrent() { return readRvStore().current; }
+
+// 应用参数集（写 cfg + persist → 引擎每秒读 cfg 立即生效）并登记版本
+export function rvApply(params, label, btInfo) {
+  const cfg = cfgNow || ((typeof window !== 'undefined') && window.kchartApi && window.kchartApi.getConfig());
+  if (!cfg || !params) return null;
+  const clean = {};
+  for (const d of OPT_DIMS) if (d.key in params) clean[d.key] = params[d.key];
+  const id = 'rv-' + new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '') + '-' + rvHashOf(clean);
+  Object.assign(cfg, clean);
+  if (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.__persist) window.kchartApi.__persist();
+  const st = readRvStore();
+  st.versions.push({ id, ts: Date.now(), label: label || '一键优选', params: clean, bt: btInfo || null });
+  st.current = id;
+  writeRvStore(st);
+  forceRender();
+  return id;
+}
+// 切回历史版本（重新应用其 params，登记为「回滚」版本）
+export function rvSwitchTo(id) {
+  const st = readRvStore();
+  const v = st.versions.find(x => x.id === id);
+  if (!v) return null;
+  return rvApply(v.params, '回滚→' + v.label, v.bt);
+}
+
+// ---- 优选编排（异步分批，UI 呼吸；config 显式注入不污染实盘）----
+const _optData = { t: 0, sym: null, kl: null };
+async function ensureOptData(sym, onP) {
+  const now = Date.now();
+  if (_optData.kl && _optData.sym === sym && now - _optData.t < 10 * 60 * 1000) return _optData.kl;
+  const endMs = now, startMs = now - OPT_LONG_DAYS * 86400000;
+  const warmupMs = 140 * 15 * 60 * 1000;
+  const fs = startMs - warmupMs;
+  const maxBars = Math.ceil(OPT_LONG_DAYS * 96) + 256;
+  if (onP) onP({ phase: 'fetch', label: '拉取历史 K线（90d×4 周期）', i: 0, n: 4 });
+  const [k15, k1h, k30, k4h] = await Promise.all([
+    fetchKlinesRange(sym, '15m', fs, endMs, null, maxBars),
+    fetchKlinesRange(sym, '1h', fs, endMs, null, maxBars),
+    fetchKlinesRange(sym, '30m', fs, endMs, null, maxBars),
+    fetchKlinesRange(sym, '4h', fs, endMs, null, maxBars)
+  ]);
+  _optData.kl = { '15m': k15, '1h': k1h, '30m': k30, '4h': k4h };
+  _optData.sym = sym; _optData.t = now;
+  return _optData.kl;
+}
+function candConfig(base, key, value) {
+  const c = Object.assign({}, base);
+  c[key] = value;
+  return c;
+}
+function runBt(sym, kl, config, windowStart) {
+  try {
+    return scoreBt(backtestSrsiAuto(sym, kl, config, 1000, windowStart, null, { mode: 'perp' }));
+  } catch (e) { return null; }
+}
+const _rmOpt = { running: false, progress: null, result: null, error: null };
+// 切回历史版本（从面板下拉选中的 id；重新应用其 params，登记为「回滚」版本）
+export function ruleVersionSwitch() {
+  const sel = (typeof document !== 'undefined') && document.getElementById('rmRvSel');
+  if (!sel || !sel.value) return null;
+  return rvSwitchTo(sel.value);
+}
+export function ruleOptState() { return _rmOpt; }
+export async function ruleOptimizeRun() {
+  if (_rmOpt.running) return null;
+  const cfg = cfgNow || ((typeof window !== 'undefined') && window.kchartApi && window.kchartApi.getConfig());
+  if (!cfg) return null;
+  _rmOpt.running = true; _rmOpt.result = null; _rmOpt.error = null; _rmOpt.progress = { phase: 'start', label: '准备中', i: 0, n: 0 };
+  forceRender();
+  try {
+    const sym = cfg.symbol;
+    const kl = await ensureOptData(sym, (p) => { _rmOpt.progress = p; forceRender(); });
+    const n15 = kl && kl['15m'] && (kl['15m'].closes || kl['15m']).length || 0;
+    const klOk = kl && kl['15m'] && n15 > 200;
+    if (!klOk) throw new Error('15m 历史数据不足（' + n15 + ' 根）');
+    const now = Date.now();
+    const winNear = now - OPT_NEAR_DAYS * 86400000, winLong = now - OPT_LONG_DAYS * 86400000;
+    const cands = btCandidates(cfg);
+    const total = (cands.length + 1) * 2;
+    let done = 0;
+    const step = () => new Promise(r => setTimeout(r, 0)); // 让 UI 呼吸
+    _rmOpt.progress = { phase: 'bt', label: '基线回测', i: 0, n: total };
+    forceRender(); await step();
+    const base = { near: runBt(sym, kl, cfg, winNear), long: runBt(sym, kl, cfg, winLong) };
+    done += 2; _rmOpt.progress = { phase: 'bt', label: '基线完成', i: done, n: total }; forceRender();
+    if (!base.near || !base.long) throw new Error('基线回测失败（数据不足）');
+    const scored = [];
+    for (let i = 0; i < cands.length; i++) {
+      const cd = cands[i];
+      const cc = candConfig(cfg, cd.key, cd.value);
+      _rmOpt.progress = { phase: 'bt', label: (cd.label + '→' + cd.value), i: done, n: total };
+      forceRender(); await step();
+      const near = runBt(sym, kl, cc, winNear);
+      const long = runBt(sym, kl, cc, winLong);
+      scored.push({ ...cd, near, long });
+      done += 2;
+    }
+    const { changes, rows } = pickWinners(
+      { ...base, srsiAutoRegimeGate: cfg.srsiAutoRegimeGate, srsiAutoConfirmBars: cfg.srsiAutoConfirmBars, srsiAutoPdBlockOn: cfg.srsiAutoPdBlockOn, srsiAutoDanger: cfg.srsiAutoDanger, srsiAutoHotStop: cfg.srsiAutoHotStop, srsiAutoMaxSame: cfg.srsiAutoMaxSame },
+      scored
+    );
+    _rmOpt.result = { sym, ts: Date.now(), base, changes, rows, applied: false };
+    _rmOpt.error = null;
+  } catch (e) {
+    _rmOpt.error = (e && e.message) || String(e);
+  }
+  _rmOpt.running = false; _rmOpt.progress = null;
+  forceRender();
+  return _rmOpt.result;
+}
+export function ruleOptimizeApply() {
+  const r = _rmOpt.result;
+  if (!r || !r.changes || !Object.keys(r.changes).length) return null;
+  const id = rvApply(r.changes, '一键优选 ' + new Date().toISOString().slice(5, 16).replace('T', ' '), { near: r.base.near, long: r.base.long, changes: r.changes });
+  if (id) { r.applied = true; forceRender(); }
+  return id;
+}
+
+// 单测钩子（P2）
+export function __ruleMonitorOptDims() { return OPT_DIMS; }
+export function __ruleOptTest() { return { sym: _optData.sym, cached: !!_optData.kl }; }
