@@ -740,3 +740,39 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .disc-hud-x{cursor:pointer;padding:0 4px;opacity:.7;font-size:12px}
 .disc-hud-x:hover{opacity:1}
 .disc-hud-body{padding:6px 8px 8px;overflow-y:auto;font-size:10px}
+
+/* ---- 规则监测 HUD 仪表盘（v1.5.54）：canvas 表盘 + 抽屉按钮 + 右侧抽屉（视觉参照 hud-demo.html） ---- */
+#rmGaugeCv{display:block}
+.hud-title{display:flex;align-items:center;gap:6px;min-width:0;color:var(--accent);font-size:11px;font-weight:700;letter-spacing:.5px}
+.hud-title .live-dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--green,#00E676);box-shadow:0 0 6px var(--green,#00E676);animation:rmPulse 2s infinite}
+@keyframes rmPulse{0%,100%{opacity:1}50%{opacity:.35}}
+.rm-gbtns{display:flex;gap:6px;padding:5px 0 1px}
+.rm-gbtn{flex:1;font-size:10px;padding:5px 0;text-align:center;border:1px solid var(--border);border-radius:6px;color:var(--text2);cursor:pointer;transition:all .15s;background:rgba(255,255,255,.02);user-select:none}
+.rm-gbtn:hover{color:var(--text);border-color:var(--accent)}
+.rm-gbtn.on{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.08)}
+/* 抽屉挂 HUD 根（不在 .disc-hud-body 内），left:calc(100%+6px) 向右滑出，不受 body overflow 裁切 */
+.rm-drawer{position:absolute;top:0;left:calc(100% + 6px);width:262px;max-height:100%;display:flex;flex-direction:column;background:rgba(13,17,23,.96);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:8px;box-shadow:-8px 0 24px rgba(0,0,0,.5);z-index:40;transform:translateX(-10px);opacity:0;pointer-events:none;transition:transform .25s cubic-bezier(.22,1,.36,1),opacity .25s}
+.rm-drawer.open{transform:none;opacity:1;pointer-events:auto}
+.rm-dr-head{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-bottom:1px solid var(--border);flex:none}
+.rm-dr-title{font-size:11px;font-weight:700;color:var(--accent)}
+.rm-dr-x{cursor:pointer;opacity:.6;font-size:13px;padding:0 3px}
+.rm-dr-x:hover{opacity:1}
+.rm-dr-body{flex:1;overflow-y:auto;padding:8px 10px;font-size:10px;line-height:1.7}
+.rm-dr-body::-webkit-scrollbar{width:5px}
+.rm-dr-body::-webkit-scrollbar-thumb{background:#2a3442;border-radius:3px}
+.rm-drawer .sec{margin-bottom:10px}
+.rm-drawer .sec-t{font-size:10px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:4px;border-left:2px solid var(--accent);padding-left:6px}
+.rm-drawer .row{display:flex;justify-content:space-between;gap:8px;padding:3px 6px;border-radius:4px}
+.rm-drawer .row:nth-child(odd){background:rgba(255,255,255,.025)}
+.rm-drawer .ok{color:var(--green)}
+.rm-drawer .bad{color:var(--red)}
+.rm-drawer .warn{color:var(--gold)}
+.rm-drawer .dim{color:var(--text2)}
+.rm-drawer .stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px}
+.rm-drawer .stat-cell{background:rgba(255,255,255,.03);border:1px solid var(--border);border-radius:6px;padding:6px 8px}
+.rm-drawer .stat-num{font-size:17px;font-weight:800;color:var(--text)}
+.rm-drawer .stat-lbl{font-size:9px;color:var(--text2);margin-top:1px}
+.rm-drawer .bar-wrap{height:6px;background:var(--card,#21262d);border-radius:3px;overflow:hidden;margin:2px 0 6px}
+.rm-drawer .bar-fill{height:100%;border-radius:3px;transition:width .6s}
+.rm-good{color:var(--green)}
+.rm-bad{color:var(--red)}

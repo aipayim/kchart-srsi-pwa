@@ -642,11 +642,12 @@ export function renderRuleMonitor() {
   const cfg = cfgNow || (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.getConfig());
   if (!cfg) return;
   const open = !!cfg.ruleMonitorOpen;
-  // HUD 模式：RM 内容在悬浮卡内展开，流内面板永久收起（避免陈旧内容露出；kToggleRuleMonitor 变为 HUD 总开关）
+  // HUD 模式：RM 内容在悬浮卡内以仪表盘形态展开，流内面板永久收起（避免陈旧内容露出；kToggleRuleMonitor 变为 HUD 总开关）
   if (wrap) wrap.classList.toggle('closed', !open || !!_hudBody);
-  if (!open) { box.innerHTML = ''; _rm.lastRenderSig = ''; return; }
+  if (!open) { box.innerHTML = ''; _rm.lastRenderSig = ''; stopRmGauge(); return; }
   const snap = _rm.lastSnapshot;
   if (!snap || !snap.ok) {
+    if (_hudBody) { updateHudBarTitle(null); stopRmGauge(); }
     const s0 = 'nodata|' + (cfg.symbol || '') + '|' + (cfg.srsiAutoOn ? 1 : 0);
     if (s0 === _rm.lastRenderSig) return;
     _rm.lastRenderSig = s0;
@@ -672,14 +673,30 @@ export function renderRuleMonitor() {
     'opt:' + (opt.running ? 1 : 0) + (opt.error ? 'E' : '') + (opt.result ? 'R' + (opt.result.applied ? 'A' : '') + Object.keys(opt.result.changes).length : ''),
     'rv:' + rvSt.current + ':' + rvSt.versions.length + ':' + (opt.progress ? opt.progress.phase + opt.progress.label + opt.progress.i + '/' + opt.progress.n : '')
   ].join('|');
+  if (_hudBody) {
+    // ---- v1.5.54 HUD 仪表盘形态：每 tick 更新标题/目标读数/画布（签名未变也持续），签名变化才重建 ----
+    updateHudBarTitle(snap);
+    updateGaugeTarget(snap);
+    if (sig === _rm.lastRenderSig) { setupGaugeCanvas(box); ensureRmGauge(); return; }
+    _rm.lastRenderSig = sig;
+    const gCls = (k) => 'rm-gbtn' + (_rmGauge.tab === k ? ' on' : '');
+    box.innerHTML = '<canvas id="rmGaugeCv"></canvas>' +
+      '<div class="rm-gbtns">' +
+      '<div class="' + gCls('rules') + '" data-dr="rules">规则全表</div>' +
+      '<div class="' + gCls('stats') + '" data-dr="stats">统计</div>' +
+      '<div class="' + gCls('opt') + '" data-dr="opt">🧪 优选</div></div>';
+    const hudRoot = box.closest('#discHud');
+    if (hudRoot) { ensureDrawer(hudRoot); bindDrawerEvents(hudRoot); }
+    setupGaugeCanvas(box);
+    ensureRmGauge();
+    if (_rmGauge.tab) refreshDrawer(); // 签名变化 → 刷新开着抽屉的内容
+    return;
+  }
   if (sig === _rm.lastRenderSig) return;
   _rm.lastRenderSig = sig;
-  // ---- 构建 HTML ----
-  const sideTxt = { long: '多', short: '空' };
+  // ---- 构建 HTML（流内文字版回退）----
   const actCls = { open: 'rm-act-open', confirm: 'rm-act-confirm', wait: 'rm-act-wait' };
-  const actTxt = snap.verdict.action === 'open'
-    ? (snap.verdict.rev ? '应反手开' + (snap.verdict.side === 'long' ? '多' : '空') : '应开' + sideTxt[snap.verdict.side])
-    : snap.verdict.action === 'confirm' ? '确认推进中' : '观望';
+  const actTxt = verdictHeadline(snap.verdict);
   const regimeTxt = snap.regimeGate === 'off' ? '关'
     : !snap.regimeState ? '未生效'
       : { high: '高波(照常)', mid: '中波(' + (snap.regimeGate === 'size' ? '减仓×0.5' : (snap.regimeGate === 'confirm' || snap.regimeGate === 'tconf') ? '确认+1' : '照常') + ')', lowdrift: '低波阴跌(禁开)' }[snap.regimeState] || snap.regimeState;
@@ -704,7 +721,6 @@ export function renderRuleMonitor() {
         : '两组相当')
     : '待样本';
   // ---- P2 优选区 ----
-  const fmtPnl = (s) => s ? fmtPct(s.pnlPct, 1) + '/DD' + fmtN(s.maxDD, 0) + '%/强平' + s.liqCount : '--';
   let optHtml = '';
   if (opt.running) {
     const p = opt.progress || {};
@@ -715,7 +731,7 @@ export function renderRuleMonitor() {
     optHtml = rows.length ? (
       '<div class="rm-opt-table"><table><tr><th>维度</th><th>基线→推荐</th><th>近窗Δ</th><th>长窗Δ</th></tr>' +
       rows.map(r => '<tr class="' + (r.pick ? 'rm-pick' : '') + '"><td>' + esc(r.label) + '</td><td>' + esc(String(r.baseValue)) + ' → ' + (r.pick ? '<b>' + esc(String(r.value)) + '</b>' : '保持') + '</td><td>' + (r.nearΔ == null ? '--' : fmtPct(r.nearΔ, 1)) + '</td><td>' + (r.longΔ == null ? '--' : fmtPct(r.longΔ, 1)) + '</td></tr>').join('') +
-      '</table><div class="rm-dim">基线 近/长: ' + fmtPnl(opt.result.base.near) + ' | ' + fmtPnl(opt.result.base.long) + '</div></div>' +
+      '</table><div class="rm-dim">基线 近/长: ' + fmtPnlBt(opt.result.base.near) + ' | ' + fmtPnlBt(opt.result.base.long) + '</div></div>' +
       (nPick && !opt.result.applied ? '<button class="rm-btn rm-btn-primary" onclick="window.ruleOptimizeApply()">✓ 应用推荐（' + nPick + ' 项 · 写入 cfg 立即生效）</button> '
         : opt.result.applied ? '<span class="rm-good">已应用</span> ' : '<span class="rm-dim">无双窗一致正贡献的候选 → 保持现配置</span> ')
     ) : '';
@@ -768,6 +784,370 @@ function updateHeadBadge(txt) {
   const el = (typeof document !== 'undefined') && document.getElementById('ruleMonitorState');
   if (el) el.textContent = txt;
 }
+
+// ============================================================
+// v1.5.54 HUD 仪表盘形态：canvas 主表（多空信号分 -100..+100，270°弧+淡色刻度）
+//   + 3 副表（PD 预警 / 规则通过 / 带态K，半径30·弧宽7·13px 数字——比 demo 更大更清晰）
+//   + 底部抽屉按钮（规则全表/统计/优选）+ 右侧滑出抽屉（挂 HUD 根，不受 body overflow 裁切）。
+// 视觉参照 hud-demo.html（改进：①主表淡色刻度线 ②副表更大更清晰）。
+// 数据流：renderRuleMonitor 每 tick 更新 _rmGauge.target → RAF 缓动重绘（lerp 0.06 + 噪声摆动）；
+//   关闭（kToggleRuleMonitor / !open 分支）即 stopRmGauge()。
+// ============================================================
+const _rmGauge = { raf: 0, anim: { sig: 0, pd: 0, pass: 0, k: 0 }, target: null, tab: null, dpr: 1 };
+const GAUGE_H = 158;
+const PD_MAX_FACTORS = 5; // predictDanger 因子类数（1h/15m EMA偏离、K15超买卖、近根振幅、EMA120背离）
+function gLerp(a, b, t) { return a + (b - a) * t; }
+function gClamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+// 纯函数：多空信号分 = 空头分-多头分，钳制 ±100（主表读数；读不到 → 0）
+export function sigScore(ls, ss) {
+  const l = (ls == null || !isFinite(+ls)) ? 0 : +ls;
+  const s = (ss == null || !isFinite(+ss)) ? 0 : +ss;
+  return gClamp(s - l, -100, 100);
+}
+
+// 共享文案（HUD 表盘与流内文字版同源）：结论大字 + 拦截/放行小字
+const SIDE_TXT = { long: '多', short: '空' };
+function verdictHeadline(v) {
+  if (!v) return '观望';
+  if (v.action === 'open') return v.rev ? '应反手开' + (SIDE_TXT[v.side] || '') : '应开' + (SIDE_TXT[v.side] || '');
+  if (v.action === 'confirm') return '确认推进中';
+  return '观望';
+}
+
+// ---- 主表：270° 弧（-100..+100）三色区 + 淡色刻度线（每10分细 tick/每50分主 tick，弧外侧）+ 指针 + 中心结论 ----
+function drawRmMainGauge(ctx, cx, cy, R, val, verdictTxt, verdictColor, blockedTxt) {
+  const a0 = Math.PI * 0.75, a1 = Math.PI * 2.25; // 270°
+  const seg = (v0, v1, color) => {
+    const t0 = a0 + (a1 - a0) * (v0 + 100) / 200, t1 = a0 + (a1 - a0) * (v1 + 100) / 200;
+    ctx.beginPath(); ctx.arc(cx, cy, R, t0, t1);
+    ctx.lineWidth = 9; ctx.strokeStyle = color; ctx.lineCap = 'butt'; ctx.stroke();
+  };
+  seg(-100, -25, 'rgba(255,82,82,.75)');
+  seg(-25, 25, 'rgba(139,148,158,.35)');
+  seg(25, 100, 'rgba(0,230,118,.75)');
+  // 淡色刻度线（v1.5.54 改进①）：每 10 分细 tick #2a3442 长5px，每 50 分主 tick #4a5568 长8px
+  for (let v = -100; v <= 100; v += 10) {
+    const t = a0 + (a1 - a0) * (v + 100) / 200;
+    const major = v % 50 === 0;
+    const r1 = R + 6, r2 = R + 6 + (major ? 8 : 5);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(t) * r1, cy + Math.sin(t) * r1);
+    ctx.lineTo(cx + Math.cos(t) * r2, cy + Math.sin(t) * r2);
+    ctx.lineWidth = 1; ctx.strokeStyle = major ? '#4a5568' : '#2a3442'; ctx.stroke();
+  }
+  // 空/中/多 标签
+  ctx.font = '7px system-ui'; ctx.fillStyle = '#5a6572'; ctx.textAlign = 'center';
+  for (const [v, lb] of [[-100, '空'], [0, '中'], [100, '多']]) {
+    const t = a0 + (a1 - a0) * (v + 100) / 200;
+    ctx.fillText(lb, cx + Math.cos(t) * (R + 21), cy + Math.sin(t) * (R + 21) + 2);
+  }
+  // 指针（发光）
+  const t = a0 + (a1 - a0) * (gClamp(val, -100, 100) + 100) / 200;
+  const nx = cx + Math.cos(t) * (R - 16), ny = cy + Math.sin(t) * (R - 16);
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(nx, ny);
+  ctx.lineWidth = 3; ctx.strokeStyle = '#e6edf3'; ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(230,237,243,.8)'; ctx.shadowBlur = 6; ctx.stroke(); ctx.shadowBlur = 0;
+  ctx.beginPath(); ctx.arc(cx, cy, 4.5, 0, 7); ctx.fillStyle = '#e6edf3'; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 1.8, 0, 7); ctx.fillStyle = '#0d1117'; ctx.fill();
+  // 中心结论大字（15px 800，色同 demo 规则）+ 拦截/放行小字
+  ctx.font = '800 15px system-ui';
+  ctx.fillStyle = verdictColor || '#FFB300'; ctx.textAlign = 'center';
+  ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 10;
+  ctx.fillText(verdictTxt || '—', cx, cy + 34); ctx.shadowBlur = 0;
+  ctx.font = '9px system-ui'; ctx.fillStyle = '#8b949e';
+  ctx.fillText(blockedTxt || '', cx, cy + 47);
+}
+
+// ---- 副表：小弧 + 大数字（v1.5.54 改进②：半径30/弧宽7/13px 800 数字/9px 标签 + 每25% 淡刻度）----
+function drawRmSubGauge(ctx, cx, cy, R, label, val, max, color, warnAt, valTxt, greenLow) {
+  const a0 = Math.PI * 0.85, a1 = Math.PI * 2.15;
+  // 底弧
+  ctx.beginPath(); ctx.arc(cx, cy, R, a0, a1);
+  ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(139,148,158,.22)'; ctx.lineCap = 'round'; ctx.stroke();
+  // 警戒段（红）：PD 达标线 / K 上带(80-100)
+  if (warnAt != null) {
+    const t0 = a0 + (a1 - a0) * gClamp(warnAt, 0, max) / max;
+    ctx.beginPath(); ctx.arc(cx, cy, R, t0, a1);
+    ctx.strokeStyle = 'rgba(255,82,82,.5)'; ctx.stroke();
+  }
+  // 下带段（绿）：带态 K 0-20 = 多头信号区
+  if (greenLow) {
+    const tg2 = a0 + (a1 - a0) * 20 / max;
+    ctx.beginPath(); ctx.arc(cx, cy, R, a0, tg2);
+    ctx.strokeStyle = 'rgba(0,230,118,.35)'; ctx.stroke();
+  }
+  // 值弧（更饱和值色 + 发光）
+  const t1 = a0 + (a1 - a0) * gClamp(val, 0, max) / max;
+  ctx.beginPath(); ctx.arc(cx, cy, R, a0, t1);
+  ctx.strokeStyle = color; ctx.shadowColor = color; ctx.shadowBlur = 6; ctx.stroke(); ctx.shadowBlur = 0;
+  // 淡刻度（每 25%，弧外侧）
+  for (let i = 0; i <= 4; i++) {
+    const t = a0 + (a1 - a0) * i / 4;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(t) * (R + 5), cy + Math.sin(t) * (R + 5));
+    ctx.lineTo(cx + Math.cos(t) * (R + 9), cy + Math.sin(t) * (R + 9));
+    ctx.lineWidth = 1; ctx.strokeStyle = '#2a3442'; ctx.stroke();
+  }
+  // 数字（13px 800 主色）+ 标签（9px）
+  ctx.font = '800 13px system-ui'; ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'center';
+  ctx.fillText(valTxt != null ? valTxt : Math.round(val), cx, cy + 4);
+  ctx.font = '9px system-ui'; ctx.fillStyle = '#9aa4b2';
+  ctx.fillText(label, cx, cy + 19);
+}
+
+// 纯绘制函数（导出可单测传 stub ctx）：主表居左 + 3 副表右排（宽度自适应，目标半径 30）
+export function drawRmGauge(ctx, W, H, anim, target) {
+  if (!ctx || !W || !H) return;
+  const a = anim || { sig: 0, pd: 0, pass: 0, k: 0 };
+  const tg = target || {};
+  ctx.clearRect(0, 0, W, H);
+  const RM = W >= 300 ? 54 : (W >= 260 ? 48 : 42);   // 主表半径
+  const cxM = RM + 14, cyM = H * 0.60;               // 主表圆心
+  const Rs = gClamp(Math.floor((W - (cxM + RM + 8) - 24) / 6), 17, 30); // 副表半径（≤30，防重叠）
+  const sGap = 2 * Rs + 7;
+  const x3 = W - Rs - 5, x2 = x3 - sGap, x1 = x2 - sGap;
+  const cyS = cyM - 2;
+  drawRmMainGauge(ctx, cxM, cyM, RM, a.sig, tg.verdictTxt, tg.verdictColor, tg.blockedTxt);
+  const need = (tg.pdNeed == null) ? null : tg.pdNeed;
+  drawRmSubGauge(ctx, x1, cyS, Rs, 'PD 预警', a.pd, 100,
+    (need != null && a.pd >= need) ? '#FF5252' : '#6ea8fe', need, tg.pdTxt != null ? tg.pdTxt : String(Math.round(a.pd)));
+  drawRmSubGauge(ctx, x2, cyS, Rs, '规则通过', a.pass, tg.total || 11,
+    a.pass >= (tg.total || 11) ? '#00E676' : '#FFB300', null, Math.round(a.pass) + '/' + (tg.total || 11));
+  drawRmSubGauge(ctx, x3, cyS, Rs, '带态 K', a.k, 100,
+    a.k >= 80 ? '#FF5252' : a.k <= 20 ? '#00E676' : '#9aa4b2', 80, String(Math.round(a.k)), true);
+}
+
+// ---- 画布尺寸（box.clientWidth 去内边距，≤340；DPR 适配；不存在/宽度变了即重建）----
+function gaugeCanvasW(box) {
+  let W = (box && box.clientWidth) || 298;
+  try {
+    if (typeof getComputedStyle !== 'undefined' && box) {
+      const cs = getComputedStyle(box);
+      W -= (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    }
+  } catch (e) {}
+  return Math.max(200, Math.min(340, Math.floor(W)));
+}
+function setupGaugeCanvas(box) {
+  if (typeof document === 'undefined' || !box) return null;
+  let cv = document.getElementById('rmGaugeCv');
+  const W = gaugeCanvasW(box);
+  if (!cv || cv.parentElement !== box || +cv.dataset.w !== W) {
+    if (cv) cv.remove();
+    cv = document.createElement('canvas');
+    cv.id = 'rmGaugeCv';
+    cv.dataset.w = String(W);
+    box.insertBefore(cv, box.querySelector('.rm-gbtns') || null);
+    const dpr = Math.max(1, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1);
+    _rmGauge.dpr = dpr;
+    cv.width = W * dpr; cv.height = GAUGE_H * dpr;
+    cv.style.width = W + 'px'; cv.style.height = GAUGE_H + 'px';
+  }
+  return cv;
+}
+
+// ---- RAF 缓动循环（lerp 0.06 + sin 噪声摆动，同 demo）----
+function gaugeFrame() {
+  _rmGauge.raf = 0;
+  const cv = (typeof document !== 'undefined') && document.getElementById('rmGaugeCv');
+  const tg = _rmGauge.target;
+  const cfg = cfgNow;
+  if (!cv || !tg || !cfg || !cfg.ruleMonitorOpen) return; // HUD 关/画布没了 → 自停
+  const ctx = cv.getContext && cv.getContext('2d');
+  if (!ctx) return;
+  const W = cv.clientWidth || +cv.dataset.w || 298;
+  const t = nowMs();
+  const a = _rmGauge.anim;
+  a.sig = gLerp(a.sig, gClamp(tg.sig + Math.sin(t / 900) * 6, -100, 100), 0.06);
+  a.pd = gLerp(a.pd, gClamp(tg.pd + Math.sin(t / 1300) * 3, 0, 100), 0.06);
+  a.pass = gLerp(a.pass, tg.pass, 0.08);
+  a.k = gLerp(a.k, gClamp(tg.k + Math.sin(t / 1100) * 4, 0, 100), 0.06);
+  ctx.setTransform(_rmGauge.dpr, 0, 0, _rmGauge.dpr, 0, 0);
+  try { drawRmGauge(ctx, W, GAUGE_H, a, tg); } catch (e) {}
+  _rmGauge.raf = (typeof requestAnimationFrame !== 'undefined') ? requestAnimationFrame(gaugeFrame) : 0;
+}
+function ensureRmGauge() {
+  if (_rmGauge.raf || typeof requestAnimationFrame === 'undefined') return;
+  _rmGauge.raf = requestAnimationFrame(gaugeFrame);
+}
+function stopRmGauge() {
+  if (_rmGauge.raf && typeof cancelAnimationFrame !== 'undefined') { try { cancelAnimationFrame(_rmGauge.raf); } catch (e) {} }
+  _rmGauge.raf = 0;
+}
+
+// ---- 表盘数据目标（renderRuleMonitor 每 tick 更新，签名守卫之外）----
+function updateGaugeTarget(snap) {
+  const S = globalThis.S;
+  const sc = (S && S.ai && S.ai.lastScores && S.ai.lastScores[snap.sym]) || null;
+  const v = snap.verdict || {};
+  const vt = verdictHeadline(v);
+  const pdScore = snap.pd ? snap.pd.score : 0;
+  // PD 表盘 0-100 = 命中因子数/5；警戒线 = PD 拦截开启时的危险阈值（PREDICT_MIN 归一化，读不到回退 75）
+  const pdPct = gClamp(pdScore / PD_MAX_FACTORS * 100, 0, 100);
+  const needPct = (typeof THRESH !== 'undefined' && THRESH.PREDICT_MIN)
+    ? gClamp(THRESH.PREDICT_MIN / PD_MAX_FACTORS * 100, 0, 100) : 75;
+  _rmGauge.target = {
+    sym: snap.sym, price: snap.price,
+    sig: sc ? sigScore(sc.ls, sc.ss) : 0,
+    pd: pdPct, pdTxt: pdScore + '/' + PD_MAX_FACTORS,
+    pdNeed: snap.pdBlockOn ? needPct : null,
+    pass: (snap.rules || []).filter(r => r.state === 'pass').length,
+    total: (snap.rules || []).length || 11,
+    k: (snap.k != null && isFinite(+snap.k)) ? +snap.k : 0,
+    verdictTxt: vt,
+    verdictColor: vt.indexOf('多') >= 0 ? '#00E676' : vt.indexOf('空') >= 0 ? '#FF5252' : '#FFB300',
+    blockedTxt: v.blockedBy ? '⛔ ' + blockReasonTxt(v.blockedBy) : '✓ 放行'
+  };
+}
+
+// ---- HUD bar 标题（保留 ✕；每 tick 更新价）----
+function updateHudBarTitle(snap) {
+  if (typeof document === 'undefined') return;
+  const bar = document.getElementById('discHudBar');
+  if (!bar) return;
+  let t = bar.querySelector('.hud-title');
+  if (!t) {
+    while (bar.firstChild && bar.firstChild.nodeType === 3) bar.removeChild(bar.firstChild); // 去掉原「📋 规则监测」文本节点
+    t = document.createElement('span');
+    t.className = 'hud-title';
+    bar.insertBefore(t, bar.firstChild || null);
+  }
+  const p = snap && snap.price;
+  const priceTxt = (p != null && isFinite(+p)) ? ' · $' + fmtN(+p, +p > 100 ? 1 : 3) : '';
+  t.innerHTML = '<span class="live-dot"></span>规则监测 · ' + esc((snap && snap.sym) || '') + priceTxt;
+}
+
+// ---- 右侧抽屉（挂 HUD 根，幂等创建；三 tab 复用真实数据构建函数）----
+const DR_TABS = { rules: '规则全表', stats: '统计对比', opt: '一键优选 · 参数版本' };
+function ensureDrawer(hudRoot) {
+  let dr = hudRoot.querySelector('.rm-drawer');
+  if (!dr) {
+    dr = document.createElement('div');
+    dr.className = 'rm-drawer';
+    dr.id = 'rmDrawer';
+    dr.innerHTML = '<div class="rm-dr-head"><span class="rm-dr-title">详情</span><span class="rm-dr-x" data-dr="close">✕</span></div><div class="rm-dr-body" id="rmDrBody"></div>';
+    hudRoot.appendChild(dr);
+  }
+  return dr;
+}
+function bindDrawerEvents(hudRoot) {
+  if (!hudRoot || hudRoot.dataset.rmDrBound) return;
+  hudRoot.dataset.rmDrBound = '1';
+  hudRoot.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rm-gbtn[data-dr]');
+    if (btn) { setDrawerTab(btn.dataset.dr); return; }
+    if (e.target.closest('[data-dr="close"]')) setDrawerTab(null);
+  });
+}
+function setDrawerTab(tab) {
+  if (typeof document === 'undefined') return;
+  const hudRoot = document.getElementById('discHud');
+  const drawer = hudRoot && hudRoot.querySelector('.rm-drawer');
+  if (!hudRoot || !drawer) return;
+  if (_rmGauge.tab === tab) tab = null; // 再点同 tab / ✕ → 收起
+  _rmGauge.tab = tab || null;
+  hudRoot.querySelectorAll('.rm-gbtn').forEach(b => b.classList.toggle('on', !!_rmGauge.tab && b.dataset.dr === _rmGauge.tab));
+  if (!_rmGauge.tab) { drawer.classList.remove('open'); return; }
+  refreshDrawer();
+  drawer.classList.add('open');
+}
+function refreshDrawer() {
+  if (typeof document === 'undefined' || !_rmGauge.tab) return;
+  const hudRoot = document.getElementById('discHud');
+  const drawer = hudRoot && hudRoot.querySelector('.rm-drawer');
+  if (!drawer) return;
+  const snap = _rm.lastSnapshot;
+  if (!snap) return;
+  const title = drawer.querySelector('.rm-dr-title');
+  const body = drawer.querySelector('.rm-dr-body');
+  if (!title || !body) return;
+  title.textContent = DR_TABS[_rmGauge.tab] || '详情';
+  if (_rmGauge.tab === 'rules') {
+    body.innerHTML = '<div class="sec"><div class="sec-t">规则链（' + snap.rules.length + ' 条，按引擎同序）</div>' +
+      buildRulesRowsHtml(snap.rules) +
+      '<div class="rm-dim" style="margin-top:6px">✗ 的规则即当前未放行的原因；影子计算与引擎同序只读代入，不影响实盘状态机。</div></div>';
+  } else if (_rmGauge.tab === 'stats') {
+    body.innerHTML = buildStatsHtml(computeRuleStats(_rm.signals, nowMs(), 7));
+  } else {
+    body.innerHTML = buildOptHtml(_rmOpt, readRvStore());
+  }
+}
+
+// ---- 抽屉 tab 内容构建（导出纯函数：模板字符串、无 DOM 依赖、可单测）----
+export function buildRulesRowsHtml(rules) {
+  return (rules || []).map(r => {
+    const cls = r.state === 'fail' ? 'bad' : r.state === 'active' ? 'warn' : r.state === 'off' ? 'dim' : 'ok';
+    return '<div class="row"><span>' + ruleStateBadge(r.state) + ' ' + esc(r.name) + '</span><span class="' + cls + '">' + esc(r.detail) + '</span></div>';
+  }).join('');
+}
+export function buildStatsHtml(stats) {
+  if (!stats) return '<div class="sec"><div class="rm-dim">暂无统计</div></div>';
+  const wrPct = stats.fwdWinRate == null ? null : Math.round(stats.fwdWinRate * 100);
+  const bWrPct = stats.blockedIfAllowedWinRate == null ? null : Math.round(stats.blockedIfAllowedWinRate * 100);
+  const wrTxt = wrPct == null ? '--' : wrPct + '%';
+  const bWrTxt = bWrPct == null ? '--' : bWrPct + '%';
+  const cmpTxt = (stats.fwdWinRate != null && stats.blockedIfAllowedWinRate != null)
+    ? (stats.blockedIfAllowedWinRate < stats.fwdWinRate ? '拦截规则整体<b class="rm-good">拦对了</b>（被拦组若放行表现更差）'
+      : stats.blockedIfAllowedWinRate > stats.fwdWinRate ? '<b class="rm-bad">拦错了？</b>被拦组若放行表现更好，考虑放宽' : '两组相当')
+    : '待样本';
+  const bb = stats.byBlock || {};
+  const bbKeys = Object.keys(bb);
+  const bbHtml = bbKeys.length
+    ? bbKeys.map(k => {
+      const b = bb[k];
+      const w = b.fwdWinRate == null ? '样本不足' : Math.round(b.fwdWinRate * 100) + '%';
+      const pnl = b.avgPnlPct == null ? '' : ' 平均' + fmtPct(b.avgPnlPct, 2);
+      return '<span class="rm-chip">「' + esc(blockReasonTxt(k)) + '」拦 ' + b.n + ' 次 · 若放行胜率 ' + w + pnl + '</span>';
+    }).join(' ')
+    : '<span class="rm-dim">暂无拦截记录</span>';
+  return '<div class="sec">' +
+    '<div class="sec-t">影子信号簿（近 ' + (stats.windowDays || 7) + ' 天） <button class="rm-clear" onclick="window.ruleMonitorClear()">清空</button></div>' +
+    '<div class="stat-grid">' +
+    '<div class="stat-cell"><div class="stat-num">' + stats.total + '</div><div class="stat-lbl">信号</div></div>' +
+    '<div class="stat-cell"><div class="stat-num">' + stats.blocked + '</div><div class="stat-lbl">拦截</div></div>' +
+    '<div class="stat-cell"><div class="stat-num">' + stats.allowed + '</div><div class="stat-lbl">放行</div></div>' +
+    '<div class="stat-cell"><div class="stat-num">' + stats.opened + '</div><div class="stat-lbl">实际开仓</div></div>' +
+    '</div>' +
+    '<div class="sec-t" style="margin-top:6px">放行 vs 拦截（前瞻胜率）</div>' +
+    '<div class="row"><span>放行组 2×ATR 先到</span><span class="ok">' + wrTxt + '（' + stats.allowedBackfilled + ' 笔）</span></div>' +
+    '<div class="bar-wrap"><div class="bar-fill" style="width:' + (wrPct || 0) + '%;background:#00E676"></div></div>' +
+    '<div class="row"><span>被拦组「若放行」</span><span class="bad">' + bWrTxt + '（' + stats.blockedBackfilled + ' 笔）</span></div>' +
+    '<div class="bar-wrap"><div class="bar-fill" style="width:' + (bWrPct || 0) + '%;background:#FF5252"></div></div>' +
+    '<div class="rm-dim" style="margin-top:3px">' + cmpTxt + '</div>' +
+    '<div class="sec-t" style="margin-top:8px">分拦截原因贡献</div>' +
+    '<div class="rm-byblock">' + bbHtml + '</div>' +
+    '<div class="rm-dim" style="margin-top:4px">前瞻口径：15m 收盘 2×ATR止盈/1.5×ATR止损；开仓对账 __srsiLiveTrades。与实盘成交级统计（S.closed）口径不同。</div>' +
+    '</div>';
+}
+function fmtPnlBt(s) { return s ? fmtPct(s.pnlPct, 1) + '/DD' + fmtN(s.maxDD, 0) + '%/强平' + s.liqCount : '--'; }
+export function buildOptHtml(opt, rvSt) {
+  opt = opt || {};
+  rvSt = rvSt || { current: null, versions: [] };
+  let html = '<div class="sec"><div class="sec-t">🧪 一键优选（P2）</div>';
+  if (opt.running) {
+    const p = opt.progress || {};
+    html += '<div class="rm-opt-progress">⏳ ' + esc(p.label || '') + (p.n ? ' (' + p.i + '/' + p.n + ')' : '') + '</div>';
+  } else {
+    const rows = (opt.result && opt.result.rows) || [];
+    if (rows.length) {
+      const nPick = rows.filter(r => r.pick).length;
+      html += '<div class="rm-opt-table"><table><tr><th>维度</th><th>基线→推荐</th><th>近窗Δ</th><th>长窗Δ</th></tr>' +
+        rows.map(r => '<tr class="' + (r.pick ? 'rm-pick' : '') + '"><td>' + esc(r.label) + '</td><td>' + esc(String(r.baseValue)) + ' → ' + (r.pick ? '<b>' + esc(String(r.value)) + '</b>' : '保持') + '</td><td>' + (r.nearΔ == null ? '--' : fmtPct(r.nearΔ, 1)) + '</td><td>' + (r.longΔ == null ? '--' : fmtPct(r.longΔ, 1)) + '</td></tr>').join('') +
+        '</table><div class="rm-dim">基线 近/长: ' + fmtPnlBt(opt.result.base && opt.result.base.near) + ' | ' + fmtPnlBt(opt.result.base && opt.result.base.long) + '</div></div>' +
+        (nPick && !opt.result.applied ? '<button class="rm-btn rm-btn-primary" onclick="window.ruleOptimizeApply()">✓ 应用推荐（' + nPick + ' 项 · 写入 cfg 立即生效）</button> '
+          : opt.result.applied ? '<span class="rm-good">已应用</span> ' : '<span class="rm-dim">无双窗一致正贡献的候选 → 保持现配置</span> ');
+    }
+    html += '<button class="rm-btn" onclick="window.ruleOptimizeRun()"' + (opt.running ? ' disabled' : '') + '>🧪 一键优选（单维轮换 × 近45d/长90d 双窗一致）</button>';
+    if (opt.error) html += '<div class="rm-bad rm-opt-err">优选失败: ' + esc(opt.error) + '</div>';
+  }
+  const rvVers = rvSt.versions || [];
+  const rvOpts = rvVers.slice().reverse().map(v => '<option value="' + esc(v.id) + '"' + (v.id === rvSt.current ? ' selected' : '') + '>' + esc(String(v.id).replace('rv-', '') + ' ' + (v.label || '')) + '</option>').join('');
+  html += '<div class="rm-rv"><span class="rm-dim">参数版本: <b>' + (rvSt.current ? esc(rvSt.current) : '未登记（手动配置）') + '</b></span>' +
+    (rvVers.length ? ' <select class="rm-sel" id="rmRvSel">' + rvOpts + '</select> <button class="rm-btn" onclick="window.ruleVersionSwitch()">切回此版本</button>' : '') +
+    '</div></div>';
+  return html;
+}
 function forceRender() { _rm.lastRenderSig = ''; renderRuleMonitor(); }
 
 // 折叠切换（kchartApi + window 双绑定由调用方接线；GOAL13 红线）
@@ -775,6 +1155,7 @@ export function kToggleRuleMonitor() {
   const cfg = cfgNow || (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.getConfig());
   if (!cfg) return;
   cfg.ruleMonitorOpen = !cfg.ruleMonitorOpen;
+  if (!cfg.ruleMonitorOpen) stopRmGauge(); // v1.5.54：关 HUD 即停仪表 RAF
   if (typeof window !== 'undefined' && window.kchartApi && window.kchartApi.__persist) window.kchartApi.__persist();
   forceRender();
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 开/关即时反馈（不等下一 tick）
