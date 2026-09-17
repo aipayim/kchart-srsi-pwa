@@ -5,11 +5,13 @@
 import {
   buildPillarModel, factorShares, drawPosGauge, drawWHistory,
   buildReadoutModel, drawRadar, drawRelVis,
-  loadCockpitEvents, drawEvSpark, renderEventsHtml
+  loadCockpitEvents, drawEvSpark, renderEventsHtml,
+  cockpitNotifOn, setCockpitNotif
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { horizonTrend, macroTrend } from '../tech2/kchart.js';
 import { THRESH } from '../engine/thresholds.js';
+import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
 export const PWA_TABS = [
   { id: 'kline', ic: '📈', nm: '盯盘' },
@@ -421,6 +423,60 @@ function renderTrades() {
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
 }
 
+// ---------- 设置页（默认展开 + 通知与外观卡） ----------
+const MOTION_KEY = 'pwa_motion';
+function setMotion(on) {
+  const app = $('pwaApp');
+  if (app) app.classList.toggle('no-motion', !on);
+  try { localStorage.setItem(MOTION_KEY, on ? '1' : '0'); } catch (e) {}
+  const sel = $('pwaMotionSel');
+  if (sel) sel.value = on ? '1' : '0';
+}
+
+function initSettings() {
+  // 三张设置卡默认展开（首次）；用户手动收起后尊重（pwa_set_<id>）
+  ['pwaSettings', 'pwaSrcCard', 'kchartSrsiCardWrap'].forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    const head = el.querySelector('.kchart-ovhead');
+    if (head && !head.__pwaBound) {
+      head.__pwaBound = true;
+      head.addEventListener('click', () => { try { localStorage.setItem('pwa_set_' + id, '1'); } catch (e) {} });
+    }
+    let touched = false;
+    try { touched = localStorage.getItem('pwa_set_' + id) === '1'; } catch (e) {}
+    if (!touched) el.classList.remove('closed');
+  });
+  // 动效默认开
+  let motionOn = true;
+  try { motionOn = localStorage.getItem(MOTION_KEY) !== '0'; } catch (e) {}
+  setMotion(motionOn);
+  // 渲染外观卡
+  const box = $('pwaAppearBody');
+  if (box && !box.__built) {
+    box.__built = true;
+    const notifOn = cockpitNotifOn();
+    box.innerHTML =
+      '<div class="setting-row"><label>主题</label><span class="pwa-seg"><button type="button" class="on" disabled>霓虹驾驶舱（A）</button></span></div>' +
+      '<div class="setting-row"><label>动效 Motion UI</label><select id="pwaMotionSel"><option value="1">开启</option><option value="0">关闭</option></select></div>' +
+      '<div class="setting-row"><label>信号通知</label><select id="pwaNotifSel"><option value="0">关闭</option><option value="1">开启（需浏览器授权）</option></select></div>' +
+      '<div class="setting-row"><label>页面缩放</label><span class="pwa-dim" id="pwaZoomInfo"></span><button type="button" id="pwaZoomReset">复位 100%</button></div>' +
+      '<div class="setting-row"><label>版本</label><span class="pwa-dim mono" id="pwaVerInfo"></span></div>';
+    const ms = $('pwaMotionSel');
+    ms.value = motionOn ? '1' : '0';
+    ms.addEventListener('change', () => setMotion(ms.value === '1'));
+    const ns = $('pwaNotifSel');
+    ns.value = notifOn ? '1' : '0';
+    ns.addEventListener('change', () => setCockpitNotif(ns.value === '1'));
+    const zr = $('pwaZoomReset');
+    zr.addEventListener('click', () => { const l = $('pwaZoomLbl'); if (l) l.click(); });
+    const vi = $('pwaVerInfo');
+    if (vi) vi.textContent = 'v' + APP_VERSION + ' · ' + String(APP_BUILD_TIME).slice(0, 10);
+  }
+  const zi = $('pwaZoomInfo');
+  if (zi) { const l = $('pwaZoomLbl'); zi.textContent = l ? l.textContent : ''; }
+}
+
 // ---------- 主刷新 ----------
 export function refreshShell() {
   if (typeof document === 'undefined') return;
@@ -450,6 +506,7 @@ export function initPwaShell() {
   if (typeof document === 'undefined') return;
   bindNav();
   bindTrade();
+  initSettings();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
   let saved = null;
