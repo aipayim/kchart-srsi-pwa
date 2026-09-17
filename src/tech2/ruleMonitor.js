@@ -948,7 +948,7 @@ function gaugeFrame() {
   if (!cv || !tg || !cfg || !cfg.ruleMonitorOpen) return; // HUD 关/画布没了 → 自停
   const ctx = cv.getContext && cv.getContext('2d');
   if (!ctx) return;
-  const W = cv.clientWidth || +cv.dataset.w || 298;
+  const W = GAUGE_W; // v1.5.59：布局必须用画布逻辑宽（与 setupGaugeCanvas 一致）；clientWidth 是 CSS 拉伸后的显示宽，用它布局会超画出布右缘（第三个副表被裁 1/3 的根因）
   const t = nowMs();
   const a = _rmGauge.anim;
   a.sig = gLerp(a.sig, gClamp(tg.sig + Math.sin(t / 900) * 6, -100, 100), 0.06);
