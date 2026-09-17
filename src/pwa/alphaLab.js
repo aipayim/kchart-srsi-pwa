@@ -221,11 +221,11 @@ export function initAlphaLab() {
   // 折叠初态：默认收起（kchart.html 初始 closed）；展开过的用户记忆在 localStorage
   const wrap = document.getElementById('alphaLabWrap');
   if (wrap && localStorage.getItem('pwa_alpha_open') === '1') wrap.classList.remove('closed');
-  // 融合进「回测设置」面板：把整块移入 kt-bt-section 的 ktAlphaSlot（交易条骨架只建一次，幂等）；
-  // 槽不存在（交易条未开/主系统）时留在原位，250ms 兑底重试×20
+  // 融合进「回测」页（PWA 重构）：优先挂到 #pwaBtSlot（回测 tab）；无该槽时回退交易条内的 ktAlphaSlot（主系统/旧布局）。
+  // 槽不存在时留在原位，250ms 兑底重试×20
   if (wrap) {
     const mount = () => {
-      const slot = document.getElementById('ktAlphaSlot');
+      const slot = document.getElementById('pwaBtSlot') || document.getElementById('ktAlphaSlot');
       if (slot && wrap.parentElement !== slot) slot.appendChild(wrap);
       return !!(slot && wrap.parentElement === slot);
     };

@@ -37,7 +37,7 @@ scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
 src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js}
+src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,pwaShell.js,pwa.css}
 src/tech2/kchart.js
 tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs}
 tests/fixtures/bnbusdt_klines.json

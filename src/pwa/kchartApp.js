@@ -1,11 +1,13 @@
 // 独立迷你 PWA 的入口：挂载 kchart.js 渲染、轮询行情、暴露 window 钩子
 // 不依赖 legacy.js / main.js，仅复用共享的 kchart.js（与主系统同一份 K线分析代码）
 import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈希化并注入 kchart.html 的 <head>
+import './pwa.css';     // PWA 重构外壳样式（规则全部限定 body.pwa，主系统零影响；须在 styles.css 之后以覆盖）
 import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
+import { initPwaShell, refreshShell } from './pwaShell.js';
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
@@ -242,10 +244,14 @@ async function clearCacheAndReload() {
 
 // ---- 页面缩放（＝/－，持久化）----
 const ZOOM_MIN = 0.6, ZOOM_MAX = 4, ZOOM_STEP = 0.1;
-let zoom = 1.25;   // 默认放大到 125%，让画布内悬浮文字/指标文字在手机上更易读
+let zoom = 1;   // PWA 重构：默认 100%（新外壳字号/间距已按设计稿加大，无需再放大；用户可自行 ＋/－ 调整并持久化）
 function applyZoom() {
   zoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom));
-  if (document.body) document.body.style.zoom = String(zoom);
+  if (document.body) {
+    document.body.style.zoom = String(zoom);
+    // PWA 固定外壳：body 高度须按缩放反算（height:calc(100vh / --pwa-z)），否则放大后视口外裁切
+    document.body.style.setProperty('--pwa-z', String(zoom));
+  }
   const lbl = document.getElementById('pwaZoomLbl');
   if (lbl) lbl.textContent = Math.round(zoom * 100) + '%';
 }
@@ -284,28 +290,8 @@ function syncThumbForInstall() {
   if (!tb) return;
   tb.style.bottom = ktStackOffset() + 'px';
 }
-// GOAL26：底部 Tab 导航（GOAL17-D ③）——单页内切 panel 显隐（data-tab-block 分组），无路由改动
-// 仅触屏设备显示 Tab 条（CSS pointer:coarse）；桌面保持原长页滚动不受影响
-function setupTabNav() {
-  const bar = document.getElementById('pwaTabBar');
-  if (!bar) return;
-  // 桌面（鼠标）不激活：全部块保持默认显示、无 Tab 行为（CSS 中 Tab 条也仅 pointer:coarse 显示）
-  const coarse = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(pointer:coarse)').matches;
-  if (!coarse) return;
-  const apply = (name) => {
-    document.querySelectorAll('[data-tab-block]').forEach(el => { el.style.display = el.getAttribute('data-tab-block') === name ? '' : 'none'; });
-    bar.querySelectorAll('button[data-tab]').forEach(b => b.classList.toggle('active', b.getAttribute('data-tab') === name));
-    try { localStorage.setItem('pwa_tab', name); } catch (e) {}
-    if (name === 'kline' && api && api.render) { try { api.render(); } catch (e) {} }   // canvas 从 none→block 需按实际尺寸重绘
-    syncThumbForInstall();                                                              // 拇指条 bottom 走统一叠层公式
-  };
-  bar.addEventListener('click', (e) => {
-    const b = e.target.closest('button[data-tab]');
-    if (b) apply(b.getAttribute('data-tab'));
-  });
-  let saved = null; try { saved = localStorage.getItem('pwa_tab'); } catch (e) {}
-  apply(saved || 'kline');
-}
+// GOAL26 → PWA 重构：四页导航（rail 桌面 / tabbar 触屏）由 pwaShell.js 接管（.pwa-tab 分组，不再用 data-tab-block）。
+// 保留 syncThumbForInstall 的叠层偏移（仍读 #pwaTabBar 高度，ktStackOffset 同源）。
 
 function setupInstallPrompt() {
   if (isStandalone()) return;                                   // 已作为 PWA 打开，不提示
@@ -351,6 +337,7 @@ async function loadSymbol(sym) {
   try { await refreshPrice(sym); } catch (e) { /* 价格可选 */ }
   api.render();                       // 用实际数据重绘（含纪律面板实时价）
   if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色
+  refreshShell();                     // PWA 外壳：实时价 / KPI / 信号驾驶舱
   localLoop.kick();                   // K线就绪后立刻触发一次本机采样（无需等 60min 周期）
   touchSym(sym);
   renderSymList();
@@ -360,6 +347,7 @@ async function loadSymbol(sym) {
 async function tickPrice() {
   try { await refreshPrice(curSym); } catch (e) { /* 忽略 */ }
   api.render();                       // 内部有防抖，仅实时价刷新
+  refreshShell();
   setFresh('已更新 ' + new Date().toLocaleTimeString());
 }
 
@@ -375,6 +363,7 @@ async function tickKlines() {
   } catch (e) { /* 静默 */ }
   api.render();
   if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（canvas render 不重建 DOM）
+  refreshShell();
 }
 
 async function init() {
@@ -406,7 +395,7 @@ async function init() {
   setupInstallPrompt();
   showVersionBadge();
   renderSymList();
-  setupTabNav();
+  initPwaShell();
   initPwaTrade();
   initLocalLoop();
   initAlphaLab();
@@ -518,6 +507,8 @@ function initPwaTrade() {
     if (api && api.runSrsiAutoTrade) api.runSrsiAutoTrade();
     // 自动优选引擎：定时 + 无成交双触发重优选（防参数过期）
     if (api && api.maybeAutoOpt) api.maybeAutoOpt();
+    // PWA 外壳（KPI / 信号驾驶舱 / 事件流）每秒刷新
+    try { refreshShell(); } catch (e) {}
   }, 1000);
   savePwaPaper();
 }

@@ -3,30 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0a0e17">
-  <title>K线多周期 SRSI 分析</title>
+  <meta name="theme-color" content="#070b14">
+  <title>智能交易驾驶舱 · SRSI</title>
   <style>
-    html,body{height:auto!important;min-height:100vh;overflow:auto!important;display:block!important;overscroll-behavior:y contain;padding-bottom:env(safe-area-inset-bottom)}
-    /* GOAL24：触摸设备拇指条(fixed bottom 两行≈84px)常驻，补偿页面底部防遮挡 */
-    @media (pointer:coarse){body{padding-bottom:calc(140px + env(safe-area-inset-bottom))}}
-    /* GOAL26：底部 Tab 导航（拇指区，单页内切 panel 显隐）——仅触屏显示，桌面保持长页滚动 */
-    #pwaTabBar{display:none;position:fixed;left:0;right:0;bottom:0;z-index:9998;gap:2px;padding:4px 6px calc(4px + env(safe-area-inset-bottom));background:rgba(7,11,20,.96);backdrop-filter:blur(8px);border-top:1px solid rgba(34,211,238,.18)}
-    #pwaTabBar button{flex:1;min-height:44px;border:none;border-radius:10px;background:transparent;color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;user-select:none;-webkit-tap-highlight-color:transparent;padding:4px 0}
-    #pwaTabBar button.active{background:rgba(34,211,238,.12);color:var(--accent,#22d3ee)}
-    @media (pointer:coarse){#pwaTabBar{display:flex}}
-    /* 纪律分析面板已统一单列(共享 styles.css)，这里仅保留窄屏细节 */
-    .disc-nowprice,.disc-action{flex-wrap:wrap}
-    .pwa-install{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(90deg,#0e1626,#10202e);border-top:1px solid var(--border);box-shadow:0 -4px 18px rgba(0,0,0,.45);font-size:12px;color:var(--text)}
-    .pwa-install[hidden]{display:none}
-    .pwa-install .pi-txt{flex:1;line-height:1.35}
-    .pwa-install .pi-txt b{color:var(--accent)}
-    .pwa-install button.pi-btn{background:var(--accent);border:none;color:#06121f;font-weight:700;font-size:12px;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap}
-    .pwa-install button.pi-btn:hover{filter:brightness(1.1)}
-    .pwa-install .pi-close{margin-left:2px;background:transparent;border:none;color:var(--text2);font-size:20px;cursor:pointer;line-height:1;padding:0 4px}
-    @media (max-width:480px){.pwa-install{font-size:11px}.pwa-install button.pi-btn{padding:6px 10px}}
+    /* 关键首屏兜底（完整样式见 src/pwa/pwa.css，由模块注入） */
+    html,body{margin:0;padding:0;background:#070b14;color:#e6f1ff}
+    body.pwa{height:100vh;overflow:hidden}
     /* 本地交易对列表 chip */
-    .pwa-symlist{display:flex;flex-wrap:wrap;gap:5px;margin:6px 0 2px;align-items:center}
-    .pwa-sym-chip{display:inline-flex;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:14px;overflow:hidden;font-size:11px;line-height:1}
+    .pwa-symlist{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+    .pwa-sym-chip{display:inline-flex;align-items:center;background:var(--card2);border:1px solid var(--border);border-radius:14px;overflow:hidden;font-size:11px;line-height:1}
     .pwa-sym-chip.active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
     .pwa-sym-name{background:transparent;border:none;color:var(--text);font-family:inherit;font-size:11px;padding:5px 8px;cursor:pointer;font-weight:600}
     .pwa-sym-chip.active .pwa-sym-name{color:var(--accent)}
@@ -39,12 +24,17 @@
     .pwa-srcerr b{color:#ffd0d0}
     .pwa-srcerr button.pi-btn{background:#ff5252;border:none;color:#1a0606;font-weight:700;font-size:12px;padding:6px 12px;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap}
     .pwa-srcerr button.pi-close{margin-left:2px;background:transparent;border:none;color:#ff9a9a;font-size:20px;cursor:pointer;line-height:1;padding:0 4px}
-    /* Alpha 实验室 */
-    .kchart-alphawrap{margin:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--card);overflow:hidden}
-    .kchart-alphawrap.closed #alphaLab{display:none}
-    .kchart-alphawrap.closed .kchart-ovarrow{transform:rotate(-90deg)}
-    #ktAlphaSlot .kchart-alphawrap{margin:4px 0;border-radius:6px}
-    #ktAlphaSlot .kchart-ovhead{font-size:10px}
+    /* 安装提示条 */
+    .pwa-install{position:fixed;left:0;right:0;bottom:0;z-index:50;display:flex;align-items:center;gap:10px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(90deg,#0e1626,#10202e);border-top:1px solid var(--border);box-shadow:0 -4px 18px rgba(0,0,0,.45);font-size:12px;color:var(--text)}
+    .pwa-install[hidden]{display:none}
+    .pwa-install .pi-txt{flex:1;line-height:1.35}
+    .pwa-install .pi-txt b{color:var(--accent)}
+    .pwa-install button.pi-btn{background:var(--accent);border:none;color:#06121f;font-weight:700;font-size:12px;padding:7px 14px;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap}
+    .pwa-install button.pi-btn:hover{filter:brightness(1.1)}
+    .pwa-install .pi-close{margin-left:2px;background:transparent;border:none;color:var(--text2);font-size:20px;cursor:pointer;line-height:1;padding:0 4px}
+    @media (max-width:480px){.pwa-install{font-size:11px}.pwa-install button.pi-btn{padding:6px 10px}}
+    /* Alpha 实验室（块由 alphaLab.js 渲染，此处只补容器样式） */
+    #pwaBtSlot .kchart-alphawrap{margin:0}
     .alpha-lab{padding:8px 10px;font-size:12px;color:var(--text)}
     .alpha-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:6px}
     .alpha-row label{font-size:11px;color:var(--text2);display:flex;gap:4px;align-items:center}
@@ -58,120 +48,204 @@
     .alpha-err{font-size:11px;color:#ff8a8a;margin:4px 0}
     .alpha-ok{font-size:11px;color:#7ddc9a;margin:4px 0}
     .alpha-eq{width:100%;height:110px;margin-top:4px}
-    #alphaLab .alpha-metrics b{color:#4da3ff}
   </style>
 </head>
-<body>
-  <div id="pwaSrcErr" class="pwa-srcerr" hidden>
+<body class="pwa">
+  <div class="pwa-srcerr" id="pwaSrcErr" hidden>
     <div class="pi-txt" id="pwaSrcErrTxt"></div>
     <button id="pwaSrcErrBtn" class="pi-btn">重试</button>
     <button id="pwaSrcErrClose" class="pi-close" aria-label="关闭">×</button>
   </div>
-  <div class="kchart-header">
-    <span class="kchart-lbl">币对:</span>
-    <input id="symInput" type="text" value="BTCUSDT" placeholder="如 BTCUSDT"
-           style="background:var(--card);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:5px;font-family:inherit;font-size:11px;width:120px;text-transform:uppercase">
-    <button id="symBtn"
-            style="background:var(--accent);border:none;color:#06121f;font-size:11px;padding:4px 12px;border-radius:5px;cursor:pointer;font-family:inherit">载入</button>
-    <button id="pwaRefreshBtn"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-size:11px;padding:4px 12px;border-radius:5px;cursor:pointer;font-family:inherit">刷新</button>
-    <button id="pwaClearBtn"
-            onclick="pwaClearAll()"
-            style="background:var(--danger,#5a1d1d);border:1px solid var(--border);color:var(--text);font-size:11px;padding:4px 12px;border-radius:5px;cursor:pointer;font-family:inherit">本地清空</button>
-    <button id="pwaZoomOut"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;padding:2px 10px;border-radius:5px;cursor:pointer;font-family:inherit">－</button>
-    <button id="pwaZoomIn"
-            style="background:var(--card2);border:1px solid var(--border);color:var(--text);font-size:13px;font-weight:700;padding:2px 10px;border-radius:5px;cursor:pointer;font-family:inherit">＋</button>
-    <span id="pwaZoomLbl"
-          style="background:var(--card);border:1px solid var(--border);color:var(--text2);font-size:11px;padding:4px 8px;border-radius:5px;cursor:pointer;font-family:inherit;min-width:46px;text-align:center"
-          title="点击复位 100%">100%</span>
-    <span class="kchart-fresh" id="kchartFresh"></span>
-    <div id="symList" class="pwa-symlist"></div>
-    <div class="kchart-tfbox" style="margin-left:auto">
-      <span class="kchart-lbl">周期:</span>
-      <span class="kchart-presets">
-        <button class="kchart-preset" data-preset="scalp" onclick="window.setKPreset('scalp')">短线</button>
-        <button class="kchart-preset" data-preset="day" onclick="window.setKPreset('day')">日内</button>
-        <button class="kchart-preset" data-preset="swing" onclick="window.setKPreset('swing')">波段</button>
-        <button class="kchart-preset" data-preset="all" onclick="window.setKPreset('all')">全选</button>
-      </span>
-      <span class="kchart-tfs" id="kchartTFRow"></span>
-    </div>
-  </div>
-  <div class="kchart-tfbox" data-tab-block="kline">
-    <span class="kchart-lbl">根线数:</span>
-    <input type="range" id="kchartBars" min="60" max="300" step="10" oninput="window.setKBars(this.value)">
-    <span id="kchartBarsLbl" class="kchart-lbl"></span>
-  </div>
-  <div class="kchart-tfbox" data-tab-block="kline">
-    <span class="kchart-lbl">子图:</span>
-    <span id="kchartSubToggles" class="kchart-subtog"></span>
-  </div>
-  <div class="kchart-hint" id="kchartHint" data-tab-block="kline">点击 TF 圆点=设为主图 · 方框=切换SRSI子图 · 速览表/SRSI参数/纪律面板可折叠 · 拖拽子图标题栏调整顺序</div>
-  <div class="kchart-ovwrap" id="kchartOverviewWrap" data-tab-block="kline">
-    <div class="kchart-ovhead" onclick="window.kToggleOverview()">多周期 SRSI 速览 <span class="kchart-ovarrow" id="kchartOvArrow">▾</span></div>
-    <div id="kchartOverview" class="kchart-overview"></div>
-  </div>
-  <div class="kchart-settings closed" id="kchartSrsiCardWrap" data-tab-block="settings">
-    <div class="kchart-ovhead" onclick="document.getElementById('kchartSrsiCardWrap').classList.toggle('closed')">⚙ SRSI 各币对各周期参数（本地持久化）<span class="kchart-ovarrow">▾</span></div>
-    <div id="kchartSrsiCard" class="kchart-settings-body"></div>
-  </div>
-  <div class="kchart-discwrap" id="kchartDiscWrap" data-tab-block="kline">
-    <div class="kchart-ovhead" onclick="window.kToggleDisc()">📋 交易纪律分析 <span class="kchart-ovarrow">▾</span></div>
-    <div id="kchartDisc" class="kchart-disc"></div>
-  </div>
-  <div class="kchart-alphawrap closed" id="alphaLabWrap" data-tab-block="bt">
-    <div class="kchart-ovhead" onclick="this.parentElement.classList.toggle('closed');window.__alphaLabHead&&window.__alphaLabHead()">🧪 Alpha 实验室（回测 + Paper 模拟实盘 · 点击展开/收起）<span class="kchart-ovarrow" style="transition:transform .15s">▾</span></div>
-    <div id="alphaLab" class="alpha-lab"></div>
-  </div>
-  <div class="kchart-discwrap closed" id="ktPanelWrap" data-tab-block="trade">
-    <div class="kchart-ovhead" onclick="window.kToggleTradePanel()">🧭 交易面板（手动下单 · 策略实盘 · 回测 · 点击展开/收起）<span id="ktPanelState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
-    <div class="kchart-tradebar" id="kchartTradeBar"></div>
-  </div>
-  <div class="kchart-maintools" id="kchartMainTools" data-tab-block="kline"></div>
-    <div id="kchartRuleMonitor" class="rule-monitor"></div>
-  </div>
-  <div class="kchart-box" data-tab-block="kline">
-    <canvas id="kchartCanvas"></canvas>
-            <div id="discHud" class="disc-hud" style="display:none">
-          <div class="disc-hud-bar" id="discHudBar"><span class="hud-title" id="hudTitle">📋 规则监测</span><span class="hud-min" data-act="toggle" title="关闭/收起规则监测浮窗">✕</span></div>
-          <div class="disc-hud-body" id="discHudRmBody"></div>
-        </div>
+
+  <div class="pwa-app" id="pwaApp">
+    <!-- ===== 顶栏 ===== -->
+    <header class="pwa-appbar">
+      <div class="pwa-brand"><span class="mk">◆</span><span>SMART-TRADER<small>ALPHA COCKPIT</small></span></div>
+      <div class="pwa-sym"><span class="pwa-dot"></span><b id="pwaSymName">BTCUSDT</b><span class="pwa-dim" style="font-size:10px">永续</span></div>
+      <div class="pwa-price">
+        <span class="v mono" id="pwaPriceV">—</span>
+        <span class="c mono" id="pwaPriceC">—</span>
       </div>
+      <div class="pwa-spacer"></div>
+      <span class="pwa-pill a hide-phone"><span class="pwa-dot"></span><span id="pwaLat">LIVE</span></span>
+      <button class="pwa-icobtn" id="pwaRefreshBtn" title="刷新（清缓存并重载，用于部署后强制拿最新版本）">⟳</button>
+      <div class="pwa-zoom">
+        <button id="pwaZoomOut" title="缩小">－</button>
+        <span id="pwaZoomLbl" title="点击复位 100%">100%</span>
+        <button id="pwaZoomIn" title="放大">＋</button>
+      </div>
+      <button class="pwa-icobtn" id="pwaClearBtn" onclick="pwaClearAll()" title="清空本地设置并重建">🗑</button>
+    </header>
+
+    <!-- ===== KPI 条 ===== -->
+    <div class="pwa-kpis" id="pwaKpis"></div>
+
+    <!-- ===== 交易对条 ===== -->
+    <div class="pwa-symbar">
+      <span class="kchart-lbl">币对</span>
+      <input id="symInput" type="text" value="BTCUSDT" placeholder="如 BTCUSDT" autocomplete="off" spellcheck="false">
+      <button id="symBtn">载入</button>
+      <div id="symList" class="pwa-symlist"></div>
+      <span class="kchart-fresh" id="kchartFresh"></span>
     </div>
-  </div>
-  <div class="kchart-settings closed" id="pwaSettings" data-tab-block="settings">
-    <div class="kchart-ovhead" onclick="document.getElementById('pwaSettings').classList.toggle('closed')">⚙ 模拟真实交易设置（本地持久化）<span class="kchart-ovarrow">▾</span></div>
-    <div id="pwaSettingsBody" class="kchart-settings-body">
-      <div class="setting-row"><label>快捷交易</label><select id="pwaTradeOn" onchange="pwaTradeOn(this.value)"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
-      <div class="setting-row"><label>现货 USDT 池</label><input id="pwaSimSpot" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
-      <div class="setting-row"><label>永续U本位 USDT 池</label><input id="pwaSimPerp" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
-      <div style="font-size:9px;color:var(--text2);margin:4px 0 2px">各币本位库存（现货与永续同量，仅填一次）</div>
-      <div id="pwaSimCoins" class="sim-coin-list"></div>
-      <div class="setting-row" style="margin-top:6px"><button onclick="pwaSimReset()">重置为默认并重建账户</button></div>
+
+    <!-- ===== 主体 ===== -->
+    <div class="pwa-body">
+      <aside class="pwa-rail" id="pwaRail"></aside>
+      <main class="pwa-content" id="pwaContent">
+
+        <!-- ========== 盯盘 ========== -->
+        <section class="pwa-tab on" data-tab="kline">
+          <div class="pwa-grid-k">
+            <div class="pwa-col">
+              <div class="pwa-card pwa-toolbar">
+                <span class="kchart-lbl">周期</span>
+                <span class="kchart-presets">
+                  <button class="kchart-preset" data-preset="scalp" onclick="window.setKPreset('scalp')">短线</button>
+                  <button class="kchart-preset" data-preset="day" onclick="window.setKPreset('day')">日内</button>
+                  <button class="kchart-preset" data-preset="swing" onclick="window.setKPreset('swing')">波段</button>
+                  <button class="kchart-preset" data-preset="all" onclick="window.setKPreset('all')">全选</button>
+                </span>
+                <span class="kchart-tfs" id="kchartTFRow"></span>
+                <div class="pwa-spacer" style="flex:1"></div>
+                <span class="kchart-lbl">根线</span>
+                <input type="range" id="kchartBars" min="60" max="300" step="10" oninput="window.setKBars(this.value)">
+                <span id="kchartBarsLbl" class="kchart-lbl"></span>
+                <span class="kchart-lbl">子图</span>
+                <span id="kchartSubToggles" class="kchart-subtog"></span>
+                <div class="kchart-maintools" id="kchartMainTools"></div>
+              </div>
+              <div id="kchartRuleMonitor" class="rule-monitor"></div>
+              <div class="pwa-card pwa-scan">
+                <div class="pwa-card-h">
+                  <span class="ttl">主图 · SRSI 多周期</span>
+                  <span class="pwa-spacer"></span>
+                  <div class="pwa-legend">
+                    <i style="color:#00e676">▲ 开多</i><i style="color:#ff5252">▼ 开空</i>
+                    <i style="color:#22d3ee">◆ Alpha 多</i><i style="color:#f59e0b">◆ Alpha 空</i>
+                    <i style="color:#b39dff">◆ 金钩</i>
+                  </div>
+                </div>
+                <div class="pwa-card-b" style="padding:0">
+                  <div class="kchart-box">
+                    <canvas id="kchartCanvas"></canvas>
+                    <div id="discHud" class="disc-hud" style="display:none">
+                      <div class="disc-hud-bar" id="discHudBar"><span class="hud-title" id="hudTitle">📋 规则监测</span><span class="hud-min" data-act="toggle" title="关闭/收起规则监测浮窗">✕</span></div>
+                      <div class="disc-hud-body" id="discHudRmBody"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="pwa-card">
+                <div class="kchart-ovwrap" id="kchartOverviewWrap">
+                  <div class="kchart-ovhead" onclick="window.kToggleOverview()">多周期 SRSI 速览 <span class="kchart-ovarrow" id="kchartOvArrow">▾</span></div>
+                  <div id="kchartOverview" class="kchart-overview"></div>
+                </div>
+              </div>
+              <div class="kchart-discwrap" id="kchartDiscWrap">
+                <div class="kchart-ovhead" onclick="window.kToggleDisc()">📋 交易纪律分析 <span class="kchart-ovarrow">▾</span></div>
+                <div id="kchartDisc" class="kchart-disc"></div>
+              </div>
+              <div class="kchart-hint" id="kchartHint">点击 TF 圆点=设为主图 · 方框=切换SRSI子图 · 速览表/SRSI参数/纪律面板可折叠 · 拖拽子图标题栏调整顺序</div>
+            </div>
+
+            <div class="pwa-col" id="pwaCockpitCol">
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">信号驾驶舱</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill a">★ 基石</span><span class="pwa-pill w">⚠ 卫星</span></div>
+                <div class="pwa-card-b">
+                  <div class="pwa-cockpit-top">
+                    <canvas id="pwaPosGauge"></canvas>
+                    <div class="pwa-factors" id="pwaFactors"></div>
+                  </div>
+                  <canvas id="pwaWHist"></canvas>
+                  <div class="pwa-dim mono" id="pwaWMeta" style="font-size:9.5px;margin-top:4px">w 历史 · 目标仓位</div>
+                </div>
+              </div>
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">解读卡</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill" id="pwaRelPill">—</span></div>
+                <div class="pwa-card-b">
+                  <div class="pwa-cockpit-sub">
+                    <canvas id="pwaRadar"></canvas>
+                    <canvas id="pwaRelVis"></canvas>
+                  </div>
+                  <div id="pwaQa"></div>
+                  <div class="pwa-concl" id="pwaConcl">—</div>
+                </div>
+              </div>
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">事件流</span><span class="pwa-spacer"></span>
+                  <span class="pwa-dim" style="font-size:10px">近 12h</span></div>
+                <div class="pwa-card-b">
+                  <canvas id="pwaEvSpark"></canvas>
+                  <div class="pwa-evlist" id="pwaEvList"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ========== 交易 ========== -->
+        <section class="pwa-tab" data-tab="trade">
+          <div class="kchart-discwrap" id="ktPanelWrap">
+            <div class="kchart-ovhead" onclick="window.kToggleTradePanel()">🧭 交易面板（手动下单 · 策略实盘 · 回测 · 点击展开/收起）<span id="ktPanelState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
+            <div class="kchart-tradebar" id="kchartTradeBar"></div>
+          </div>
+        </section>
+
+        <!-- ========== 回测 ========== -->
+        <section class="pwa-tab" data-tab="bt">
+          <div id="pwaBtSlot">
+            <div class="kchart-alphawrap closed" id="alphaLabWrap">
+              <div class="kchart-ovhead" onclick="this.parentElement.classList.toggle('closed');window.__alphaLabHead&&window.__alphaLabHead()">🧪 Alpha 实验室（回测 + Paper 模拟实盘 · 点击展开/收起）<span class="kchart-ovarrow" style="transition:transform .15s">▾</span></div>
+              <div id="alphaLab" class="alpha-lab"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ========== 设置 ========== -->
+        <section class="pwa-tab" data-tab="settings">
+          <div class="kchart-settings closed" id="pwaSettings">
+            <div class="kchart-ovhead" onclick="document.getElementById('pwaSettings').classList.toggle('closed')">⚙ 模拟真实交易设置（本地持久化）<span class="kchart-ovarrow">▾</span></div>
+            <div id="pwaSettingsBody" class="kchart-settings-body">
+              <div class="setting-row"><label>快捷交易</label><select id="pwaTradeOn" onchange="pwaTradeOn(this.value)"><option value="1" selected>开启</option><option value="0">关闭</option></select></div>
+              <div class="setting-row"><label>现货 USDT 池</label><input id="pwaSimSpot" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
+              <div class="setting-row"><label>永续U本位 USDT 池</label><input id="pwaSimPerp" type="number" min="0" step="any" value="5000" onchange="pwaSimChange()"></div>
+              <div style="font-size:9px;color:var(--text2);margin:4px 0 2px">各币本位库存（现货与永续同量，仅填一次）</div>
+              <div id="pwaSimCoins" class="sim-coin-list"></div>
+              <div class="setting-row" style="margin-top:6px"><button onclick="pwaSimReset()">重置为默认并重建账户</button></div>
+            </div>
+          </div>
+          <div class="kchart-settings closed" id="pwaSrcCard">
+            <div class="kchart-ovhead" onclick="document.getElementById('pwaSrcCard').classList.toggle('closed')">⚙ 行情数据源（受限地区填 Binance 镜像/代理）<span class="kchart-ovarrow">▾</span></div>
+            <div class="kchart-settings-body">
+              <div style="font-size:10px;color:var(--text2);margin:2px 0 6px">终端网络不可达 Binance 时，填入一个<b>可达 Binance 的代理/镜像</b>即可在任何地区使用。支持两种写法：<br>
+                反向代理 <code>https://你的代理/binance</code> → 实际请求 <code>代理/api/v3/klines…</code><br>
+                包裹代理 <code>https://代理/?url={url}</code> → 实际请求 <code>代理/?url=编码后的Binance全URL</code></div>
+              <div class="setting-row"><label>代理地址</label><input id="pwaSrcInput" type="text" placeholder="留空 = 直连 Binance 多域名(api/api1/api2/vision)" style="flex:1;min-width:160px"></div>
+              <div class="setting-row"><button id="pwaSrcSave">保存并刷新</button><button id="pwaSrcClear">清除</button><span id="pwaSrcMsg" style="font-size:10px;color:var(--accent)"></span></div>
+            </div>
+          </div>
+          <div class="kchart-settings closed" id="kchartSrsiCardWrap">
+            <div class="kchart-ovhead" onclick="document.getElementById('kchartSrsiCardWrap').classList.toggle('closed')">⚙ SRSI 各币对各周期参数（本地持久化）<span class="kchart-ovarrow">▾</span></div>
+            <div id="kchartSrsiCard" class="kchart-settings-body"></div>
+          </div>
+        </section>
+
+      </main>
     </div>
+
+    <!-- ===== 底部 Tab 栏（触屏） ===== -->
+    <nav id="pwaTabBar"></nav>
   </div>
-  <div class="kchart-settings closed" id="pwaSrcCard" data-tab-block="settings">
-    <div class="kchart-ovhead" onclick="document.getElementById('pwaSrcCard').classList.toggle('closed')">⚙ 行情数据源（受限地区填 Binance 镜像/代理）<span class="kchart-ovarrow">▾</span></div>
-    <div class="kchart-settings-body">
-      <div style="font-size:10px;color:var(--text2);margin:2px 0 6px">终端网络不可达 Binance 时，填入一个<b>可达 Binance 的代理/镜像</b>即可在任何地区使用。支持两种写法：<br>
-        反向代理 <code>https://你的代理/binance</code> → 实际请求 <code>代理/api/v3/klines…</code><br>
-        包裹代理 <code>https://代理/?url={url}</code> → 实际请求 <code>代理/?url=编码后的Binance全URL</code></div>
-      <div class="setting-row"><label>代理地址</label><input id="pwaSrcInput" type="text" placeholder="留空 = 直连 Binance 多域名(api/api1/api2/vision)" style="flex:1;min-width:160px"></div>
-      <div class="setting-row"><button id="pwaSrcSave">保存并刷新</button><button id="pwaSrcClear">清除</button><span id="pwaSrcMsg" style="font-size:10px;color:var(--accent)"></span></div>
-    </div>
-  </div>
-  <div id="pwaTabBar">
-    <button data-tab="kline" class="active">📈 K线</button>
-    <button data-tab="trade">🧭 交易</button>
-    <button data-tab="bt">🧪 回测</button>
-    <button data-tab="settings">⚙ 设置</button>
-  </div>
+
   <div id="pwaInstall" class="pwa-install" hidden>
     <div class="pi-txt" id="pwaInstallTxt"></div>
     <button id="pwaInstallBtn" class="pi-btn">安装到本机</button>
     <button id="pwaInstallClose" class="pi-close" aria-label="关闭">×</button>
   </div>
+
   <script>
   (function(){
     var inp=document.getElementById('pwaSrcInput');

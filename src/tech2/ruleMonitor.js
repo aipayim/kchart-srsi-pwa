@@ -1187,6 +1187,10 @@ export function kToggleRuleMonitor() {
 // 单测钩子
 export function __ruleMonitorTestState() { return { mode: _rm.mode, n: _rm.signals.length, signals: _rm.signals }; }
 
+// PWA 外壳读取（只读）：最近一次影子快照 + 驾驶舱周期上下文（horizon/macro）
+export function getLastRuleSnapshot() { return _rm.lastSnapshot || null; }
+export function getCockpitCtx() { return _rm.cockpitCtx || null; }
+
 // v1.5.52 纯函数：HUD 卡位置 clamp 到主图容器内（留 4px 边距；卡片宽/高超过容器则贴左上 4px）。
 // 非数字输入返回默认位置 {x:4,y:4}。
 export function hudClampPos(x, y, w, h, bw, bh) {

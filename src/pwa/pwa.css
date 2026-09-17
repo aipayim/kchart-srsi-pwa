@@ -1,0 +1,272 @@
+/* ============================================================================
+   PWA 重构 · 交易驾驶舱（风格 A 霓虹驾驶舱）
+   —— 全部规则限定在 body.pwa 作用域内；主系统 index.html / styles.css 零改动。
+   —— 变量重映射：把共享 styles.css 的 --card/--accent/... 换成霓虹调色板，
+      使既有 .kchart-* / .disc-* / .kt-* / .rm-* 面板自动换肤。
+   —— 设计稿：pwa-redesign-demo.html（同屏对比用 vp-* class；此处为真实 media query）。
+   ============================================================================ */
+
+/* ---------- 基础 + 变量重映射 ---------- */
+body.pwa{
+  --bg:#070b14; --bg2:#0b1220;
+  --card:rgba(16,23,36,.82); --card2:rgba(22,31,48,.70);
+  --border:rgba(34,211,238,.14);
+  --text:#e6f1ff; --text2:#7c8aa3;
+  --accent:#22d3ee; --green:#00e676; --red:#ff5252; --gold:#ffd740; --purple:#7c4dff; --blue:#448aff;
+  --cyan:#22d3ee; --warn:#ffd740;
+  --glow:0 0 18px rgba(34,211,238,.35);
+  --glow2:0 0 22px rgba(245,158,11,.30);
+  --r:12px;
+  --mono:'JetBrains Mono','SFMono-Regular',Menlo,Consolas,monospace;
+  height:calc(100vh / var(--pwa-z,1)); min-height:0; overflow:hidden; display:block; padding:0;
+  font-family:'Inter','PingFang SC','Microsoft YaHei',system-ui,-apple-system,sans-serif;
+  font-size:12px; color:var(--text);
+  background-color:#070b14;
+  background-image:
+    linear-gradient(rgba(34,211,238,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(34,211,238,.045) 1px,transparent 1px),
+    radial-gradient(1200px 600px at 15% -10%,rgba(34,211,238,.10),transparent 60%),
+    radial-gradient(900px 500px at 95% 0%,rgba(124,77,255,.10),transparent 55%);
+  background-size:38px 38px,38px 38px,auto,auto;
+  background-attachment:fixed;
+  overscroll-behavior:none;
+}
+body.pwa .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* ---------- App 外壳 ---------- */
+.pwa-app{height:100%;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.pwa-app.no-motion *{animation:none!important;transition:none!important}
+
+/* ---------- 顶栏 ---------- */
+.pwa-appbar{display:flex;align-items:center;gap:12px;padding:9px 14px;flex-shrink:0;
+  border-bottom:1px solid var(--border);z-index:20;
+  background:linear-gradient(180deg,rgba(12,18,30,.86),rgba(9,14,24,.42));
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.pwa-brand{display:flex;align-items:center;gap:9px;font-weight:800;letter-spacing:.3px;white-space:nowrap}
+.pwa-brand .mk{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:12px;
+  background:linear-gradient(135deg,var(--accent),var(--purple));color:#04121c;box-shadow:var(--glow)}
+.pwa-brand small{display:block;color:var(--text2);font-weight:500;font-size:9px;letter-spacing:.5px}
+.pwa-sym{display:flex;align-items:center;gap:8px;padding:5px 10px;border:1px solid var(--border);
+  border-radius:9px;background:var(--card2);white-space:nowrap}
+.pwa-sym b{font-size:12.5px;letter-spacing:.3px}
+.pwa-price{display:flex;align-items:baseline;gap:8px;white-space:nowrap}
+.pwa-price .v{font-size:19px;font-weight:800;letter-spacing:.2px;transition:color .25s}
+.pwa-price .c{font-size:11.5px;font-weight:700}
+.flash-u{animation:fu .7s}
+.flash-d{animation:fd .7s}
+@keyframes fu{0%{color:var(--green);text-shadow:0 0 14px rgba(0,230,118,.7)}100%{}}
+@keyframes fd{0%{color:var(--red);text-shadow:0 0 14px rgba(255,82,82,.7)}100%{}}
+.pwa-appbar .pwa-spacer{flex:1}
+.pwa-icobtn{height:30px;min-width:30px;padding:0 8px;border-radius:8px;border:1px solid var(--border);
+  background:var(--card2);color:var(--text2);display:inline-grid;place-items:center;cursor:pointer;
+  transition:.18s;font-size:13px;font-family:inherit;line-height:1}
+.pwa-icobtn:hover{color:var(--accent);border-color:var(--accent)}
+.pwa-zoom{display:flex;align-items:center;gap:2px;border:1px solid var(--border);border-radius:8px;
+  background:var(--card2);overflow:hidden}
+.pwa-zoom button{background:transparent;border:none;color:var(--text2);font-family:inherit;font-size:13px;
+  font-weight:700;padding:5px 9px;cursor:pointer;line-height:1}
+.pwa-zoom button:hover{color:var(--accent)}
+.pwa-zoom #pwaZoomLbl{font-size:10.5px;color:var(--text2);padding:0 6px;cursor:pointer;min-width:38px;text-align:center}
+
+/* ---------- 交易对条 ---------- */
+.pwa-symbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 14px 0;flex-shrink:0}
+.pwa-symbar .kchart-fresh{font-size:10px;color:var(--text2);margin-left:auto}
+
+/* ---------- KPI 条 ---------- */
+.pwa-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;padding:10px 14px 0;flex-shrink:0}
+.pwa-kpi{padding:9px 11px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.pwa-kpi .k{font-size:9.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.7px;
+  display:flex;align-items:center;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pwa-kpi .v{font-size:19px;font-weight:800;line-height:1;display:flex;align-items:baseline;gap:5px;font-family:var(--mono)}
+.pwa-kpi .v small{font-size:10px;font-weight:600;color:var(--text2)}
+.pwa-kpi .sp{height:26px}
+.pwa-kpi .spark{height:26px;width:100%;display:block}
+
+/* ---------- 主体 ---------- */
+.pwa-body{display:flex;flex:1;min-height:0;padding:10px 14px 14px;gap:10px}
+.pwa-rail{width:64px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.pwa-rail .ritem{display:flex;flex-direction:column;align-items:center;gap:4px;padding:9px 0;border-radius:11px;
+  cursor:pointer;color:var(--text2);border:1px solid transparent;transition:.18s;font-size:9px;background:transparent;
+  font-family:inherit}
+.pwa-rail .ritem .ic{font-size:16px;line-height:1}
+.pwa-rail .ritem:hover{background:var(--card2);color:var(--text)}
+.pwa-rail .ritem.on{background:var(--card);border-color:var(--border);color:var(--accent);box-shadow:var(--glow)}
+.pwa-content{flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;padding-right:2px;scroll-behavior:smooth}
+.pwa-content::-webkit-scrollbar{width:8px}
+.pwa-content::-webkit-scrollbar-thumb{background:var(--card2);border-radius:6px}
+.pwa-tab{display:none}
+.pwa-tab.on{display:block;animation:fade .35s}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* ---------- 卡片 / 通用组件 ---------- */
+.pwa-card{background:var(--card);border:1px solid var(--border);border-radius:var(--r);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  transition:border-color .2s,box-shadow .2s;overflow:hidden}
+.pwa-card:hover{border-color:rgba(34,211,238,.32);box-shadow:0 6px 26px rgba(0,0,0,.45),var(--glow)}
+.pwa-card-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);
+  font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.7px}
+.pwa-card-h .ttl{color:var(--text);font-weight:700;text-transform:none;letter-spacing:0;font-size:11.5px}
+.pwa-card-h .pwa-spacer{flex:1}
+.pwa-card-b{padding:12px}
+.pwa-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 10px}
+.pwa-dim{color:var(--text2)}
+.pwa-legend{display:flex;gap:10px;flex-wrap:wrap;font-size:9.5px;color:var(--text2);font-family:var(--mono);text-transform:none;letter-spacing:0}
+.pwa-legend i{font-style:normal}
+.pwa-pill{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;font-size:10px;
+  border:1px solid var(--border);background:var(--card2);color:var(--text2);white-space:nowrap}
+.pwa-pill.b{border-color:rgba(0,230,118,.35);color:var(--green);background:rgba(0,230,118,.08)}
+.pwa-pill.r{border-color:rgba(255,82,82,.35);color:var(--red);background:rgba(255,82,82,.08)}
+.pwa-pill.a{border-color:rgba(34,211,238,.4);color:var(--accent);background:rgba(34,211,238,.08)}
+.pwa-pill.w{border-color:rgba(255,215,64,.35);color:var(--warn);background:rgba(255,215,64,.08)}
+.pwa-dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(0,230,118,.6);animation:pulse 1.8s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(0,230,118,.55)}70%{box-shadow:0 0 0 8px rgba(0,230,118,0)}100%{box-shadow:0 0 0 0 rgba(0,230,118,0)}}
+.pwa-meter{height:6px;border-radius:4px;background:var(--card2);overflow:hidden;position:relative}
+.pwa-meter>i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),var(--purple));
+  width:0;transition:width 1s cubic-bezier(.2,.8,.2,1)}
+.pwa-meter.g>i{background:linear-gradient(90deg,var(--green),#8bffb0)}
+.pwa-meter.r>i{background:linear-gradient(90deg,var(--red),#ff8a80)}
+.pwa-meter.w>i{background:linear-gradient(90deg,var(--gold),#ffe08a)}
+.pwa-scan{position:relative;overflow:hidden}
+.pwa-scan::after{content:'';position:absolute;left:0;right:0;height:26px;top:-30px;pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(34,211,238,.10),transparent);animation:scan 5.5s linear infinite}
+@keyframes scan{0%{top:-30px}100%{top:100%}}
+
+/* ---------- 盯盘栅格 ---------- */
+.pwa-grid-k{display:grid;grid-template-columns:minmax(0,1.85fr) minmax(0,1fr);gap:10px;align-items:start}
+.pwa-col{display:flex;flex-direction:column;gap:10px;min-width:0}
+.pwa-col>.pwa-card{margin:0}
+
+/* ---------- 主图卡 ---------- */
+body.pwa .kchart-box{position:relative;background:transparent;border:none;border-radius:0;padding:0}
+body.pwa .kchart-hint{font-size:9px;color:var(--text2);margin:0;opacity:.8}
+body.pwa .kchart-maintools{margin:0;padding:5px 7px;background:transparent;border:none;border-radius:0}
+body.pwa .kchart-overview{border:none;border-radius:0;background:transparent;margin-top:0}
+body.pwa .kchart-ovwrap{margin:0}
+body.pwa .kchart-ovhead{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text);
+  padding:9px 12px;border-bottom:1px solid var(--border);cursor:pointer;text-transform:none;letter-spacing:0}
+body.pwa .kchart-ovwrap.closed .kchart-ovhead{border-bottom:none}
+body.pwa .kchart-ovarrow{margin-left:auto;color:var(--text2);transition:transform .15s}
+body.pwa .kchart-preset{background:var(--card2);border:1px solid var(--border);color:var(--text2);font-size:10px;
+  padding:3px 9px;border-radius:999px;cursor:pointer;font-family:inherit;transition:.15s}
+body.pwa .kchart-preset:hover{border-color:var(--accent);color:var(--accent)}
+body.pwa .kchart-preset.active{background:var(--accent);color:#04121c;border-color:var(--accent);font-weight:700}
+body.pwa .kchart-lbl{font-size:10px;color:var(--text2)}
+body.pwa .kchart-maintools .chip{border-radius:999px}
+
+/* ---------- 信号驾驶舱卡（内联） ---------- */
+.pwa-cockpit-top{display:grid;grid-template-columns:200px 1fr;gap:12px;align-items:center}
+#pwaPosGauge{height:150px;width:100%}
+#pwaWHist{height:70px;width:100%;margin-top:6px}
+.pwa-factors{display:flex;flex-direction:column;gap:8px}
+.pwa-fac{display:grid;grid-template-columns:52px 1fr 62px;gap:8px;align-items:center;font-size:10.5px}
+.pwa-fac .nm{color:var(--text2);font-family:var(--mono);text-transform:uppercase}
+.pwa-fac .vv{text-align:right;font-family:var(--mono);font-weight:700}
+.pwa-fac .bar{height:6px;border-radius:4px;background:var(--card2);overflow:hidden}
+.pwa-fac .bar>i{display:block;height:100%;border-radius:4px;background:linear-gradient(90deg,var(--accent),var(--purple));transition:width .8s}
+.pwa-fac.sc-carry .bar>i{background:linear-gradient(90deg,var(--accent),#7c4dff)}
+.pwa-fac.sc-momo .bar>i{background:linear-gradient(90deg,var(--green),#8bffb0)}
+.pwa-fac.sc-brk .bar>i{background:linear-gradient(90deg,var(--gold),#ffe08a)}
+.pwa-cockpit-sub{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center}
+#pwaRadar{height:150px;width:100%}
+#pwaRelVis{height:150px;width:100%}
+.pwa-qa{display:flex;gap:9px;align-items:flex-start;margin-top:10px}
+.pwa-qa .n{width:19px;height:19px;border-radius:6px;background:var(--card2);border:1px solid var(--border);
+  display:grid;place-items:center;font-size:10px;color:var(--accent);flex-shrink:0;font-weight:700}
+.pwa-qa .t{flex:1;min-width:0}
+.pwa-qa .t b{font-size:11.5px}
+.pwa-qa .t p{color:var(--text2);font-size:10.5px;margin-top:3px;line-height:1.5}
+.pwa-concl{margin-top:10px;padding:9px 11px;border-radius:10px;border:1px solid var(--border);
+  background:var(--card2);font-size:11px;line-height:1.55}
+.pwa-concl.bad{border-color:rgba(255,215,64,.3);background:rgba(255,215,64,.07);color:var(--warn)}
+.pwa-concl.good{border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.07)}
+.pwa-evlist{max-height:230px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-top:6px}
+.pwa-ev{display:grid;grid-template-columns:64px 12px 1fr;gap:8px;align-items:start;padding:6px 4px;border-bottom:1px solid rgba(255,255,255,.04)}
+.pwa-ev .ts{color:var(--text2);font-family:var(--mono);font-size:9.5px}
+.pwa-ev .bd{width:9px;height:9px;border-radius:3px;margin-top:3px}
+.pwa-ev .tx{font-size:10.5px;line-height:1.45}
+#pwaEvSpark{height:44px;width:100%;margin-bottom:6px}
+
+/* ---------- 既有面板在 PWA 下的换肤微调 ---------- */
+body.pwa .kchart-discwrap{margin:0;border:1px solid var(--border);border-radius:var(--r);background:var(--card);overflow:hidden}
+body.pwa .kchart-discwrap .kchart-ovhead{border-bottom:1px solid var(--border)}
+body.pwa .kchart-discwrap.closed .kchart-ovhead{border-bottom:none}
+body.pwa .kchart-settings{margin:0;border:1px solid var(--border);border-radius:var(--r);background:var(--card)}
+body.pwa .kchart-tradebar{border:none;border-radius:0;background:transparent;margin:0;padding:10px 12px}
+body.pwa .kchart-alphawrap{margin:0;border:1px solid var(--border);border-radius:var(--r);background:var(--card)}
+body.pwa .kchart-alphawrap.closed .kchart-ovhead{border-bottom:none}
+body.pwa .rule-monitor{margin:0}
+body.pwa .disc-hud{background:rgba(10,15,24,.92);border:1px solid var(--border);border-radius:var(--r);
+  box-shadow:0 10px 34px rgba(0,0,0,.55),var(--glow)}
+body.pwa .disc-hud-bar{color:var(--accent)}
+body.pwa table.tbl,body.pwa .kchart-overview table{border-collapse:collapse}
+body.pwa input,body.pwa select,body.pwa textarea{font-family:inherit}
+body.pwa button{font-family:inherit}
+body.pwa a{color:var(--accent)}
+
+/* ---------- 底部 Tab 栏（平板/手机） ---------- */
+#pwaTabBar{display:none;flex-shrink:0;padding:6px 8px calc(6px + env(safe-area-inset-bottom));gap:4px;
+  background:rgba(7,11,20,.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+  border-top:1px solid var(--border);z-index:9998}
+#pwaTabBar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;border:none;border-radius:11px;
+  background:transparent;color:var(--text2);font-family:inherit;font-size:9.5px;padding:7px 0;cursor:pointer;
+  transition:.18s;min-height:46px;-webkit-tap-highlight-color:transparent}
+#pwaTabBar button .ic{font-size:16px;line-height:1}
+#pwaTabBar button.on{color:var(--accent);background:rgba(34,211,238,.10)}
+
+/* ---------- 响应式 ---------- */
+/* 平板：单列，底部 Tab，KPI 3 列 */
+@media (max-width:1024px){
+  .pwa-kpis{grid-template-columns:repeat(3,1fr)}
+  .pwa-kpis .pwa-kpi:nth-child(n+4){display:none}
+  .pwa-rail{display:none}
+  #pwaTabBar{display:flex}
+  .pwa-grid-k{grid-template-columns:1fr}
+  .pwa-cockpit-top{grid-template-columns:170px 1fr}
+  .pwa-appbar{flex-wrap:wrap;gap:8px}
+}
+@media (pointer:coarse){
+  .pwa-rail{display:none}
+  #pwaTabBar{display:flex}
+  body.pwa{padding-bottom:0}
+}
+/* 手机：KPI 横向滚动，全部单列 */
+@media (max-width:640px){
+  .pwa-appbar{padding:8px 10px;gap:8px}
+  .pwa-brand small{display:none}
+  .pwa-price .v{font-size:16px}
+  .pwa-kpis{display:flex;overflow-x:auto;gap:8px;padding:8px 10px 0;scroll-snap-type:x mandatory}
+  .pwa-kpis::-webkit-scrollbar{display:none}
+  .pwa-kpi{min-width:138px;scroll-snap-align:start;flex-shrink:0}
+  .pwa-kpi .v{font-size:17px}
+  .pwa-body{padding:8px 10px 10px}
+  .pwa-grid-k,.pwa-cockpit-top,.pwa-cockpit-sub{grid-template-columns:1fr}
+  .pwa-symbar{padding:7px 10px 0}
+  .pwa-card-h{padding:8px 10px}
+  .pwa-card-b{padding:10px}
+  .hide-phone{display:none!important}
+}
+@media (prefers-reduced-motion:reduce){
+  .pwa-app *{animation:none!important;transition:none!important}
+}
+
+/* ---------- 交易对条控件 ---------- */
+.pwa-symbar #symInput{background:var(--card);border:1px solid var(--border);color:var(--text);padding:5px 9px;
+  border-radius:8px;font-family:var(--mono);font-size:11px;width:118px;text-transform:uppercase}
+.pwa-symbar #symInput:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 2px rgba(34,211,238,.15)}
+.pwa-symbar #symBtn{background:var(--accent);border:none;color:#04121c;font-size:11px;font-weight:700;
+  padding:5px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
+.pwa-symbar #symBtn:hover{filter:brightness(1.08)}
+
+/* ---------- 设置页双列 ---------- */
+.pwa-tab.on[data-tab="settings"]{display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:start}
+@media (max-width:900px){.pwa-tab.on[data-tab="settings"]{grid-template-columns:1fr}}
+
+/* ---------- 回测页插槽 ---------- */
+#pwaBtSlot{display:flex;flex-direction:column;gap:10px}
+
+/* ---------- 触屏：内容区底部为拇指条/安装条留白 ---------- */
+@media (pointer:coarse){.pwa-content{padding-bottom:104px}}
+@media (max-width:640px){.pwa-content{padding-bottom:96px}}
+
+/* 主图叠加 chips 独占一行（与周期/子图同卡时换行显示） */
+body.pwa .kchart-maintools{flex-basis:100%;width:100%}
