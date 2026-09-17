@@ -317,15 +317,15 @@ body.pwa #kchartTradeBar .kt-amt,body.pwa #kchartTradeBar .kt-num,body.pwa #kcha
 body.pwa #kchartTradeBar .kt-lev{width:130px}
 body.pwa #kchartTradeBar .kt-pct{width:110px}
 /* 快捷合约块头 */
-body.pwa #kchartTradeBar .kt-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:2px}
-body.pwa #kchartTradeBar .kt-btns::before{content:'快捷合约';grid-column:1 / -1;font-size:10px;color:var(--text2);
+body.pwa .kt-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:2px}
+body.pwa .kt-btns::before{content:'快捷合约';grid-column:1 / -1;font-size:10px;color:var(--text2);
   text-transform:uppercase;letter-spacing:.7px;margin-bottom:-2px}
-body.pwa #kchartTradeBar .kt-btn{border:none;border-radius:11px;padding:12px;font-size:14px;font-weight:800;
+body.pwa .kt-btn{border:none;border-radius:11px;padding:12px;font-size:14px;font-weight:800;
   font-family:inherit;cursor:pointer;transition:.18s;letter-spacing:.4px;color:#04121c}
 body.pwa #kchartTradeBar .kt-long{background:linear-gradient(180deg,#00e676,#00b85f);box-shadow:0 6px 20px rgba(0,230,118,.24)}
 body.pwa #kchartTradeBar .kt-short{background:linear-gradient(180deg,#ff5252,#d32f2f);color:#fff;box-shadow:0 6px 20px rgba(255,82,82,.24)}
-body.pwa #kchartTradeBar .kt-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
-body.pwa #kchartTradeBar .kt-btn.armed{outline:2px solid var(--accent);filter:brightness(1.12)}
+body.pwa .kt-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+body.pwa .kt-btn.armed{outline:2px solid var(--accent);filter:brightness(1.12)}
 body.pwa #kchartTradeBar .kt-orders{background:var(--card2);color:var(--text);border:1px solid var(--border);
   font-size:11.5px;padding:9px;border-radius:9px}
 body.pwa #kchartTradeBar .kt-orders:hover{border-color:var(--accent);color:var(--accent)}
@@ -339,14 +339,33 @@ body.pwa #kchartTradeBar .kt-auto-cfg,body.pwa #kchartTradeBar .kt-auto-danger,
 body.pwa #kchartTradeBar .kt-auto-risk,body.pwa #kchartTradeBar .kt-auto-opt{margin-top:-4px}
 body.pwa #kchartTradeBar .kt-mini{display:inline-flex;align-items:center;gap:4px;color:var(--text2);font-size:10.5px}
 body.pwa #kchartTradeBar .kt-strat{color:var(--text)}
-body.pwa #kchartTradeBar .kt-bt-section{border:1px solid var(--border);border-radius:10px;background:var(--card2);overflow:hidden}
-body.pwa #kchartTradeBar .kt-bt-head{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:11px;font-weight:700;
+body.pwa .kt-bt-section{border:1px solid var(--border);border-radius:10px;background:var(--card2);overflow:hidden}
+body.pwa .kt-bt-head{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:11px;font-weight:700;
   color:var(--text);border-bottom:1px solid var(--border)}
-body.pwa #kchartTradeBar .kt-bt-head span{flex:1}
-body.pwa #kchartTradeBar .kt-bt-body{padding:10px;display:flex;flex-direction:column;gap:9px}
-body.pwa #kchartTradeBar .kt-bt-body.closed,body.pwa #kchartTradeBar .kt-bt-body[style*="none"]{display:none}
-body.pwa #kchartTradeBar .kt-bt{background:var(--card);border:1px solid var(--border);color:var(--text2);border-radius:7px;
+body.pwa .kt-bt-head span{flex:1}
+body.pwa .kt-bt-body{padding:10px;display:flex;flex-direction:column;gap:9px}
+body.pwa .kt-bt-body.closed,body.pwa .kt-bt-body[style*="none"]{display:none}
+body.pwa .kt-bt{background:var(--card);border:1px solid var(--border);color:var(--text2);border-radius:7px;
   font-family:inherit;font-size:10.5px;padding:5px 11px;cursor:pointer}
-body.pwa #kchartTradeBar .kt-bt:hover{border-color:var(--accent);color:var(--accent)}
+body.pwa .kt-bt:hover{border-color:var(--accent);color:var(--accent)}
 body.pwa #kchartTradeBar .kt-auto-panel{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:9px 10px}
 body.pwa #kchartTradeBar .kt-off{color:var(--text2);font-size:11px;padding:10px}
+
+/* ============================================================================
+   阶段3：回测页 + 最近成交
+   ============================================================================ */
+#pwaBtParams{display:flex;flex-direction:column;gap:10px;margin-bottom:10px}
+#pwaBtSlot{display:flex;flex-direction:column;gap:10px}
+body.pwa .kt-bt-section{margin:0}
+body.pwa .kt-bt-body{background:transparent}
+
+.pwa-hist{display:flex;flex-direction:column}
+.pwa-hist-row{display:grid;grid-template-columns:76px 74px 22px 76px 1fr;gap:6px;align-items:center;
+  padding:6px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:10.5px;font-family:var(--mono)}
+.pwa-hist-row:last-child{border-bottom:none}
+.pwa-hist-row .ts{color:var(--text2);font-size:9.5px}
+.pwa-hist-row .rs{color:var(--text2);font-size:9.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media (max-width:640px){
+  .pwa-hist-row{grid-template-columns:66px 66px 20px 68px;font-size:10px}
+  .pwa-hist-row .rs{display:none}
+}

@@ -207,6 +207,12 @@
                   <button class="pwa-mini" id="pwaPosManage" title="打开完整持仓管理（平50% / 反手 / 杠杆 / TP·SL）">管理</button></div>
                 <div class="pwa-card-b" id="pwaPosList"></div>
               </div>
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">最近成交</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill" id="pwaTradeHistCount">0</span>
+                  <button class="pwa-mini" id="pwaHistMore" title="打开完整订单/历史管理">全部</button></div>
+                <div class="pwa-card-b" style="padding:0 0 4px"><div class="pwa-hist" id="pwaTradeHist"></div></div>
+              </div>
             </div>
           </div>
         </section>
@@ -214,6 +220,7 @@
         <!-- ========== 回测 ========== -->
         <section class="pwa-tab" data-tab="bt">
           <div id="pwaBtSlot">
+            <div id="pwaBtParams"></div>
             <div class="kchart-alphawrap closed" id="alphaLabWrap">
               <div class="kchart-ovhead" onclick="this.parentElement.classList.toggle('closed');window.__alphaLabHead&&window.__alphaLabHead()">🧪 Alpha 实验室（回测 + Paper 模拟实盘 · 点击展开/收起）<span class="kchart-ovarrow" style="transition:transform .15s">▾</span></div>
               <div id="alphaLab" class="alpha-lab"></div>

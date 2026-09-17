@@ -357,6 +357,68 @@ function bindTrade() {
     mgr.__bound = true;
     mgr.addEventListener('click', () => { const api = globalThis.kchartApi; if (api && api.openOrderManager) api.openOrderManager(); });
   }
+  const hm = $('pwaHistMore');
+  if (hm && !hm.__bound) {
+    hm.__bound = true;
+    hm.addEventListener('click', () => { const api = globalThis.kchartApi; if (api && api.openOrderManager) api.openOrderManager({ tab: 'history' }); });
+  }
+}
+
+// ---------- 回测页：把交易条内的「回测设置」区搬到回测 tab（PWA-only，幂等） ----------
+function mountBtSection() {
+  const host = $('pwaBtParams');
+  if (!host) return;
+  const inBar = document.querySelector('#kchartTradeBar .kt-bt-section');
+  const inHost = host.querySelector('.kt-bt-section');
+  if (inBar && inBar !== inHost) {
+    if (inHost) inHost.remove();          // 交易条重建时清掉旧节点，避免两份
+    host.appendChild(inBar);
+  }
+  const sec = inHost || inBar;
+  if (sec) bindBtToggle(sec);
+  ensureBtOpen();
+}
+// 搬走后 kchart.js 的原 toggle 处理器按 bar 查不到节点（DOM 已移出）→ 这里补上视觉切换 + 记忆
+function bindBtToggle(sec) {
+  const tog = sec.querySelector('#ktBtToggle'), body = sec.querySelector('#ktBtBody');
+  if (!tog || !body || tog.__pwaBound) return;
+  tog.__pwaBound = true;
+  tog.addEventListener('click', () => {
+    try { localStorage.setItem('pwa_bt_body_touched', '1'); } catch (e) {}
+    const show = body.style.display === 'none';
+    body.style.display = show ? '' : 'none';
+    tog.textContent = show ? '▾' : '▸';
+  });
+}
+// 回测设置默认展开（首次）；用户手动收起过则尊重（pwa_bt_body_touched）
+function ensureBtOpen() {
+  const tog = $('ktBtToggle'), body = $('ktBtBody');
+  if (!tog || !body) return;
+  let touched = false;
+  try { touched = localStorage.getItem('pwa_bt_body_touched') === '1'; } catch (e) {}
+  if (!touched && body.style.display === 'none') { try { tog.click(); } catch (e) {} }
+}
+
+// ---------- 最近成交（纸面，来自 S.closed） ----------
+function renderTrades() {
+  const S = globalThis.S || {};
+  const hist = Array.isArray(S.closed) ? S.closed : [];
+  const cnt = $('pwaTradeHistCount');
+  if (cnt) cnt.textContent = hist.length + ' 笔';
+  const box = $('pwaTradeHist');
+  if (!box) return;
+  const rows = hist.slice().reverse().slice(0, 8);
+  const html = rows.length ? rows.map(c => {
+    const d = new Date(c.t);
+    const ts = isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const pnl = typeof c.pnl === 'number' ? c.pnl : 0;
+    const cls = pnl >= 0 ? 'up' : 'down';
+    const side = c.side === 'long' ? '<span class="up">多</span>' : '<span class="down">空</span>';
+    return `<div class="pwa-hist-row"><span class="ts">${ts}</span><span>${c.sym}</span>${side}` +
+      `<span class="mono ${cls}">${pnl >= 0 ? '+' : ''}${fmtMoney(pnl)}</span>` +
+      `<span class="rs">${c.reason || ''}</span></div>`;
+  }).join('') : '<div class="pwa-empty">暂无成交 · 开仓后平仓会记录在这里</div>';
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
 }
 
 // ---------- 主刷新 ----------
@@ -368,7 +430,8 @@ export function refreshShell() {
   const sym = (cfg && cfg.symbol) || S.sel;
   if (!sym) return;
   renderPrice(sym);
-  if (_curTab === 'trade') { renderTrade(); return; }
+  mountBtSection();
+  if (_curTab === 'trade') { renderTrade(); renderTrades(); return; }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
   const now = Date.now();
   const alphaSig = globalThis.__alphaSignals;
@@ -387,6 +450,8 @@ export function initPwaShell() {
   if (typeof document === 'undefined') return;
   bindNav();
   bindTrade();
+  // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
+  try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
   let saved = null;
   try { saved = localStorage.getItem(TAB_KEY); } catch (e) {}
   goTab(saved || 'kline', { keepScroll: true });
