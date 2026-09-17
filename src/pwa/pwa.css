@@ -270,3 +270,83 @@ body.pwa a{color:var(--accent)}
 
 /* 主图叠加 chips 独占一行（与周期/子图同卡时换行显示） */
 body.pwa .kchart-maintools{flex-basis:100%;width:100%}
+
+/* ============================================================================
+   阶段2：交易页（账户 / 持仓 / 快捷合约卡片化）
+   ============================================================================ */
+.pwa-trade-grid{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:10px;align-items:start}
+@media (max-width:1024px){.pwa-trade-grid{grid-template-columns:1fr}}
+
+.pwa-metrics{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.pwa-metric{padding:10px;text-align:center;background:var(--card2);border:1px solid var(--border);border-radius:10px}
+.pwa-metric .v{font-size:16px;font-weight:800;line-height:1.1;font-family:var(--mono);word-break:break-all}
+.pwa-metric .k{font-size:9.5px;color:var(--text2);text-transform:uppercase;letter-spacing:.6px;margin-top:4px}
+.pwa-mini{background:var(--card2);border:1px solid var(--border);color:var(--text2);border-radius:7px;
+  font-family:inherit;font-size:10px;padding:3px 10px;cursor:pointer;transition:.15s}
+.pwa-mini:hover{color:var(--text);border-color:var(--accent)}
+.pwa-empty{text-align:center;color:var(--text2);font-size:10.5px;padding:18px 8px}
+
+.pwa-pos{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:11px;align-items:center;
+  padding:10px 11px;margin-bottom:8px;background:var(--card2);border:1px solid var(--border);border-radius:10px}
+.pwa-pos:last-child{margin-bottom:0}
+.pwa-dirbadge{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:11px;font-weight:800}
+.pwa-dirbadge.l{background:rgba(0,230,118,.12);color:var(--green)}
+.pwa-dirbadge.s{background:rgba(255,82,82,.12);color:var(--red)}
+.pwa-pos-mid{min-width:0}
+.pwa-pos-top{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.pwa-pos-top b{font-size:12px}
+.pwa-pos-meta{font-size:9.5px;color:var(--text2);font-family:var(--mono);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pwa-pos-act{display:flex;gap:5px;margin-top:6px}
+.pwa-pos-act button{background:var(--card);border:1px solid var(--border);color:var(--text2);border-radius:7px;
+  font-family:inherit;font-size:10px;padding:3px 10px;cursor:pointer;transition:.15s}
+.pwa-pos-act button:hover{color:var(--text);border-color:var(--accent)}
+.pwa-pos-act button[data-act="close"]:hover{color:var(--red);border-color:var(--red)}
+.pwa-pos-pnl{text-align:right;font-family:var(--mono);white-space:nowrap}
+.pwa-pos-pnl .a{font-size:13px;font-weight:800}
+.pwa-pos-pnl .b{font-size:10px}
+
+/* ---- 交易条（既有 .kt-* 结构）卡片化换肤 ---- */
+body.pwa #kchartTradeBar{display:flex;flex-direction:column;gap:9px;padding:12px}
+body.pwa #kchartTradeBar .kt-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:11px;color:var(--text)}
+body.pwa #kchartTradeBar .kt-label{color:var(--text2)}
+body.pwa #kchartTradeBar .kt-val{color:var(--accent);font-weight:700;min-width:34px}
+body.pwa #kchartTradeBar .kt-toggle{display:flex;align-items:center;gap:3px;color:var(--text2);cursor:pointer;user-select:none}
+body.pwa #kchartTradeBar .kt-amt,body.pwa #kchartTradeBar .kt-num,body.pwa #kchartTradeBar .kt-sel{
+  background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:7px;padding:3px 7px;
+  font-family:var(--mono);font-size:11px;max-width:110px}
+body.pwa #kchartTradeBar .kt-lev{width:130px}
+body.pwa #kchartTradeBar .kt-pct{width:110px}
+/* 快捷合约块头 */
+body.pwa #kchartTradeBar .kt-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding-top:2px}
+body.pwa #kchartTradeBar .kt-btns::before{content:'快捷合约';grid-column:1 / -1;font-size:10px;color:var(--text2);
+  text-transform:uppercase;letter-spacing:.7px;margin-bottom:-2px}
+body.pwa #kchartTradeBar .kt-btn{border:none;border-radius:11px;padding:12px;font-size:14px;font-weight:800;
+  font-family:inherit;cursor:pointer;transition:.18s;letter-spacing:.4px;color:#04121c}
+body.pwa #kchartTradeBar .kt-long{background:linear-gradient(180deg,#00e676,#00b85f);box-shadow:0 6px 20px rgba(0,230,118,.24)}
+body.pwa #kchartTradeBar .kt-short{background:linear-gradient(180deg,#ff5252,#d32f2f);color:#fff;box-shadow:0 6px 20px rgba(255,82,82,.24)}
+body.pwa #kchartTradeBar .kt-btn:hover{filter:brightness(1.08);transform:translateY(-1px)}
+body.pwa #kchartTradeBar .kt-btn.armed{outline:2px solid var(--accent);filter:brightness(1.12)}
+body.pwa #kchartTradeBar .kt-orders{background:var(--card2);color:var(--text);border:1px solid var(--border);
+  font-size:11.5px;padding:9px;border-radius:9px}
+body.pwa #kchartTradeBar .kt-orders:hover{border-color:var(--accent);color:var(--accent)}
+/* 策略实盘块（自动交易 + 防爆 + 风控 + 优选） */
+body.pwa #kchartTradeBar .kt-auto,body.pwa #kchartTradeBar .kt-auto-cfg,
+body.pwa #kchartTradeBar .kt-auto-danger,body.pwa #kchartTradeBar .kt-auto-risk,
+body.pwa #kchartTradeBar .kt-auto-opt{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:9px 10px}
+body.pwa #kchartTradeBar .kt-auto::before{content:'策略实盘（SRSI 卫星）';flex-basis:100%;font-size:10px;
+  color:var(--text2);text-transform:uppercase;letter-spacing:.7px}
+body.pwa #kchartTradeBar .kt-auto-cfg,body.pwa #kchartTradeBar .kt-auto-danger,
+body.pwa #kchartTradeBar .kt-auto-risk,body.pwa #kchartTradeBar .kt-auto-opt{margin-top:-4px}
+body.pwa #kchartTradeBar .kt-mini{display:inline-flex;align-items:center;gap:4px;color:var(--text2);font-size:10.5px}
+body.pwa #kchartTradeBar .kt-strat{color:var(--text)}
+body.pwa #kchartTradeBar .kt-bt-section{border:1px solid var(--border);border-radius:10px;background:var(--card2);overflow:hidden}
+body.pwa #kchartTradeBar .kt-bt-head{display:flex;align-items:center;gap:8px;padding:8px 10px;font-size:11px;font-weight:700;
+  color:var(--text);border-bottom:1px solid var(--border)}
+body.pwa #kchartTradeBar .kt-bt-head span{flex:1}
+body.pwa #kchartTradeBar .kt-bt-body{padding:10px;display:flex;flex-direction:column;gap:9px}
+body.pwa #kchartTradeBar .kt-bt-body.closed,body.pwa #kchartTradeBar .kt-bt-body[style*="none"]{display:none}
+body.pwa #kchartTradeBar .kt-bt{background:var(--card);border:1px solid var(--border);color:var(--text2);border-radius:7px;
+  font-family:inherit;font-size:10.5px;padding:5px 11px;cursor:pointer}
+body.pwa #kchartTradeBar .kt-bt:hover{border-color:var(--accent);color:var(--accent)}
+body.pwa #kchartTradeBar .kt-auto-panel{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:9px 10px}
+body.pwa #kchartTradeBar .kt-off{color:var(--text2);font-size:11px;padding:10px}

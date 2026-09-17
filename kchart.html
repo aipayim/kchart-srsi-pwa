@@ -188,9 +188,26 @@
 
         <!-- ========== 交易 ========== -->
         <section class="pwa-tab" data-tab="trade">
-          <div class="kchart-discwrap" id="ktPanelWrap">
-            <div class="kchart-ovhead" onclick="window.kToggleTradePanel()">🧭 交易面板（手动下单 · 策略实盘 · 回测 · 点击展开/收起）<span id="ktPanelState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
-            <div class="kchart-tradebar" id="kchartTradeBar"></div>
+          <div class="pwa-trade-grid">
+            <div class="pwa-col">
+              <div class="kchart-discwrap" id="ktPanelWrap">
+                <div class="kchart-ovhead" onclick="window.kToggleTradePanel()">🧭 快捷合约 · 策略实盘 · 回测设置<span id="ktPanelState" style="margin-left:6px;font-size:10px"></span><span class="kchart-ovarrow">▾</span></div>
+                <div class="kchart-tradebar" id="kchartTradeBar"></div>
+              </div>
+            </div>
+            <div class="pwa-col">
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">账户</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill a" id="pwaAcctMode">纸面模拟</span></div>
+                <div class="pwa-card-b"><div class="pwa-metrics" id="pwaAcctMetrics"></div></div>
+              </div>
+              <div class="pwa-card">
+                <div class="pwa-card-h"><span class="ttl">持仓</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill" id="pwaPosCount">0 笔</span>
+                  <button class="pwa-mini" id="pwaPosManage" title="打开完整持仓管理（平50% / 反手 / 杠杆 / TP·SL）">管理</button></div>
+                <div class="pwa-card-b" id="pwaPosList"></div>
+              </div>
+            </div>
           </div>
         </section>
 

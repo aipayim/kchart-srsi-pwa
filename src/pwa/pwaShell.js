@@ -281,6 +281,84 @@ function computeCtx(sym) {
   return { horizon, macro, macroSpreadPct: macro ? macro.spreadPct : null };
 }
 
+// ---------- 交易页（账户 + 持仓，只读镜像引擎状态） ----------
+const fmtMoney = (v) => (v == null || !isFinite(v)) ? '--' : (v >= 0 ? '' : '-') + '$' + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+function renderTrade() {
+  const api = globalThis.kchartApi;
+  const engine = api && api.getTradeEngine ? api.getTradeEngine() : null;
+  const S = globalThis.S || {};
+  const pos = Array.isArray(S.pos) ? S.pos : [];
+  const spot = engine && engine.getSpotSub ? engine.getSpotSub() : null;
+  const perp = engine && engine.getPerpSub ? engine.getPerpSub() : null;
+  let pnl = 0;
+  pos.forEach(p => { pnl += (typeof p.pnl === 'number' && isFinite(p.pnl)) ? p.pnl : 0; });
+  const spotBal = spot ? (spot.bal || 0) : 0;
+  const perpBal = perp ? (perp.bal || 0) : 0;
+  const equity = spotBal + perpBal + pnl;
+
+  const mBox = $('pwaAcctMetrics');
+  if (mBox) {
+    const pnlCls = pnl >= 0 ? 'up' : 'down';
+    const html = [
+      { v: (pnl >= 0 ? '+' : '') + fmtMoney(pnl), k: '浮动盈亏', c: pnlCls },
+      { v: fmtMoney(equity), k: '权益', c: '' },
+      { v: fmtMoney(spotBal), k: '现货 USDT', c: '' },
+      { v: fmtMoney(perpBal), k: '永续 USDT', c: '' }
+    ].map(m => `<div class="pwa-metric"><div class="v mono ${m.c}">${m.v}</div><div class="k">${m.k}</div></div>`).join('');
+    if (mBox.__sig !== html) { mBox.__sig = html; mBox.innerHTML = html; }
+  }
+  const modeEl = $('pwaAcctMode');
+  if (modeEl) modeEl.textContent = engine ? (engine === globalThis.__isolatedPE ? '隔离模拟' : '纸面模拟') : '未连接';
+
+  const cnt = $('pwaPosCount');
+  if (cnt) cnt.textContent = pos.length + ' 笔';
+  const list = $('pwaPosList');
+  if (list) {
+    const html = pos.length ? pos.map((p, i) => {
+      const px = ((S.prices || {})[p.sym] || {}).last;
+      const pnlV = typeof p.pnl === 'number' ? p.pnl : 0;
+      const pctV = typeof p.pnlPct === 'number' ? p.pnlPct : 0;
+      const cls = pnlV >= 0 ? 'up' : 'down';
+      const dir = p.side === 'long' ? 'l' : 's';
+      const mode = p.marginMode === 'coin' ? '币本位' : 'U本位';
+      return `<div class="pwa-pos">
+        <div class="pwa-dirbadge ${dir}">${p.side === 'long' ? '多' : '空'}</div>
+        <div class="pwa-pos-mid">
+          <div class="pwa-pos-top"><b>${p.sym}</b><span class="pwa-pill">${mode}</span><span class="pwa-pill a">${p.lev || 1}x</span>${p.src === 'srsiAuto' ? '<span class="pwa-pill w">自动</span>' : ''}</div>
+          <div class="pwa-pos-meta">开 ${fmtPx(p.entry)}${px != null ? ' · 标 ' + fmtPx(px) : ''}${p.tp ? ' · TP ' + fmtPx(p.tp) : ''}${p.sl ? ' · SL ' + fmtPx(p.sl) : ''}</div>
+          <div class="pwa-pos-act"><button type="button" data-act="close" data-i="${i}">平仓</button><button type="button" data-act="mgr">管理</button></div>
+        </div>
+        <div class="pwa-pos-pnl"><div class="a mono ${cls}">${pnlV >= 0 ? '+' : ''}${fmtMoney(pnlV)}</div><div class="b mono ${cls}">${pctV >= 0 ? '+' : ''}${pctV.toFixed(2)}%</div></div>
+      </div>`;
+    }).join('') : '<div class="pwa-empty">暂无持仓 · 在左侧快捷合约开多/开空</div>';
+    if (list.__sig !== html) { list.__sig = html; list.innerHTML = html; }
+  }
+}
+
+function bindTrade() {
+  const list = $('pwaPosList');
+  if (list && !list.__bound) {
+    list.__bound = true;
+    list.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('button[data-act]') : null;
+      if (!b) return;
+      const api = globalThis.kchartApi;
+      const engine = api && api.getTradeEngine ? api.getTradeEngine() : null;
+      if (b.getAttribute('data-act') === 'mgr') { if (api && api.openOrderManager) api.openOrderManager(); return; }
+      const i = +b.getAttribute('data-i');
+      const p = (globalThis.S.pos || [])[i];
+      if (p && engine && engine.exitPosition) engine.exitPosition(p, { reason: '手动平仓(交易页)' });
+      renderTrade();
+    });
+  }
+  const mgr = $('pwaPosManage');
+  if (mgr && !mgr.__bound) {
+    mgr.__bound = true;
+    mgr.addEventListener('click', () => { const api = globalThis.kchartApi; if (api && api.openOrderManager) api.openOrderManager(); });
+  }
+}
+
 // ---------- 主刷新 ----------
 export function refreshShell() {
   if (typeof document === 'undefined') return;
@@ -290,6 +368,7 @@ export function refreshShell() {
   const sym = (cfg && cfg.symbol) || S.sel;
   if (!sym) return;
   renderPrice(sym);
+  if (_curTab === 'trade') { renderTrade(); return; }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
   const now = Date.now();
   const alphaSig = globalThis.__alphaSignals;
@@ -307,6 +386,7 @@ export function refreshShell() {
 export function initPwaShell() {
   if (typeof document === 'undefined') return;
   bindNav();
+  bindTrade();
   let saved = null;
   try { saved = localStorage.getItem(TAB_KEY); } catch (e) {}
   goTab(saved || 'kline', { keepScroll: true });

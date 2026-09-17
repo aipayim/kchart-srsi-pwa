@@ -139,7 +139,7 @@ globalThis.ruleMonitorClear = () => api.ruleMonitorClear();
 globalThis.ruleOptimizeRun = () => api.ruleOptimizeRun();
 globalThis.ruleOptimizeApply = () => api.ruleOptimizeApply();
 globalThis.ruleVersionSwitch = () => api.ruleVersionSwitch();
-globalThis.kToggleTradePanel = () => api.kToggleTradePanel();
+globalThis.kToggleTradePanel = () => { try { localStorage.setItem('pwa_trade_panel_touched', '1'); } catch (e) {} api.kToggleTradePanel(); };
 globalThis.setSigOverlay = (on) => api.setSigOverlay(on);
 globalThis.setDiscEvidence = (v) => api.setDiscEvidence(v);
 
@@ -474,9 +474,16 @@ function initPwaTrade() {
   localPE.seedSim(pwaSim);
   api.setTradeEngine(localPE);
   // GOAL18-C：PAD 横屏自动展开交易面板（触屏+横屏+宽屏一次性检测）
-  if (window.matchMedia && window.matchMedia('(pointer:coarse) and (orientation:landscape) and (min-width:900px)').matches) {
-    try { api.setTradePanelOpen(true); } catch (e) {}
-  }
+  // PWA 重构：交易页以交易面板为主内容——首次进入默认展开（用户手动收起过则尊重其选择）
+  try {
+    const touched = localStorage.getItem('pwa_trade_panel_touched') === '1';
+    const padLandscape = window.matchMedia && window.matchMedia('(pointer:coarse) and (orientation:landscape) and (min-width:900px)').matches;
+    if (!touched || padLandscape) {
+      const c = api.getConfig();
+      if (c) { c.tradePanelOpen = true; if (api.__persist) api.__persist(); }
+      if (api.renderControls) api.renderControls();
+    }
+  } catch (e) {}
   const onEl = document.getElementById('pwaTradeOn');
   // GOAL17：快捷交易开关持久化（刷新恢复用户选择）
   const savedOn = localStorage.getItem('pwa_trade_on');
