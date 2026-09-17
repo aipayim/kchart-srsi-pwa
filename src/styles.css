@@ -333,6 +333,8 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .chip:hover{border-color:#fff;color:#fff}
 .kchart-maintools{display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin:6px 0 4px 1px;padding:5px 7px;background:var(--card,#161b22);border:1px solid var(--border,#2a3140);border-radius:6px}
 .kchart-maintools .mt-label{font:10px monospace;color:var(--text2,#8b95a5);margin-right:4px;white-space:nowrap}
+.kchart-maintools .mt-legend{font:9px monospace;color:rgba(200,212,224,.85);margin-left:8px;white-space:nowrap;letter-spacing:1px;user-select:none;opacity:.9}
+.kchart-maintools .mt-legend i{font-style:normal}
 .kchart-ovwrap{margin-bottom:6px}
 .kchart-ovhead{font-size:9px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 4px;border-bottom:1px solid var(--border);display:inline-flex;align-items:center;gap:4px}
 .kchart-ovhead:hover{color:var(--accent)}

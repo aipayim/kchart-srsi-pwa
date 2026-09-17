@@ -343,7 +343,7 @@ async function loadSymbol(sym) {
   if (symInput) symInput.value = sym;
   api.setSymbol(sym);                 // 设置 cfg.symbol 并先渲染（显示"等待数据"）
   setFresh('加载中…');
-  try { await refreshKlines(sym); hideSrcErr(); }
+  try { await refreshKlines(sym, { onTfReady: () => api.render() }); hideSrcErr(); }
   catch (e) {
     setFresh('K线加载失败: ' + e.message);
     if (e && e.sourceUnreachable) showSrcErr(e.message);
@@ -364,7 +364,7 @@ async function tickPrice() {
 }
 
 async function tickKlines() {
-  try { await refreshKlines(curSym); hideSrcErr(); }
+  try { await refreshKlines(curSym, { onTfReady: () => api.render() }); hideSrcErr(); }
   catch (e) {
     setFresh('K线刷新失败: ' + e.message);
     if (e && e.sourceUnreachable) showSrcErr(e.message);

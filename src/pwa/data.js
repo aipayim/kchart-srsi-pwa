@@ -151,22 +151,17 @@ async function fetchApiData(path, group = 'api', timeout = 8000) {
 }
 
 // 拉取某币种全部 TF 的 klines，写回 globalThis.S.klines*（与 kchart.js 读取结构一致）
-export async function refreshKlines(sym) {
+// v1.5.57：渐进渲染——每个 TF 到齐即写入并回调 opts.onTfReady（不等全部 TF），
+// 修复「纪律面板能量场要等很久」：此前 await allSettled 全部 TF（含最慢的 1m/30d）+ 之后还串行拉 1w/1M，
+// 任一慢请求拖住整个首绘。现在短线 TF（5m/15m/1h/4h）先到先渲染能量球/纪律面板。
+export async function refreshKlines(sym, opts) {
   const S = globalThis.S;
   if (!S) throw new Error('globalThis.S 未初始化');
   if (!S.indicators) S.indicators = {};
   const tfs = KLINE_TF;
-  const results = await Promise.allSettled(tfs.map(tf => {
-    const interval = KLINE_INTERVAL[tf] || tf;
-    const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval + '&limit=' + (THRESH.KLINE_LIMIT || 150);
-    return fetchApiData(path).then(r => ({ tf, raw: r }));
-  }));
-  let ok = 0;
-  results.forEach(res => {
-    if (res.status !== 'fulfilled') return;
-    const { tf, raw } = res.value;
+  const applyTF = (tf, raw) => {
     const parsed = parseKlines(tf, raw);
-    if (!parsed) return;
+    if (!parsed) return false;
     if (!S.klines[sym]) S.klines[sym] = {};
     if (!S.klinesO[sym]) S.klinesO[sym] = {};
     if (!S.klinesH[sym]) S.klinesH[sym] = {};
@@ -181,8 +176,15 @@ export async function refreshKlines(sym) {
     S.klinesT[sym][tf] = parsed.times;
     if (!S.indicators[sym]) S.indicators[sym] = {};
     S.indicators[sym][tf] = computeSeries(parsed.closes); // RSI/MACD 子图所需，与主系统一致
-    ok++;
-  });
+    if (opts && typeof opts.onTfReady === 'function') { try { opts.onTfReady(tf); } catch (e) {} }
+    return true;
+  };
+  const results = await Promise.allSettled(tfs.map(tf => {
+    const interval = KLINE_INTERVAL[tf] || tf;
+    const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval + '&limit=' + (THRESH.KLINE_LIMIT || 150);
+    return fetchApiData(path).then(r => { applyTF(tf, r); return { tf }; });
+  }));
+  let ok = results.filter(r => r.status === 'fulfilled').length;
   // 主图原生周/月线（7d→1w, 30d→1M）：根数充足且对齐交易所；SRSI 速览仍用日线 klines['7d']/['30d']（各自 resample）。
   // nativeMain(kchart.js) 优先读 klinesWeek/klinesMonth，缺失时回退 aggTFData（日线聚合）。
   try {

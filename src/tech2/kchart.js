@@ -347,6 +347,13 @@ export let cfg = defaultKConfig();
 // ---- 内部状态 ----
 let _cv = null, _ctx = null;
 let _acMonitorRect = null; // v1.5.56：行动卡右上角「监测」热区（canvas 坐标，mousedown/touchstart 命中 → toggle 规则监测 HUD）
+let _acHitT = 0; // v1.5.57：热区命中时间锁（mousedown/touchstart/click 三路防双触发）
+// v1.5.57 纯函数：热区命中判定（命中区外扩 pad px，视觉 40x16 → 触达 ≈60x36，解决手机 tap 脱靶）
+export function hitMonitorRect(rect, mx, my, pad) {
+  if (!rect || ![mx, my].every(v => typeof v === 'number' && isFinite(v))) return false;
+  const p = (typeof pad === 'number' && isFinite(pad)) ? pad : 10;
+  return mx >= rect.x - p && mx <= rect.x + rect.w + p && my >= rect.y - p && my <= rect.y + rect.h + p;
+}
 let _hover = null;
 let _hoverLock = false;       // GOAL25：长按锁定十字线（再次点按解锁，不清除）
 let _resizeObs = null;
@@ -857,7 +864,7 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span>`;
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span class="mt-legend" title="主图信号标记说明：◆α多/◆α空=Alpha基石实盘调仓；◇=平仓；◆死钩/◆金钩=SRSI 钩信号（5.25）；▲/▼ SRSI=SRSI 自动开多/开空（v1.5.57 从主图右上角移来，不再遮挡K线）"><i style="color:#22d3ee">◆</i>α多 <i style="color:#f59e0b">◆</i>α空 <i style="color:#8899aa">◇</i>平仓 <i style="color:#FF5252">◆</i>死钩 <i style="color:#00E676">◆</i>金钩 <i style="color:#2ecc71">▲</i><i style="color:#ff6b6b">▼</i>SRSI</span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
@@ -3511,8 +3518,8 @@ function drawMain(ctx, sym, tf, H) {
     ctx.fillStyle = ac.stop != null ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
     ctx.fillText(entryTxt, PAD_L + 13, cy28 + 75);
     // v1.5.56：右上角「监测」开关热区（规则监测 HUD 入口；展开态显示「收起」）
-    const mgW = 36, mgH = 14;
-    const mgX = PAD_L + 6 + w28 - mgW - 5, mgY = cy28 + 4;
+    const mgW = 40, mgH = 16;
+    const mgX = PAD_L + 6 + w28 - mgW - 5, mgY = cy28 + 3;
     const mgOn = !!cfg.ruleMonitorOpen;
     ctx.fillStyle = mgOn ? 'rgba(88,166,255,.28)' : 'rgba(88,166,255,.14)';
     ctx.fillRect(mgX, mgY, mgW, mgH);
@@ -3525,7 +3532,7 @@ function drawMain(ctx, sym, tf, H) {
   } else {
     // 行动卡未绘制（sigOverlay 关/数据未就绪）→ 兜底「监测」小签（主图左侧中点），入口常驻
     _acMonitorRect = null;
-    const mgW = 36, mgH = 14, mgX = PAD_L + 6, mgY = Math.round((PAD_T + mainBottom) / 2) - 7;
+    const mgW = 40, mgH = 16, mgX = PAD_L + 6, mgY = Math.round((PAD_T + mainBottom) / 2) - 8;
     const mgOn = !!cfg.ruleMonitorOpen;
     ctx.fillStyle = mgOn ? 'rgba(88,166,255,.28)' : 'rgba(88,166,255,.14)';
     ctx.fillRect(mgX, mgY, mgW, mgH);
@@ -3680,46 +3687,8 @@ function drawMain(ctx, sym, tf, H) {
   // 标题
   ctx.fillStyle = '#8b95a5'; ctx.font = '9px monospace';
   ctx.fillText(sym + ' · ' + tf + '  最近 ' + n + ' 根', PAD_L + 4, PAD_T + 10);
-  // GOAL28：主图信号图例（右上角常驻，y=PAD_T+24：与左上标题同行错开、锁定徽章(PAD_T+4)下方、hover汇总栏(PAD_T+36)上方）
-  drawSigLegend(ctx);
+  // GOAL28 图例已移至「主图叠加 SRSI」工具栏最右（v1.5.57：不再遮挡 K 线/SRSI 线）
   return true;
-}
-
-// GOAL28：主图信号图例（右上角常驻小图例）——菱形/三角三来源分色说明，消除「分不清哪个菱形是什么」。
-// 色值与实际绘制点严格一致：α实盘菱形(GOAL13)/钩菱形(5.25 SRSI子图)/SRSI自动三角(GOAL13)。
-function drawSigLegend(ctx) {
-  ctx.save();
-  ctx.font = '9px monospace';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  const items = [
-    { icon: '◆', ic: '#22d3ee', txt: 'α多' },
-    { icon: '◆', ic: '#f59e0b', txt: 'α空' },
-    { icon: '◇', ic: '#8899aa', txt: '平仓' },
-    { icon: '◆', ic: '#FF5252', txt: '死钩' },
-    { icon: '◆', ic: '#00E676', txt: '金钩' },
-  ];
-  const GAP = 9;
-  let total = 0;
-  const segs = items.map(it => {
-    const iw = ctx.measureText(it.icon).width, tw = ctx.measureText(it.txt).width;
-    total += iw + 3 + tw + GAP;
-    return { ...it, iw, tw };
-  });
-  const iwUp = ctx.measureText('▲').width, iwDn = ctx.measureText('▼').width, twS = ctx.measureText('SRSI').width;
-  total += iwUp + iwDn + 2 + twS; // ▲▼SRSI 段（前段尾 GAP 已含在循环内）
-  const x0 = W - PAD_R - 4 - total;
-  const y = PAD_T + 24;
-  ctx.fillStyle = 'rgba(16,22,30,.55)';
-  ctx.fillRect(x0 - 5, y - 10, total + 10, 14);
-  let x = x0;
-  for (const s of segs) {
-    ctx.fillStyle = s.ic; ctx.fillText(s.icon, x, y); x += s.iw + 3;
-    ctx.fillStyle = 'rgba(200,212,224,.85)'; ctx.fillText(s.txt, x, y); x += s.tw + GAP;
-  }
-  ctx.fillStyle = '#2ecc71'; ctx.fillText('▲', x, y); x += iwUp;
-  ctx.fillStyle = '#ff6b6b'; ctx.fillText('▼', x, y); x += iwDn + 2;
-  ctx.fillStyle = 'rgba(200,212,224,.85)'; ctx.fillText('SRSI', x, y);
-  ctx.restore();
 }
 
 // ---- 子图（RSI / SRSI / MACD），SRSI 按勾选周期 ----
@@ -4199,9 +4168,10 @@ export function initKChart() {
         const _dpr = (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1;
         const mx = (p.x - _r.left) * (_cv.width / _r.width) / _dpr;
         const my = (p.y - _r.top) * (_cv.height / _r.height) / _dpr;
-        if (mx >= _acMonitorRect.x && mx <= _acMonitorRect.x + _acMonitorRect.w && my >= _acMonitorRect.y && my <= _acMonitorRect.y + _acMonitorRect.h) {
+        if (hitMonitorRect(_acMonitorRect, mx, my)) {
           if (_longT) { clearTimeout(_longT); _longT = null; }
           if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
+          _acHitT = Date.now();
           return;
         }
       }
@@ -4251,14 +4221,28 @@ export function initKChart() {
         const _dpr = (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1;
         const mx = (e.clientX - _r.left) * (_cv.width / _r.width) / _dpr;
         const my = (e.clientY - _r.top) * (_cv.height / _r.height) / _dpr;
-        if (mx >= _acMonitorRect.x && mx <= _acMonitorRect.x + _acMonitorRect.w && my >= _acMonitorRect.y && my <= _acMonitorRect.y + _acMonitorRect.h) {
+        if (hitMonitorRect(_acMonitorRect, mx, my)) {
           if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
+          _acHitT = Date.now();
           return;
         }
       }
       _press = p; _pressMoved = false;
       const reg = _subRegions.find(r => p.ly >= r.y0 && p.ly <= r.y0 + SUB_GAP && p.lx >= PAD_L && p.lx <= W - PAD_R);
       if (reg) _drag = { fromIdx: reg.idx, startX: p.lx, startY: p.ly, curY: p.ly, moved: false };
+    });
+    // v1.5.57：click 第三路命中（部分触屏环境 tap 可能不产生 mousedown；800ms 时间锁防与 mousedown/touchstart 双触发）
+    _cv.addEventListener('click', (e) => {
+      if (!_acMonitorRect) return;
+      if (Date.now() - _acHitT < 800) return; // mousedown/touchstart 已处理
+      const _r = _cv.getBoundingClientRect();
+      const _dpr = (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1;
+      const mx = (e.clientX - _r.left) * (_cv.width / _r.width) / _dpr;
+      const my = (e.clientY - _r.top) * (_cv.height / _r.height) / _dpr;
+      if (hitMonitorRect(_acMonitorRect, mx, my)) {
+        if (typeof window !== 'undefined' && window.kToggleRuleMonitor) window.kToggleRuleMonitor();
+        _acHitT = Date.now();
+      }
     });
     const endDrag = () => {
       if (_drag && _drag.moved) {
