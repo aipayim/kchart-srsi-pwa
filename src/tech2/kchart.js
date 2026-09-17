@@ -1687,6 +1687,9 @@ function initEnergyBall(box, shortFactors, multiTf, sym, size) {
   }
   _energyRafOwner = cv; // v1.5.52：记录当前拥有 RAF 循环的 canvas（renderDiscHud 用它判断 HUD 球是否被抢走）
   _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
+  // v1.5.62：同步首帧——RAF 首帧要等下一个 vsync，主线程被钱包插件注入/alphaLab 调仓计算占满时会被推迟
+  //（真机反馈：数据已到、EB-DIAG 已打，球仍几分钟白屏）。init 时立即同步画一帧，球即刻可见，RAF 只负责后续动画。
+  try { drawEnergyBall(ctx, model, { t: 0, price: getPrice(), W, H }); _lastFrameT = Date.now(); } catch (e) {}
   // v1.5.61：RAF 停摆兜底——iOS standalone PWA 在低电量/长时间无交互时 requestAnimationFrame 可能被长期节流
   //（真实用户反馈：手机上能量球一直不显示，桌面正常）。可见态且 >800ms 无帧推进时用 250ms 定时器补绘，幂等无副作用。
   _energyPulse = setInterval(() => {
