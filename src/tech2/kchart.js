@@ -1697,7 +1697,7 @@ function bindHudEvents(hud) {
   const clampNow = (x, y, w, h) => hudClampPos(x, y, w, h, kbox ? kbox.clientWidth : 0, kbox ? kbox.clientHeight : 0);
   let drag = null;
   bar.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.disc-hud-x')) return; // 点 ✕ 不拖
+    if (e.target.closest('.hud-min')) return; // v1.5.60：点 ✕ 不拖（原 class 名 .disc-hud-x 写错导致 ✕ 命中拖动分支，preventDefault 抑制真机 tap 的合成 click → ✕ 失效）
     drag = { dx: e.clientX - hud.offsetLeft, dy: e.clientY - hud.offsetTop, w: hud.offsetWidth, h: hud.offsetHeight };
     try { bar.setPointerCapture(e.pointerId); } catch (err) {}
     e.preventDefault();

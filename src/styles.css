@@ -785,6 +785,6 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .disc-hud.mini .disc-hud-body{display:none}
 .disc-hud.mini .disc-hud-bar{padding:4px 8px;border-bottom:none}
 .disc-hud.mini .hud-title{display:none}
-.hud-min{font-size:13px;font-weight:700;color:var(--text2,#8b95a5);cursor:pointer;padding:0 4px;line-height:1;user-select:none;opacity:.8}
+.hud-min{font-size:13px;font-weight:700;color:var(--text2,#8b95a5);cursor:pointer;padding:8px 10px;margin:-8px -6px;line-height:1;user-select:none;opacity:.8}
 .hud-min:hover{opacity:1;color:#FF5252}
 .hud-min:hover{opacity:1;text-shadow:0 0 8px rgba(88,166,255,.6)}

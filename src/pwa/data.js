@@ -179,12 +179,22 @@ export async function refreshKlines(sym, opts) {
     if (opts && typeof opts.onTfReady === 'function') { try { opts.onTfReady(tf); } catch (e) {} }
     return true;
   };
-  const results = await Promise.allSettled(tfs.map(tf => {
+  const okSet = new Set();
+  const loadTF = (tf) => {
     const interval = KLINE_INTERVAL[tf] || tf;
     const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval + '&limit=' + (THRESH.KLINE_LIMIT || 150);
-    return fetchApiData(path).then(r => { applyTF(tf, r); return { tf }; });
-  }));
-  let ok = results.filter(r => r.status === 'fulfilled').length;
+    return fetchApiData(path).then(r => { if (applyTF(tf, r)) okSet.add(tf); });
+  };
+  let results = await Promise.allSettled(tfs.map(loadTF));
+  // v1.5.60：失败 TF 立即补拉（最多 2 轮，间隔 400ms）——代理并发挤占下单 TF 8s 超时失败后，
+  // 原本要等 60s 的 tickKlines 周期才重试，用户观感「能量球 ~1 分钟才出现」。
+  let pending = tfs.filter(tf => !okSet.has(tf));
+  for (let round = 0; round < 2 && pending.length; round++) {
+    await new Promise(r => setTimeout(r, 400));
+    await Promise.allSettled(pending.map(loadTF));
+    pending = tfs.filter(tf => !okSet.has(tf));
+  }
+  let ok = okSet.size;
   // 主图原生周/月线（7d→1w, 30d→1M）：根数充足且对齐交易所；SRSI 速览仍用日线 klines['7d']/['30d']（各自 resample）。
   // nativeMain(kchart.js) 优先读 klinesWeek/klinesMonth，缺失时回退 aggTFData（日线聚合）。
   try {
