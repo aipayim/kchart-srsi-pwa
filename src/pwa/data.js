@@ -158,7 +158,10 @@ export async function refreshKlines(sym, opts) {
   const S = globalThis.S;
   if (!S) throw new Error('globalThis.S 未初始化');
   if (!S.indicators) S.indicators = {};
-  const tfs = KLINE_TF;
+  // v1.5.63：短线 TF 优先拉取——渐进渲染下能量球/纪律面板只依赖 ≤4h，
+  // 先拉 5m/15m/1h/4h 使球 2-4s 可见；长周期（8h/1d/7d/30d）后台继续补齐。
+  const _TF_PRIO = { '5m': 0, '15m': 0, '1h': 0, '4h': 0, '10m': 1, '30m': 1, '1m': 2, '8h': 3, '1d': 3, '7d': 4, '30d': 4 };
+  const tfs = KLINE_TF.slice().sort((a, b) => (_TF_PRIO[a] ?? 9) - (_TF_PRIO[b] ?? 9));
   const applyTF = (tf, raw) => {
     const parsed = parseKlines(tf, raw);
     if (!parsed) return false;

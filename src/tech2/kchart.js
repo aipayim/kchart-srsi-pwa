@@ -4087,7 +4087,8 @@ function drawLinkBar(ctx, subList, m, tf, frac, mainBottom) {
   }
 
   subList.forEach(sub => {
-    const dt = subHoverAt(frac, sym, sub.tf || tf, sub.key, cfg.bars);
+    // v1.5.63：读数按主图 hover K 线时刻跨周期对齐（m.time=null 时回退旧的垂直位置语义）
+    const dt = subHoverAt(frac, sym, sub.tf || tf, sub.key, cfg.bars, (m && m.time != null) ? { t: m.time } : null);
     const hl = hit && hit.kind === 'sub' && hit.key === sub.key && (hit.tf === sub.tf);
     if (sub.key === 'rsi') {
       drawSeg(`RSI ${dt.rsi != null ? dt.rsi.toFixed(1) : '--'}`, hl, '#ffd740');
@@ -4884,6 +4885,18 @@ function fmt(v) {
 // ---- hover / 联动读数 纯函数与工具 ----
 
 // 由横向比例 frac(0..1) → 可见窗内柱索引。与绘制一致: start = len - min(bars,len)。
+// v1.5.63：时间对齐索引——在 times（升序）中找「时间 <= t 的最后一根」（二分）；无则 -1。
+// 用于跨周期 hover 读数：主图某根 K 线时刻 t，在其它周期序列中定位同一时刻的K线。
+export function timeAlignIdx(times, t) {
+  if (!Array.isArray(times) || !times.length || t == null || !isFinite(t)) return -1;
+  let lo = 0, hi = times.length - 1, ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if ((times[mid] || 0) <= t) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  return ans;
+}
+
 export function idxFromFrac(frac, len, bars) {
   if (!(len > 0)) return -1;
   const n = Math.min(bars, len);
@@ -4944,9 +4957,27 @@ export function mainHoverAt(frac, sym, tf, bars) {
 }
 
 // 某个子图在 frac 处的读数 (纯数据)
-export function subHoverAt(frac, sym, tf, key, bars) {
+export function subHoverAt(frac, sym, tf, key, bars, opts) {
   const s = subTf(sym, tf);
   const series = s && s.series;
+  // v1.5.63：opts.t 存在时按「主图 hover K 线时刻」跨周期时间对齐取值（用户语义：鼠标所指那根 K 线
+  // 在各周期的参数值），而非垂直线在子图里的相对位置（不同周期第 p 根时间相差数倍）。
+  if (opts && opts.t != null) {
+    const base = (key === 'srsi') ? nativeMain(sym, tf) : getTFData(sym, tf);
+    const j = timeAlignIdx(base.t, opts.t);
+    const safe = (arr) => (j >= 0 && Array.isArray(arr) && j < arr.length) ? arr[j] : null;
+    if (key === 'rsi') return { i: j, rsi: safe(series && series.rsi) };
+    if (key === 'macd') return { i: j, macd: safe(series && series.macdLine), signal: safe(series && series.macdSignal), hist: safe(series && series.macdHist) };
+    if (key === 'srsi') {
+      const sl = srsiPanelSeries(base.c, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars) || { k: [], d: [], crossings: [], hooks: [] };
+      // sl 是最近 bars 根的局部数组（0..n-1），j 是全量索引 → 局部索引 = j - off
+      const off = Math.max(0, base.c.length - Math.min(bars, base.c.length));
+      const li = j - off;
+      const safeL = (arr) => (li >= 0 && Array.isArray(arr) && li < arr.length) ? arr[li] : null;
+      return { i: j, k: safeL(sl.k), d: safeL(sl.d), cross: safeL(sl.crossings) || null, hook: safeL(sl.hooks) || null };
+    }
+    return { i: j };
+  }
   // SRSI 子图已改用原生周/月线（与主图一致）；RSI/MACD 维持原 aggTFData 基准，故按 key 分别取 lenBase。
   const lenBase = (key === 'srsi')
     ? nativeMain(sym, tf).c.length
