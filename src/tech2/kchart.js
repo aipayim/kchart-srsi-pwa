@@ -1602,16 +1602,23 @@ export function drawEnergyBall(ctx, model, opts) {
 
 let _energyRaf = 0;
 let _energyRafOwner = null; // v1.5.52：当前持有能量球 RAF 的 canvas（HUD/纪律面板二选一）
+let _energyPulse = 0; // v1.5.61：RAF 停摆兜底定时器（iOS standalone PWA 低电量/无交互节流 → 球永久白屏）
 function initEnergyBall(box, shortFactors, multiTf, sym, size) {
   if (_energyRaf) { globalThis.cancelAnimationFrame && globalThis.cancelAnimationFrame(_energyRaf); _energyRaf = 0; }
+  if (_energyPulse) { clearInterval(_energyPulse); _energyPulse = 0; }
   const cv = box.querySelector('#discEnergyBall');
   if (!cv) return;
   if (!shortFactors || !shortFactors.length) { cv.style.display = 'none'; return; }
   cv.style.display = '';
   const W = size || 300, H = size || 300;
   const model = energyBallLayout(shortFactors, multiTf, W, H);
-  const dpr = Math.max(1, globalThis.devicePixelRatio || 1);
-  cv.width = W * dpr; cv.height = H * dpr; cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  // v1.5.61：iOS PWA 大画布内存压力防御——dpr3 时 900×900 画布分配可能静默失败（iOS Safari 已知坑，失败=球永久白屏）。
+  // dpr 封顶 2 省内存；赋值后校验实际分配结果，失败降级 dpr=1 重试，仍失败跳过（保留 verdict 文字兜底）。
+  let dpr = Math.min(2, Math.max(1, globalThis.devicePixelRatio || 1));
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  if (cv.width !== Math.round(W * dpr)) { dpr = 1; cv.width = W; cv.height = H; }
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  try { console.log('[EB-DIAG] init W=' + W + ' dpr=' + dpr + ' canvas=' + cv.width + 'x' + cv.height + ' nodes=' + (model.nodes ? model.nodes.length : '?')); } catch (e) {}
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -1671,13 +1678,24 @@ function initEnergyBall(box, shortFactors, multiTf, sym, size) {
     try { const S = globalThis.window && globalThis.window.S; const p = S && S.prices && S.prices[sym]; return p ? p.last : null; } catch (e) { return null; }
   };
   const start = (globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now();
+  let _lastFrameT = 0;
   function frame(now) {
+    _lastFrameT = Date.now();
     const tt = ((globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now() - start) / 1000;
     drawEnergyBall(ctx, model, { t: tt, price: getPrice(), W, H });
     _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
   }
   _energyRafOwner = cv; // v1.5.52：记录当前拥有 RAF 循环的 canvas（renderDiscHud 用它判断 HUD 球是否被抢走）
   _energyRaf = globalThis.requestAnimationFrame ? globalThis.requestAnimationFrame(frame) : 0;
+  // v1.5.61：RAF 停摆兜底——iOS standalone PWA 在低电量/长时间无交互时 requestAnimationFrame 可能被长期节流
+  //（真实用户反馈：手机上能量球一直不显示，桌面正常）。可见态且 >800ms 无帧推进时用 250ms 定时器补绘，幂等无副作用。
+  _energyPulse = setInterval(() => {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    if (!_energyRaf || Date.now() - _lastFrameT > 800) {
+      try { const tt = ((globalThis.performance && globalThis.performance.now) ? globalThis.performance.now() : Date.now() - start) / 1000;
+        drawEnergyBall(ctx, model, { t: tt, price: getPrice(), W, H }); } catch (e) {}
+    }
+  }, 250);
 }
 
 // HUD 事件绑定（幂等）：✕ 关闭 + 标题栏拖动（位置 clamp + cfg.ruleHudPos 持久化）
