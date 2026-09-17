@@ -21,7 +21,7 @@ import { atrClose, ema, ais } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
 import {
   renderCockpitSkeleton, updatePillar, updateReadoutDom, updateEventsDom,
-  ensureCockpitAnim, stopCockpitAnim, bindCockpit, applyCockpitOpen, cockpitEvents, confidenceBadge
+  ensureCockpitAnim, stopCockpitAnim, bindCockpit, applyCockpitOpen, cockpitEvents
 } from './signalCockpit.js';
 
 // ---------------- 帮手 ----------------
