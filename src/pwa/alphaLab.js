@@ -2,7 +2,7 @@
 // 策略核心 = ./alphaCore.js（与 Node 权威框架 goal2-bt.mjs 逐位对齐，见 scripts/goal4-run-align.mjs）
 // 诚实约束：信号在已收盘 bar 收盘评估 → 下一根开盘价成交（lag=1）；taker 0.045%+滑 0.02%；
 //           现货模式 longOnly + 无资金费现金流（funding 仅作信号输入）；vol-target 需 720 根 1h 预热。
-import { runBacktest, annualized, maxDD, sharpeDaily, combineDaily } from './alphaCore.js';
+import { runBacktest, annualized, maxDD, sharpeDaily, combineDaily, carryZSeries, alignClosed, comboFactors } from './alphaCore.js';
 import { fetchKlinesRange, fetchFundingRate } from './data.js';
 import { APP_VERSION } from '../version.generated.js';
 
@@ -338,16 +338,27 @@ export async function updateAlphaSignal(sym, tf, force = false) {
     });
     if (!r || r.error || !r.ws || r.ws.length !== t.length) return null;
     const flips = [];
-    let posW = 0;
+    let posW = 0, lastFlipIdx = -1;
     for (let i = 0; i < r.ws.length - 1; i++) { // 末根为 in-flight：不在未收盘 bar 上决策（无前视）
       const w = r.ws[i];
       if (!Number.isFinite(w)) continue;
       if (Math.abs(w - posW) > 0.05) {
         flips.push({ i: Math.min(i + 1, r.ws.length - 1), dir: w > posW ? 1 : -1, w });
-        posW = w;
+        posW = w; lastFlipIdx = i;
       }
     }
-    globalThis.__alphaSignals = { sym, tf, ts: t, flips, lastW: posW, updatedT: Date.now() };
+    // P0 信号驾驶舱：当前持仓目标的三因子分解（carry/momo/brk 加权贡献，缩放到与 lastW 同尺度）
+    let factors = null;
+    if (lastFlipIdx >= 0) {
+      try {
+        const fz = carryZSeries(t, funding);
+        const ad = alignClosed(d1.t, 86400e3, t);
+        const f = comboFactors(fz[lastFlipIdx], d1.c, ad[lastFlipIdx]);
+        const scale = (f.w !== 0 && Number.isFinite(f.w)) ? posW / f.w : 1;
+        factors = { carry: f.carryW * scale, momo: f.momoW * scale, brk: f.brkW * scale, sum: f.sum, wRaw: f.w, scale, barT: t[lastFlipIdx], barIdx: lastFlipIdx };
+      } catch (e) { factors = null; }
+    }
+    globalThis.__alphaSignals = { sym, tf, ts: t, ws: r.ws, flips, lastW: posW, factors, updatedT: Date.now() };
     return globalThis.__alphaSignals;
   } catch (e) { return null; }
 }

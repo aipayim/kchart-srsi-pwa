@@ -15,10 +15,14 @@
 import {
   bandEdge, resolveEntryBands, srsiAutoRegime, predictDanger, emaOpp2,
   computeSizeScale, smartDanger, klineDirFromCloses,
-  buildSrsiOverview, auxGateDir, _safeSetItem
+  buildSrsiOverview, auxGateDir, _safeSetItem, horizonTrend, macroTrend
 } from './kchart.js';
 import { atrClose, ema, ais } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
+import {
+  renderCockpitSkeleton, updatePillar, updateReadoutDom, updateEventsDom,
+  ensureCockpitAnim, stopCockpitAnim, bindCockpit, applyCockpitOpen, cockpitEvents, confidenceBadge
+} from './signalCockpit.js';
 
 // ---------------- 帮手 ----------------
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -41,6 +45,16 @@ function tfData(sym, tf) {
     c: (S.klines && S.klines[sym] && S.klines[sym][tf]) || [],
     t: (S.klinesT && S.klinesT[sym] && S.klinesT[sym][tf]) || []
   };
+}
+// 信号驾驶舱上下文（只读）：中期趋势（≤4h，方向基准）+ 宏观带（7d/30d，仅冲突扣分）
+function cockpitCtx(snap) {
+  const sym = (snap && snap.sym) || (cfgNow && cfgNow.symbol);
+  const priceMap = {};
+  for (const tf of ['10m', '15m', '30m', '1h', '4h', '7d', '30d']) { const c = tfData(sym, tf).c; if (c && c.length) priceMap[tf] = c; }
+  let horizon = null, macro = null;
+  try { horizon = horizonTrend(priceMap); } catch (e) { horizon = null; }
+  try { macro = macroTrend(priceMap); } catch (e) { macro = null; }
+  return { horizon, macro, macroSpreadPct: macro ? macro.spreadPct : null };
 }
 
 // ============================================================
@@ -550,6 +564,8 @@ export function updateRuleMonitorTick() {
   let snap = null;
   try { snap = buildRuleSnapshot(sym, st); } catch (e) { snap = null; }
   _rm.lastSnapshot = snap;
+  // 信号驾驶舱：事件流（变更驱动，HUD 关着也记录）
+  try { _rm.cockpitCtx = cockpitCtx(snap); cockpitEvents(snap, globalThis.__alphaSignals, _rm.cockpitCtx.macroSpreadPct, now); } catch (e) { /* ignore */ }
   // B 区：自动交易开 且 检测到带转移 → 记录信号（边沿检测基于实盘状态机的 band 值变化）
   // 首次观察（prevBand===undefined）只建立基线，不触发信号
   if (c.srsiAutoOn && st && prevBand !== undefined && detectBandTransition(prevBand, curBand)) {
@@ -644,7 +660,7 @@ export function renderRuleMonitor() {
   const open = !!cfg.ruleMonitorOpen;
   // HUD 模式：RM 内容在悬浮卡内以仪表盘形态展开，流内面板永久收起（避免陈旧内容露出；kToggleRuleMonitor 变为 HUD 总开关）
   if (wrap) wrap.classList.toggle('closed', !open || !!_hudBody);
-  if (!open) { stopRmGauge(); return; } // v1.5.55 mini 态：body/签名均保留 → 展开首帧直接复用 canvas（sameNode），数据 2s 内自动刷新
+  if (!open) { stopRmGauge(); stopCockpitAnim(); return; } // v1.5.55 mini 态：body/签名均保留 → 展开首帧直接复用 canvas（sameNode），数据 2s 内自动刷新
   const snap = _rm.lastSnapshot;
   if (!snap || !snap.ok) {
     if (_hudBody) { updateHudBarTitle(null); stopRmGauge(); }
@@ -677,17 +693,33 @@ export function renderRuleMonitor() {
     // ---- v1.5.54 HUD 仪表盘形态：每 tick 更新标题/目标读数/画布（签名未变也持续），签名变化才重建 ----
     updateHudBarTitle(snap);
     updateGaugeTarget(snap);
-    if (sig === _rm.lastRenderSig) { setupGaugeCanvas(box); ensureRmGauge(); return; }
-    _rm.lastRenderSig = sig;
+    // P0 基石区 + P1 解读卡 + P2 事件流（信号驾驶舱）：稳定骨架只建一次，内容原地更新（canvas 不随 tick 重建）
+    if (!box.querySelector('#scPillar')) {
+      box.innerHTML = renderCockpitSkeleton() + '<div id="scGaugeWrap"></div>';
+      _rm.lastRenderSig = '';
+      bindCockpit(box);
+      applyCockpitOpen();
+      const hudRoot0 = box.closest('#discHud');
+      if (hudRoot0) { ensureDrawer(hudRoot0); bindDrawerEvents(hudRoot0); }
+    }
+    const nowSc = nowMs();
+    updatePillar(globalThis.__alphaSignals, nowSc, globalThis.__alphaLiveW);
+    const ctxSc = _rm.cockpitCtx || cockpitCtx(snap);
+    updateReadoutDom(snap, globalThis.__alphaSignals, ctxSc, nowSc);
+    updateEventsDom(nowSc);
+    ensureCockpitAnim();
+    const gw = box.querySelector('#scGaugeWrap') || box;
     const gCls = (k) => 'rm-gbtn' + (_rmGauge.tab === k ? ' on' : '');
-    box.innerHTML = '<canvas id="rmGaugeCv"></canvas>' +
+    if (sig === _rm.lastRenderSig) { setupGaugeCanvas(gw); ensureRmGauge(); return; }
+    _rm.lastRenderSig = sig;
+    gw.innerHTML = '<canvas id="rmGaugeCv"></canvas>' +
       '<div class="rm-gbtns">' +
       '<div class="' + gCls('rules') + '" data-dr="rules">规则全表</div>' +
       '<div class="' + gCls('stats') + '" data-dr="stats">统计</div>' +
       '<div class="' + gCls('opt') + '" data-dr="opt">🧪 优选</div></div>';
     const hudRoot = box.closest('#discHud');
     if (hudRoot) { ensureDrawer(hudRoot); bindDrawerEvents(hudRoot); }
-    setupGaugeCanvas(box);
+    setupGaugeCanvas(gw);
     ensureRmGauge();
     if (_rmGauge.tab) refreshDrawer(); // 签名变化 → 刷新开着抽屉的内容
     return;

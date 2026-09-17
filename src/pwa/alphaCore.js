@@ -37,15 +37,22 @@ export function carryZSeries(t, fundingArr) {
   return out;
 }
 // GOAL2 combo 信号（权重 0.5 carry + 0.3 breakout + 0.2 momo；carry z 饱和 ±4.5）
-export function comboWeight(z, c1d, j) {
+// 组合信号因子分解（P0 信号驾驶舱）：返回三因子的加权贡献（carry×0.5 / momo×0.2 / brk×0.3）
+// 与 comboWeight 同源同算法（comboWeight 现直接委托本函数），仅额外暴露中间量，不改任何计算结果。
+// carryW/momoW/brkW 之和 = 组合原始权重分子；w = clamp(sum/4.5, ±1)（vol-target 缩放在 runBacktest 内另做）。
+// ⚠ 红线：本函数与 scripts/goal3-pwa-core.mjs 逐字一致（修改须先改 goal3 并跑对齐）。
+export function comboFactors(z, c1d, j) {
   const momo = j >= 10 ? c1d[j] / c1d[j - 10] - 1 : 0;
   let brk = 0;
   if (j >= 20) { let hi = -Infinity, lo = Infinity; for (let q = j - 20; q < j; q++) { if (c1d[q] > hi) hi = c1d[q]; if (c1d[q] < lo) lo = c1d[q]; } if (hi !== lo) brk = ((c1d[j] - lo) / (hi - lo)) * 2 - 1; }
   const cW = z == null ? 0 : Math.max(-4.5, Math.min(4.5, -z));
   const mW = Math.max(-4.5, Math.min(4.5, momo * 50));
   const bW = brk / 2 * 4.5;
-  return Math.max(-1, Math.min(1, (0.5 * cW + 0.2 * mW + 0.3 * bW) / 4.5));
+  const carryW = 0.5 * cW, momoW = 0.2 * mW, brkW = 0.3 * bW;
+  const sum = carryW + momoW + brkW;
+  return { w: Math.max(-1, Math.min(1, sum / 4.5)), carryW, momoW, brkW, sum, cW, mW, bW };
 }
+export function comboWeight(z, c1d, j) { return comboFactors(z, c1d, j).w; }
 // —— 现货/永续通用回测循环（与 goal2-bt.runStrategy 语义一致）——
 // bars: {t,o,c}（1h）；bars1d: {t,c}（1d）；funding: [[t,rate],...]（现货传 []，信号层用 fundingZ 单独注入）
 export function runBacktest(bars, bars1d, cfg = {}) {
