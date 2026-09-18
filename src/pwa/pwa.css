@@ -511,3 +511,15 @@ body.pwa .pwa-install{padding-bottom:10px;border-radius:0}
   .pwa-tfbar .kchart-tfsq{top:3px;right:3px;width:15px;height:15px;border-radius:5px}
   .pwa-card-h .ttl{font-size:13px}
 }
+
+/* ============================================================================
+   盯盘优化（续）：能量球/路径图尺寸 + 工具栏再收
+   ============================================================================ */
+/* 主图叠加条内嵌图例与卡片头图例重复 → PWA 下隐藏，工具栏少一行 */
+body.pwa .kchart-maintools .mt-legend{display:none}
+/* 手机：纪律面板的能量球/路径图缩小（canvas 逻辑分辨率不变，CSS 缩放；命中测试按 rect 换算，仍准确） */
+@media (max-width:640px){
+  body.pwa #discEnergyBall{width:200px!important;height:200px!important}
+  body.pwa #discPricePath{width:264px!important;height:165px!important}
+  body.pwa .disc-energy-legend,body.pwa .disc-path-basis{font-size:9px}
+}
