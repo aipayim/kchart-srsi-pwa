@@ -549,3 +549,44 @@ body.pwa .kchart-maintools .mt-legend{display:none}
   body.pwa .kchart-ov-head-row>span:nth-child(9),body.pwa .kchart-ov-row>span:nth-child(9){display:none}
   body.pwa .pwa-tfcycle button{padding:5px 12px}
 }
+
+/* ===== 信号引擎状态 / 一键启动 / 实时提醒（v1.6.13，2026-09-18 审计修复） ===== */
+.pwa-eng-pill.on{border-color:rgba(46,204,113,.55);color:#2ecc71;background:rgba(46,204,113,.12)}
+.pwa-eng-pill.off{border-color:rgba(255,179,0,.45);color:#FFB300;background:rgba(255,179,0,.08)}
+.pwa-engine{margin-bottom:8px;padding:7px 9px;border-radius:8px;border:1px solid var(--border);background:var(--card2);font-size:10.5px}
+.pwa-engine.off{border-color:rgba(255,179,0,.5);background:rgba(255,179,0,.07)}
+.pwa-engine.on{border-color:rgba(46,204,113,.4);background:rgba(46,204,113,.07)}
+.pwa-engine.busy{border-color:rgba(34,211,238,.5);background:rgba(34,211,238,.07)}
+.pwa-engine .pe-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pwa-engine .pe-state{font-weight:700;color:#FFB300}
+.pwa-engine .pe-state.on{color:#2ecc71}
+.pwa-engine .pe-parts{color:var(--text2);flex:1 1 auto;min-width:0}
+.pwa-engine .pe-btn{margin-left:auto;flex:none;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid #22d3ee;background:rgba(34,211,238,.15);color:#22d3ee;cursor:pointer;font-family:inherit}
+.pwa-engine .pe-btn:hover{background:rgba(34,211,238,.28)}
+.pwa-engine .pe-btn.ghost{border-color:var(--border);background:transparent;color:var(--text2);font-weight:400}
+.pwa-engine .pe-btn.ghost:hover{border-color:var(--red);color:var(--red)}
+.pwa-engine .pe-why{margin-top:5px;color:var(--text2);font-size:9.5px;line-height:1.6}
+.sig-alerts{max-height:230px;overflow:auto}
+.sig-alert-empty{color:var(--text2);font-size:10px;padding:6px 2px;line-height:1.6}
+.sig-ev{display:flex;gap:6px;align-items:baseline;padding:4px 2px;border-bottom:1px dashed rgba(255,255,255,.06);font-size:10px;line-height:1.5}
+.sig-ev:last-child{border-bottom:none}
+.sig-ev-t{flex:none;color:var(--text2);font-family:var(--mono);font-size:9.5px}
+.sig-ev-k{flex:none;font-weight:700}
+.sig-ev-d{color:var(--text2);min-width:0}
+.sig-ev-preview .sig-ev-d{color:#FFB300}
+.sig-ev-trade{background:rgba(34,211,238,.05)}
+/* 顶部提示条（toast） */
+.pwa-toast-host{position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:120;display:flex;flex-direction:column;gap:6px;pointer-events:none;max-width:min(92vw,520px)}
+.pwa-toast{display:flex;align-items:center;gap:8px;padding:7px 12px;border-radius:8px;border:1px solid var(--border);border-left:3px solid #22d3ee;
+  background:rgba(12,18,28,.96);backdrop-filter:blur(8px);color:var(--text);font-size:11.5px;box-shadow:0 6px 22px rgba(0,0,0,.45);
+  animation:pwaToastIn .18s ease-out}
+.pwa-toast.out{opacity:0;transform:translateY(-6px);transition:opacity .5s,transform .5s}
+.pwa-toast b{font-weight:800}
+.pwa-toast .pwa-toast-t{margin-left:auto;color:var(--text2);font-family:var(--mono);font-size:9.5px}
+.pwa-toast.trade{background:rgba(10,26,30,.97)}
+.pwa-toast.preview{border-left-color:#FFB300}
+@keyframes pwaToastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+@media (max-width:640px){
+  .pwa-toast-host{max-width:94vw}
+  .pwa-toast{font-size:11px;padding:6px 10px}
+}

@@ -10,6 +10,7 @@ import { runBacktest as alphaRunBacktest } from '../pwa/alphaCore.js';
 export { fetchKlinesRange, fetchFundingRate };
 import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
+import { pushSignalEvent } from './signalAlerts.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
@@ -163,6 +164,69 @@ function isDefaultSrsi(x) {
   return !!x && x.rsiPeriod === DEFAULT_SRSI.rsiPeriod && x.stochPeriod === DEFAULT_SRSI.stochPeriod &&
     x.smoothK === DEFAULT_SRSI.smoothK && x.smoothD === DEFAULT_SRSI.smoothD &&
     x.overbought === DEFAULT_SRSI.overbought && x.oversold === DEFAULT_SRSI.oversold;
+}
+
+// ===================== 信号守望 + 引擎状态（2026-09-18 审计修复）=====================
+// 审计结论：用户「一整天看不到任何交易信号」的真因是 4 个开关分散在 3 个 tab 且默认全关，
+// 而驾驶舱用装饰性徽章假装在跑。本段提供：①与自动交易开关**无关**的带边沿守望（影子状态，
+// 不推进实盘状态机）→ 信号一出现就进提醒总线；②引擎真实状态 + 阻塞原因（供 UI 如实展示/一键启动）。
+const _sigWatch = {};   // sym → { band, armed, barT }（影子状态，绝不与 srsiAutoBandState 共用）
+
+// 始终开启的信号守望：用纯函数 bandEdge 跑 15m 带态影子机，检测「带边沿」与「预演将破带」并推入提醒总线。
+// 注意：只读 getTFData + buildSrsiOverview，不调 srsiAutoBandState（后者会推进实盘状态机）。
+export function updateSignalWatch(sym) {
+  sym = sym || cfg.symbol;
+  const d15 = getTFData(sym, '15m');
+  const c = d15.c || [], t = d15.t || [];
+  if (c.length < 60) return null;
+  const cfg15 = perTfSrsi('15m', cfg.srsiByTf, cfg.srsi);
+  let r = null;
+  try { r = (buildSrsiOverview(['15m'], () => cfg15, { '15m': c }).rows || [])[0]; } catch (e) { r = null; }
+  if (!r || r.k == null || r.d == null) return null;
+  const S = typeof window !== 'undefined' ? window.S : null;
+  const price = (S && S.prices && S.prices[sym] && isFinite(S.prices[sym].last)) ? S.prices[sym].last : null;
+  const barT = t.length ? t[t.length - 1] : null;
+  const _eb = resolveEntryBands(cfg);
+  const first = !_sigWatch[sym];
+  const prev = _sigWatch[sym] || { band: null, armed: false };
+  const be = bandEdge(prev.band, r.k, r.d, { upper: _eb.upper, lower: _eb.lower }, prev.armed);
+  _sigWatch[sym] = { band: be.band, armed: be.armed, barT, k: r.k, d: r.d };
+  // 首次观测只建基线（避免把页面打开前的历史边沿当新信号）
+  if (!first && be.edge) {
+    pushSignalEvent({
+      sym, kind: be.edge === 'enterUpper' ? 'srsi-edge-upper' : 'srsi-edge-lower',
+      side: be.edge === 'enterUpper' ? 'short' : 'long', price, barT, src: 'watch',
+      text: 'K=' + r.k.toFixed(1) + ' D=' + r.d.toFixed(1) + ' · 15m ' + (be.band === 'upper' ? '上带' : '下带')
+    });
+  }
+  // 预演：进行中 bar 若此刻收盘会进带（尚未确认）——把「破带」提前最多 15 分钟告知（每根 bar 去重）
+  try {
+    const proj = srsiProjectLive(c, cfg15, price);
+    if (proj && proj.k != null && (proj.willCrossUp || proj.willCrossDown)) {
+      pushSignalEvent({
+        sym, kind: 'srsi-preview', side: proj.willCrossUp ? 'short' : 'long', price, barT, src: 'watch',
+        text: (proj.willCrossUp ? '若此刻收盘进超买带' : '若此刻收盘进超卖带') + ' K=' + proj.k.toFixed(1)
+      });
+    }
+  } catch (e) { /* 预演非致命 */ }
+  return { band: be.band, edge: be.edge, k: r.k, d: r.d, barT };
+}
+
+// 引擎真实状态（供驾驶舱/主图状态带如实展示；blockers 为「为什么不会有信号」）
+export function signalEngineStatus() {
+  const optReady15m = !!(cfg.srsiOptSource && cfg.srsiOptSource['15m'] === 'optimized');
+  const srsiAutoOn = !!cfg.srsiAutoOn;
+  const alphaSignalOn = !!cfg.alphaSignalOn;
+  const alphaData = !!(typeof window !== 'undefined' && window.__alphaSignals && window.__alphaSignals.sym);
+  const alphaLive = !!(typeof window !== 'undefined' && window.__alphaLab && typeof window.__alphaLab.isLive === 'function' && window.__alphaLab.isLive());
+  const blockers = [];
+  if (!srsiAutoOn) blockers.push('SRSI 卫星自动交易未开启');
+  else if (!optReady15m) blockers.push('15m 未优选 → 卫星被硬约束禁止开仓（可一键自动优选）');
+  if (!alphaSignalOn) blockers.push('Alpha 信号未计算（基石区/解读卡无数据）');
+  else if (!alphaData) blockers.push('Alpha 信号计算中…');
+  if (!alphaLive) blockers.push('Alpha 基石实盘(paper) 未启动');
+  const srsiRunning = srsiAutoOn && optReady15m;
+  return { srsiAutoOn, optReady15m, alphaSignalOn, alphaData, alphaLive, srsiRunning, alphaRunning: alphaLive, running: srsiRunning || alphaLive, blockers };
 }
 
 // ===================== SRSI 响应速度 / 领先模式（2026-09-18 诊断落地）=====================
@@ -395,10 +459,12 @@ let _ovLeadSig = '', _ovProjSig = '';
 // 由 renderKChart 每帧（PWA 5s / 主系统 1s 循环）调用；签名未变则不重建 DOM。
 let _projSig = '';
 function updateSrsiProjLive() {
-  const el = typeof document !== 'undefined' ? document.getElementById('kchartSrsiProj') : null;
-  if (!el) return;
   const S = typeof window !== 'undefined' ? window.S : null;
   const sym = cfg.symbol, tf = cfg.srsiEditTf;
+  // 信号守望（始终开启，与自动交易开关无关）：带边沿/预演 → 提醒总线
+  try { updateSignalWatch(sym); } catch (e) {}
+  const el = typeof document !== 'undefined' ? document.getElementById('kchartSrsiProj') : null;
+  if (!el) return;
   try { updateSrsiSpeedRow(); } catch (e) {}
   try { updateOvLeadLive(); } catch (e) {}
   const c = (getTFData(sym, tf).c || []);
@@ -3804,7 +3870,10 @@ function drawMain(ctx, sym, tf, H) {
     ctx.fillText(entryTxt, PAD_L + 13, cy28 + 75);
     ctx.restore();
   }
-  if ((_showSrsi || _showAlpha || (cfg.sigOverlay && cfg.srsiAutoApplyBt)) && typeof window !== 'undefined') {
+  // 2026-09-18 审计修复：本块原为「有信号/Alpha live 时才进入」——导致引擎未启动时主图状态带**完全空白**，
+  // 被用户误读为「引擎在跑只是没信号」。现改为恒进入（window 可用时）；信号标记仍受各自开关约束，
+  // 但「引擎状态角标」恒绘制（未启动→黄色⛔提示）。
+  if (typeof window !== 'undefined') {
     ctx.save();
     const LT = (_showSrsi || cfg.srsiAutoApplyBt) ? (window.__srsiLiveTrades || []) : [];
     let lp = 0;
@@ -3848,17 +3917,31 @@ function drawMain(ctx, sym, tf, H) {
       }
       ap++;
     }
-    if (lp || ap || _alphaLiveOn) {
+    // 2026-09-18 审计修复：状态带左角标**总是**绘制「引擎真实状态」——未启动时必须显式告知
+    // （原实现只在有信号/Alpha live 时才画，导致「什么都没显示」被误读为「引擎在跑但没信号」）
+    {
       ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; // GOAL22：状态带左角标必须左对齐（残留 right 导致文字向左延伸一半出画布）
       const aw = Number.isFinite(window.__alphaLiveW) ? window.__alphaLiveW : 0;
-      const label = '组合实盘 ON · α' + (_alphaLiveOn ? (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '关') + ' · SRSI信号' + lp;
+      let label, col, bg, bd;
+      let st = null;
+      try { st = signalEngineStatus(); } catch (e) { st = null; }
+      if (st && !st.running) {
+        label = '⛔ 信号引擎未启动 · 无信号可看（右侧驾驶舱 → ⚡ 启动信号引擎）';
+        col = '#FFB300'; bg = 'rgba(255,179,0,.12)'; bd = 'rgba(255,179,0,.5)';
+      } else {
+        const w = _sigWatch[sym] || null;
+        const bandTxt = w ? ('卫星 15m ' + (w.band === 'upper' ? '上带' : w.band === 'lower' ? '下带' : '中性') + ' K' + (w.k != null ? w.k.toFixed(0) : '--') + '/' + (w.d != null ? w.d.toFixed(0) : '--')) : '';
+        label = '● 信号引擎 ON' + (bandTxt ? ' · ' + bandTxt : '') +
+          (st && st.srsiRunning ? ' · 卫星自动' : '') + (st && st.alphaRunning ? ' · 基石 α' + (aw > 0.02 ? '多' : aw < -0.02 ? '空' : '平') + Math.abs(aw * 100).toFixed(0) + '%' : '') +
+          (lp ? ' · SRSI信号' + lp : '') + (ap ? ' · α信号' + ap : '');
+        col = '#2ecc71'; bg = 'rgba(16,22,30,.72)'; bd = 'rgba(46,204,113,.35)';
+      }
       const tw = ctx.measureText(label).width;
-      // GOAL14：右下角 + 半透明背景条（GOAL20 修复：原 H-PAD_B-26 是整画布底=落到 MACD 子图区；正确=主图区内右下角，与左居中信号卡对角呼应）
       const bx = PAD_L + 6, by = PAD_T + MAIN_H + 4; // GOAL21：移主图底部状态带左（原主图右下压 SRSI 下限带）
-      ctx.fillStyle = 'rgba(16,22,30,.72)';
+      ctx.fillStyle = bg;
       ctx.fillRect(bx, by, tw + 12, 18);
-      ctx.strokeStyle = 'rgba(46,204,113,.35)'; ctx.strokeRect(bx, by, tw + 12, 18);
-      ctx.fillStyle = '#2ecc71';
+      ctx.strokeStyle = bd; ctx.strokeRect(bx, by, tw + 12, 18);
+      ctx.fillStyle = col;
       ctx.fillText(label, PAD_L + 12, by + 13);
       ctx.textAlign = 'left';
     }
@@ -4678,7 +4761,7 @@ function setMainOverlay(on) {
 
 // Alpha(combo) 买卖信号主图叠加开关（GOAL6）：开启时异步向 provider（PWA alphaLab）请求
 // window.__alphaSignals {sym,tf,ts,flips[{i,dir,w}],lastW}，随后重绘；主系统无 provider 则仅持久化。
-async function setAlphaSignal(on) {
+export async function setAlphaSignal(on) {
   cfg.alphaSignalOn = !!on;
   persist();
   // GOAL15：乐观 UI——先立即翻 chip + 重绘（旧的 await provider 同步等待 6 年全量回放=十几秒无响应根因），provider 后台重算完再补一帧
@@ -5373,6 +5456,9 @@ export const kchartApi = {
   __setSrsiOptPreview: setSrsiOptPreview,
   __setSrsiOptDeep: setSrsiOptDeep,
   setSrsiLead,
+  setAlphaSignal,
+  updateSignalWatch,
+  signalEngineStatus,
   __srsiSpeedInfo: srsiSpeedInfo,
   __speedGrade: speedGrade,
   __fmtLag: fmtLag,
@@ -6563,6 +6649,7 @@ export function runSrsiAutoTrade(sym, inj) {
   const emaTf = { '4h': klineDir['4h'], '1h': klineDir['1h'], '30m': klineDir['30m'] };
   const _danger = (side) => emaOpp2(side, emaTf);
   const _autoSameCount = (side) => (engine.S.pos || []).filter(p => p.sym === sym && p.side === side && p.src === 'srsiAuto' && !p.reverse).length;
+  const _barT15 = () => { const tt = (getTFData(sym, '15m') || {}).t || []; return tt.length ? tt[tt.length - 1] : null; };
   const _tryOpen = (side, rev) => {
     if (price == null || !_canTrade) return;
     const isRev = !!rev;
@@ -6625,6 +6712,8 @@ export function runSrsiAutoTrade(sym, inj) {
       if (_posK && bs && bs.k != null) _posK.openK = bs.k; // 信号出口(实验旋钮)：记录开仓时 15m K，供中轨离场判定
     }
     st.lastTradeTs = Date.now();
+    // 信号提醒：真的下单了 → 推入事件流（与实盘成交一一对应）
+    try { pushSignalEvent({ sym, kind: 'srsi-open', side, price, barT: _barT15(), src: 'engine', w: null, text: (isRev ? '防爆反手 · ' : '') + useLev + 'x 仓位' + effPct.toFixed(0) + '%' }); } catch (e) {}
   };
   // 危险信号防爆/反手：none=关；filter=避开危险单(沿用 emaOpp2 基线，保持(9)预防爆仓结果不变)；
   // reverse=防爆反手(用更聪明的 predictDanger 多因子信号→自动开反方向)
@@ -6697,11 +6786,11 @@ export function runSrsiAutoTrade(sym, inj) {
       // 平盈利多单；多单亏损时仅跳过平仓（不操作），空单照开
       // srsiAutoCloseManual 关：仅平自动单；开：盈利的反向人工单也可被自动平（仍仅净盈利才平）
       const longPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'long' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-      if (longPos && longPos.pnl > 0) engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
+      if (longPos && longPos.pnl > 0) { engine.exitPosition(longPos, { reason: 'SRSI自动 上带平多' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {} try { pushSignalEvent({ sym, kind: 'srsi-close', side: 'long', price, barT: _barT15(), src: 'engine', text: '上带平多' }); } catch (e) {} }
       _attemptOpen('short');
     } else {
       const shortPos = (engine.S.pos || []).find(p => p.sym === sym && p.side === 'short' && (p.src === 'srsiAuto' || cfg.srsiAutoCloseManual));
-      if (shortPos && shortPos.pnl > 0) engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {}
+      if (shortPos && shortPos.pnl > 0) { engine.exitPosition(shortPos, { reason: 'SRSI自动 下带平空' }); try { if (typeof window !== 'undefined') (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), action: 'close', reason: 'auto' }); } catch (e) {} try { pushSignalEvent({ sym, kind: 'srsi-close', side: 'short', price, barT: _barT15(), src: 'engine', text: '下带平空' }); } catch (e) {} }
       _attemptOpen('long');
     }
   };
@@ -6726,7 +6815,7 @@ export function runSrsiAutoTrade(sym, inj) {
       const _kc = _sl15.k[_sl15.k.length - 2], _dc = _sl15.d[_sl15.d.length - 2];
       const _ebC = resolveEntryBands(cfg);
       const cp = srsiConfirmPass(_kc, _dc, _ebC.upper, _ebC.lower, pc.side, pc.count, _pcN);
-      if (cp.fire) { st.pendingConfirm = null; _execEdgeLive(pc.side); }        // fire 优先于 active（fire 时 active=false=挂单被消费）
+      if (cp.fire) { st.pendingConfirm = null; try { pushSignalEvent({ sym, kind: 'srsi-confirm', side: pc.side, price, barT: _lastT, src: 'engine', count: _pcN, need: _pcN, text: '确认满 ' + _pcN + ' 根 → 执行开仓' }); } catch (e) {} _execEdgeLive(pc.side); }        // fire 优先于 active（fire 时 active=false=挂单被消费）
       else if (!cp.active) st.pendingConfirm = null;                            // 收盘根出带→作废
       else { pc.count = cp.count; pc.barT = _lastT; }                           // 未满根数→计数递进
     }

@@ -10,6 +10,7 @@ import {
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { horizonTrend, macroTrend } from '../tech2/kchart.js';
+import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -467,6 +468,8 @@ function initSettings() {
       '<div class="setting-row"><label>主题</label><span class="pwa-seg"><button type="button" class="on" disabled>霓虹驾驶舱（A）</button></span></div>' +
       '<div class="setting-row"><label>动效 Motion UI</label><select id="pwaMotionSel"><option value="1">开启</option><option value="0">关闭</option></select></div>' +
       '<div class="setting-row"><label>信号通知</label><select id="pwaNotifSel"><option value="0">关闭</option><option value="1">开启（需浏览器授权）</option></select></div>' +
+      '<div class="setting-row"><label>信号页面提醒</label><select id="pwaToastSel"><option value="1">开启（顶部提示条 + 最近信号列表）</option><option value="0">关闭</option></select></div>' +
+      '<div class="setting-row"><label>信号提示音</label><select id="pwaSoundSel"><option value="1">开启</option><option value="0">关闭</option></select></div>' +
       '<div class="setting-row"><label>页面缩放</label><span class="pwa-zoomctl">' +
         '<button type="button" id="pwaZoomDown">－</button><span class="pwa-dim" id="pwaZoomInfo">100%</span><button type="button" id="pwaZoomUp">＋</button><button type="button" id="pwaZoomReset2">复位</button></span></div>' +
       '<div class="setting-row"><label>本地数据</label><button type="button" id="pwaClearLocal">清空本地设置并重建</button></div>' +
@@ -477,6 +480,12 @@ function initSettings() {
     const ns = $('pwaNotifSel');
     ns.value = notifOn ? '1' : '0';
     ns.addEventListener('change', () => setCockpitNotif(ns.value === '1'));
+    const ts = $('pwaToastSel');
+    ts.value = prefOn('toast') ? '1' : '0';
+    ts.addEventListener('change', () => setAlertPref('toast', ts.value === '1'));
+    const ss = $('pwaSoundSel');
+    ss.value = prefOn('sound') ? '1' : '0';
+    ss.addEventListener('change', () => { setAlertPref('sound', ss.value === '1'); if (ss.value === '1') unlockAudio(); });
     const zr = $('pwaZoomReset');
     if (zr) zr.addEventListener('click', () => { const l = $('pwaZoomLbl'); if (l) l.click(); });
     const zd = $('pwaZoomDown');
@@ -660,6 +669,177 @@ function bindCockpitAcc() {
   });
 }
 
+// ---------- 信号引擎：真实状态 + 一键启动 + 实时提醒（2026-09-18 审计修复） ----------
+// 审计根因：4 个开关分散在 3 个 tab 且默认全关，驾驶舱却用装饰性徽章「★基石 ⚠卫星」假装在跑。
+// 这里把状态**如实**显示，并提供一次点击把「Alpha 信号 + Alpha paper 实盘 + SRSI 卫星自动 + 15m 优选」全部拉起。
+const ALERT_PREFS = {
+  toast: { key: 'pwa_alert_toast', def: true },
+  sound: { key: 'pwa_alert_sound', def: true }
+};
+function prefOn(name) {
+  const p = ALERT_PREFS[name]; if (!p) return false;
+  try { const v = localStorage.getItem(p.key); return v == null ? p.def : v === '1'; } catch (e) { return p.def; }
+}
+function setAlertPref(name, on) { const p = ALERT_PREFS[name]; if (!p) return; try { localStorage.setItem(p.key, on ? '1' : '0'); } catch (e) {} }
+
+let _toastN = 0;
+function showToast(ev) {
+  const host = $('pwaToastHost'); if (!host) return;
+  const m = kindMeta(ev.kind);
+  const el = document.createElement('div');
+  el.className = 'pwa-toast ' + (m.severity === 'trade' ? 'trade' : m.severity === 'preview' ? 'preview' : 'signal');
+  el.style.borderLeftColor = m.color;
+  const rest = signalLine(ev).replace(m.label, '').replace(/^\s+/, '');
+  el.innerHTML = '<b style="color:' + m.color + '">' + m.label + '</b>' +
+    (rest ? '<span>' + rest + '</span>' : '') +
+    '<span class="pwa-toast-t">' + fmtSignalTime(ev.ts) + '</span>';
+  host.appendChild(el);
+  _toastN++;
+  setTimeout(() => { try { el.classList.add('out'); } catch (e) {} }, 6000);
+  setTimeout(() => { try { el.remove(); } catch (e) {} }, 6800);
+  while (host.children.length > 4) host.removeChild(host.firstChild);
+}
+
+let _audioCtx = null;
+// 浏览器策略：AudioContext 必须在**用户手势**里解锁，否则首个信号时的 beep 会被静默阻止。
+// 因此在「⚡ 启动信号引擎」/切换提示音开关时调用本函数（带一个 0 音量 blip）。
+function unlockAudio() {
+  try {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return;
+    if (!_audioCtx) _audioCtx = new AC();
+    if (_audioCtx.state === 'suspended') { try { _audioCtx.resume(); } catch (e) {} }
+    const o = _audioCtx.createOscillator(), g = _audioCtx.createGain();
+    g.gain.value = 0.0001;
+    o.connect(g); g.connect(_audioCtx.destination);
+    o.start(); o.stop(_audioCtx.currentTime + 0.02);
+  } catch (e) { /* 无声环境忽略 */ }
+}
+function beep(sev) {
+  try {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return;
+    if (!_audioCtx) _audioCtx = new AC();
+    if (_audioCtx.state === 'suspended') { try { _audioCtx.resume(); } catch (e) {} }
+    const o = _audioCtx.createOscillator(), g = _audioCtx.createGain();
+    o.type = 'sine'; o.frequency.value = sev === 'trade' ? 1180 : 880;
+    o.connect(g); g.connect(_audioCtx.destination);
+    const t = _audioCtx.currentTime;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.07, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+    o.start(t); o.stop(t + 0.36);
+  } catch (e) { /* 无声环境忽略 */ }
+}
+function notifyDesktop(ev) {
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    if (!cockpitNotifOn()) return;
+    const n = new Notification('信号 · ' + (ev.sym || ''), { body: signalLine(ev), tag: signalEventKey(ev), silent: true });
+    setTimeout(() => { try { n.close(); } catch (e) {} }, 9000);
+  } catch (e) { /* 通知不可用忽略 */ }
+}
+// 订阅提醒总线：toast / 声音 / 桌面通知 + 刷新「最近信号」列表
+export function installSignalAlertSink() {
+  if (globalThis.__signalAlertSink) return;
+  globalThis.__signalAlertSink = true;
+  onSignalEvent((ev) => {
+    if (ev) {
+      const sev = kindMeta(ev.kind).severity;
+      if (prefOn('toast')) showToast(ev);
+      if (prefOn('sound') && sev !== 'preview') beep(sev);
+      notifyDesktop(ev);
+    }
+    renderRecentSignals();
+  });
+}
+function renderRecentSignals() {
+  const box = $('pwaRecentSig');
+  const c = $('pwaSigCount');
+  if (c) { c.textContent = recentSignals(999).length + ' 条'; }
+  if (!box) return;
+  const html = renderRecentSignalsHtml(8);
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+}
+
+// 引擎状态行（★/⚠ 徽章 + 一键启动 + 阻塞原因）——「如实显示」是本次修复的核心
+function renderEngineBar() {
+  const box = $('pwaEngineBar');
+  const api = globalThis.kchartApi;
+  if (!api || !api.signalEngineStatus) return;
+  let st = null;
+  try { st = api.signalEngineStatus(); } catch (e) { st = null; }
+  if (!st) return;
+  const pa = $('pwaPillAlpha'), ps = $('pwaPillSrsi');
+  if (pa) { pa.textContent = '★ 基石 ' + (st.alphaRunning ? '●' : '○'); pa.className = 'pwa-pill pwa-eng-pill ' + (st.alphaRunning ? 'on' : 'off'); }
+  if (ps) { ps.textContent = '⚠ 卫星 ' + (st.srsiRunning ? '●' : '○'); ps.className = 'pwa-pill pwa-eng-pill ' + (st.srsiRunning ? 'on' : 'off'); }
+  if (!box) return;
+  const sig = [st.running, st.srsiAutoOn, st.optReady15m, st.alphaSignalOn, st.alphaData, st.alphaLive, st.blockers.join('|')].join('~');
+  if (box.__sig === sig) return;
+  box.__sig = sig;
+  if (st.running) {
+    const parts = [];
+    parts.push(st.srsiRunning ? '卫星自动 ●' : '卫星 ○（' + (st.srsiAutoOn ? '15m 未优选' : '未开启') + '）');
+    parts.push(st.alphaRunning ? '基石实盘 ●' : '基石实盘 ○');
+    if (st.alphaSignalOn) parts.push('Alpha 信号 ' + (st.alphaData ? '●' : '…'));
+    box.className = 'pwa-engine on';
+    box.innerHTML = '<div class="pe-row"><span class="pe-state on">● 信号引擎运行中</span>' +
+      '<span class="pe-parts">' + parts.join(' · ') + '</span>' +
+      '<button class="pe-btn ghost" id="pwaEngineStop">停止</button></div>';
+  } else {
+    box.className = 'pwa-engine off';
+    box.innerHTML = '<div class="pe-row"><span class="pe-state off">⛔ 信号引擎未启动 — 当前不会有任何交易信号</span>' +
+      '<button class="pe-btn" id="pwaEngineStart">⚡ 启动信号引擎</button></div>' +
+      '<div class="pe-why">' + st.blockers.map(b => '· ' + b).join('<br>') + '</div>';
+  }
+  const bs = $('pwaEngineStart'), bp = $('pwaEngineStop');
+  if (bs) bs.addEventListener('click', () => { startSignalEngine(); });
+  if (bp) bp.addEventListener('click', () => { stopSignalEngine(); });
+}
+
+// 一键启动：Alpha 信号计算 → （缺 15m 优选则自动跑一次）→ SRSI 卫星自动 → Alpha paper 实盘
+export async function startSignalEngine() {
+  const api = globalThis.kchartApi;
+  const box = $('pwaEngineBar');
+  const setMsg = (t) => { if (box) { box.className = 'pwa-engine busy'; box.innerHTML = '<div class="pe-row"><span class="pe-state">⏳ ' + t + '</span></div>'; box.__sig = ''; } };
+  if (!api) return { ok: false, err: 'kchartApi 未就绪' };
+  unlockAudio();   // 用户手势内解锁提示音（否则首个信号无声）
+  try {
+    setMsg('开启 Alpha 信号计算…');
+    if (api.setAlphaSignal) await api.setAlphaSignal(true);
+    const cfg = api.getConfig ? api.getConfig() : {};
+    if (!(cfg.srsiOptSource && cfg.srsiOptSource['15m'] === 'optimized')) {
+      setMsg('15m 未优选 → 自动优选（约 1-3 分钟，期间可继续盯盘）…');
+      try { if (api.optimizeSrsiForTf) await api.optimizeSrsiForTf('15m', 'swing', { sym: cfg.symbol }); } catch (e) { /* 优选失败不阻断其它开关 */ }
+    }
+    setMsg('开启 SRSI 卫星自动交易…');
+    try { if (api.setSrsiAutoOn) api.setSrsiAutoOn(true); } catch (e) {}
+    setMsg('启动 Alpha 基石 paper 实盘…');
+    try { if (globalThis.__alphaLab && globalThis.__alphaLab.startLive) globalThis.__alphaLab.startLive(); } catch (e) {}
+    if (box) box.__sig = '';
+    renderEngineBar();
+    try { if (api.render) api.render(); } catch (e) {}
+    return { ok: true };
+  } catch (e) {
+    if (box) box.__sig = '';
+    renderEngineBar();
+    return { ok: false, err: String((e && e.message) || e) };
+  }
+}
+export function stopSignalEngine() {
+  const api = globalThis.kchartApi;
+  try { if (api && api.setSrsiAutoOn) api.setSrsiAutoOn(false); } catch (e) {}
+  try { if (globalThis.__alphaLab && globalThis.__alphaLab.stopLive) globalThis.__alphaLab.stopLive(); } catch (e) {}
+  const box = $('pwaEngineBar'); if (box) box.__sig = '';
+  renderEngineBar();
+  try { if (api && api.render) api.render(); } catch (e) {}
+}
+function bindEngine() {
+  installSignalAlertSink();
+  const clr = $('pwaSigClear');
+  if (clr && !clr.__bound) { clr.__bound = true; clr.addEventListener('click', () => { clearSignalEvents(); renderRecentSignals(); }); }
+}
+
 // ---------- 主刷新 ----------
 export function refreshShell() {
   if (typeof document === 'undefined') return;
@@ -685,6 +865,8 @@ export function refreshShell() {
   renderCockpit(snap, alphaSig, rd, now);
   renderSigBar(snap, rd);
   renderTfCycle();
+  renderEngineBar();
+  renderRecentSignals();
 }
 
 export function initPwaShell() {
@@ -696,6 +878,7 @@ export function initPwaShell() {
   bindTfCycle();
   initSettings();
   bindCockpitAcc();
+  bindEngine();
   applyPhoneDefaults();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}

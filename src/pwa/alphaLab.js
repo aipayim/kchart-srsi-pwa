@@ -4,6 +4,7 @@
 //           现货模式 longOnly + 无资金费现金流（funding 仅作信号输入）；vol-target 需 720 根 1h 预热。
 import { runBacktest, annualized, maxDD, sharpeDaily, combineDaily, carryZSeries, alignClosed, comboFactors } from './alphaCore.js';
 import { fetchKlinesRange, fetchFundingRate } from './data.js';
+import { pushSignalEvent } from '../tech2/signalAlerts.js';
 import { APP_VERSION } from '../version.generated.js';
 
 const PAPER_KEY = 'pwa_alpha_paper';
@@ -448,6 +449,8 @@ async function tickLive() {
       liveW = target;
     }
     _liveLog(`调仓 → 目标 ${(target * 100).toFixed(0)}% @ ${price.toFixed(0)}`);
+    // 信号提醒：基石调仓 → 事件流（与真实成交一一对应）
+    try { pushSignalEvent({ sym, kind: 'alpha-rebal', side: target > 0.05 ? 'long' : target < -0.05 ? 'short' : 'flat', price, w: target, src: 'alphaLive', barT: Date.now(), text: (target > 0 ? '加多/减空' : '加空/减多') + ' ' + Math.abs(target * 100).toFixed(0) + '%' }); } catch (e) {}
     try { window.__alphaLiveW = target; (window.__alphaLiveMarks = window.__alphaLiveMarks || []).push({ t: Date.now(), dir: target }); } catch (e) {}
   } catch (e) { _liveLog('tick 失败：' + e.message); }
 }

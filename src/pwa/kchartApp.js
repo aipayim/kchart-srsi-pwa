@@ -7,7 +7,8 @@ import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
-import { initPwaShell, refreshShell } from './pwaShell.js';
+import { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine } from './pwaShell.js';
+globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
 
@@ -133,6 +134,8 @@ globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
 globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
 globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
 globalThis.kSetSrsiLead = (tf, on) => api.setSrsiLead(tf, on);
+globalThis.startSignalEngine = () => globalThis.__pwaShell && globalThis.__pwaShell.startSignalEngine
+  ? globalThis.__pwaShell.startSignalEngine() : null;
 globalThis.kToggleOverview = () => api.toggleOverview();
 globalThis.kToggleDisc = () => api.toggleKDisc();
 globalThis.kToggleRuleMonitor = () => api.kToggleRuleMonitor();
