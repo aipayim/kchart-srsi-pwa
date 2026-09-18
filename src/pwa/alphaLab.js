@@ -292,7 +292,7 @@ export function initAlphaLab() {
     $('alphaPaperStart').style.display = 'none'; $('alphaPaperStop').style.display = '';
     tickPaper(); paperTimer = setInterval(tickPaper, 60000);
   }
-  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck, comboWithSrsi, startLive, stopLive, isLive: () => !!liveTimer };
+  window.__alphaLab = { runBacktestUI, tickPaper, fixtureSelfCheck, comboWithSrsi, startLive, stopLive, isLive: () => !!liveTimer, liveSymbol, retargetLive, alphaSignalFor };
   // GOAL6：主图 α 信号 provider —— kchart.js 的「α 信号」chip 开启时调用，
   // 用与回测/paper 同源的 runBacktest 重算当前币/主周期逐根权重并写入 window.__alphaSignals。
   window.__alphaSignalProvider = async () => {
@@ -310,6 +310,25 @@ export function initAlphaLab() {
 // 再按 band 规则重放成交点（|w-posW|>band → 在下一根开盘成交，与回测 fill 语义一致）。
 // 1d 收盘与资金费率按币缓存（d1 拉取一次；funding 6h 刷新），主图切换周期/币种自动重算。
 const _sigCache = { d1: {}, fr: {}, frT: {} };
+
+// ---- 信号按币对隔离（2026-09-18 修复）----
+// 审计发现：`__alphaSignals` 只有一份全局，而 Alpha 实盘 tick 每 60s 用 liveSym（启动时捕获）覆写它
+// → 切换到 ETH 后驾驶舱仍显示 BTC 的 w，且显示层不校验币对，用户误以为「驾驶舱只对 BTC 有效」。
+// 现改为按币对缓存 `__alphaSignalsBySym`；`__alphaSignals` 只作为「当前展示币对」的别名（兼容绘制代码）。
+export function alphaSignalFor(sym) {
+  const m = globalThis.__alphaSignalsBySym || {};
+  return (sym && m[sym]) || null;
+}
+export function publishAlphaSignal(sig) {
+  if (!sig || !sig.sym) return sig;
+  const m = (globalThis.__alphaSignalsBySym = globalThis.__alphaSignalsBySym || {});
+  m[sig.sym] = sig;
+  let cur = null;
+  try { const api = globalThis.kchartApi; cur = api && api.getConfig ? api.getConfig().symbol : null; } catch (e) { cur = null; }
+  if (!cur || sig.sym === cur) globalThis.__alphaSignals = sig;   // 只让当前展示币对写别名
+  return sig;
+}
+
 export async function updateAlphaSignal(sym, tf, force = false) {
   try {
     const S = globalThis.S;
@@ -318,8 +337,8 @@ export async function updateAlphaSignal(sym, tf, force = false) {
     const t = K('klinesT'), c = K('klines'), o = K('klinesO'), h = K('klinesH'), l = K('klinesL');
     if (t.length < 60 || c.length !== t.length || o.length !== t.length) return null;
     if (!force) {
-      const prev = globalThis.__alphaSignals;
-      if (prev && prev.sym === sym && prev.tf === tf && prev.ts === t && Date.now() - prev.updatedT < 30000) return prev;
+      const prev = alphaSignalFor(sym);   // 只看本币对缓存（不再被其它币对的全局值污染）
+      if (prev && prev.tf === tf && prev.ts === t && Date.now() - prev.updatedT < 30000) return prev;
     }
     let d1 = _sigCache.d1[sym];
     if (!d1 || !d1.t || d1.t.length < 30) {
@@ -359,8 +378,7 @@ export async function updateAlphaSignal(sym, tf, force = false) {
         factors = { carry: f.carryW * scale, momo: f.momoW * scale, brk: f.brkW * scale, sum: f.sum, wRaw: f.w, scale, barT: t[lastFlipIdx], barIdx: lastFlipIdx };
       } catch (e) { factors = null; }
     }
-    globalThis.__alphaSignals = { sym, tf, ts: t, ws: r.ws, flips, lastW: posW, factors, updatedT: Date.now() };
-    return globalThis.__alphaSignals;
+    return publishAlphaSignal({ sym, tf, ts: t, ws: r.ws, flips, lastW: posW, factors, updatedT: Date.now() });
   } catch (e) { return null; }
 }
 
@@ -411,16 +429,27 @@ export async function comboWithSrsi(srsi) {
 // —— alphaLive：把 Alpha 组合信号接入 PaperEngine（60s tick，band 0.05 才调仓，只动 src='alpha' 的仓）——
 let liveTimer = null, liveW = 0, liveSym = '';
 function _liveLog(msg) { try { const el = $('alphaLiveOut'); if (el) el.innerHTML = '<div class="alpha-note">⚡ ' + msg + '</div>' + el.innerHTML.slice(0, 600); } catch (e) { /* ignore */ } console.log('[ALPHA-LIVE] ' + msg); }
-export function startLive() {
+export function startLive(symOverride) {
   if (liveTimer) return;
   const eng = window.kchartApi && window.kchartApi.getTradeEngine ? window.kchartApi.getTradeEngine() : null;
   if (!eng) { _liveLog('交易引擎未连接（先在交易条启用联动/隔离引擎）'); return; }
-  const sym = ($('alphaSym')?.value || globalThis.__pwa?.curSym || 'BTCUSDT').toUpperCase().trim();
+  const kc = (globalThis.kchartApi && globalThis.kchartApi.getConfig) ? globalThis.kchartApi.getConfig() : null;
+  const sym = (symOverride || $('alphaSym')?.value || (kc && kc.symbol) || globalThis.__pwa?.curSym || 'BTCUSDT').toUpperCase().trim();
   liveSym = sym;
   try { localStorage.setItem('pwa_alpha_live', JSON.stringify({ sym })); } catch (e) { /* ignore */ }
   liveTimer = setInterval(tickLive, 60000);
   _liveLog(`组合实盘(paper)已接管 ${sym}：SRSI 自动交易 + Alpha 每 60s 检查（|Δw|>0.05 调仓）`);
   tickLive();
+}
+// 基石实盘当前盯的币对（供驾驶舱如实展示：实盘标的可能与当前查看币对不同）
+export function liveSymbol() { return liveSym; }
+// 把基石实盘改盯另一个币对（先停再起；不静默切换——由 UI 按钮显式触发）
+export function retargetLive(sym) {
+  const was = liveSym;
+  if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+  liveSym = ''; liveW = 0;
+  _liveLog(`组合实盘改盯 ${sym}（原 ${was || '无'}）`);
+  startLive(sym);
 }
 export function stopLive() {
   if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
@@ -434,7 +463,8 @@ async function tickLive() {
     const sym = liveSym;
     const price = eng.S.prices && eng.S.prices[sym] && eng.S.prices[sym].last;
     if (!price) return;
-    const sig = await updateAlphaSignal(sym, (window.__pwa && window.__pwa.curTf) || '1h', true);
+    const _kc = (globalThis.kchartApi && globalThis.kchartApi.getConfig) ? globalThis.kchartApi.getConfig() : null;
+    const sig = await updateAlphaSignal(sym, (window.__pwa && window.__pwa.curTf) || (_kc && _kc.mainTF) || '1h', true);
     if (!sig || !Number.isFinite(sig.lastW)) return;
     const target = sig.lastW;
     if (Math.abs(target - liveW) <= 0.05) return;

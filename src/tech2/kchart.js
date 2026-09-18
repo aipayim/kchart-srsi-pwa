@@ -213,20 +213,36 @@ export function updateSignalWatch(sym) {
 }
 
 // 引擎真实状态（供驾驶舱/主图状态带如实展示；blockers 为「为什么不会有信号」）
+// 2026-09-18 补充：引擎开关与 15m 优选都是**按币对独立**的；Alpha 信号按币对缓存。
+// 因此必须把「当前币对 / 实盘标的 / 基石区数据属于哪个币对」一并暴露，否则切币对后 UI 会说谎。
 export function signalEngineStatus() {
+  const sym = cfg.symbol;
   const optReady15m = !!(cfg.srsiOptSource && cfg.srsiOptSource['15m'] === 'optimized');
   const srsiAutoOn = !!cfg.srsiAutoOn;
   const alphaSignalOn = !!cfg.alphaSignalOn;
-  const alphaData = !!(typeof window !== 'undefined' && window.__alphaSignals && window.__alphaSignals.sym);
+  const bySym = (typeof window !== 'undefined' && window.__alphaSignalsBySym) || {};
+  const mine = bySym[sym] || null;
+  const g = (typeof window !== 'undefined' && window.__alphaSignals) || null;
+  const alphaDataSym = mine ? sym : ((g && g.sym) ? g.sym : null);
+  const alphaData = !!mine;
+  const alphaStale = !mine && !!(g && g.sym && g.sym !== sym);
   const alphaLive = !!(typeof window !== 'undefined' && window.__alphaLab && typeof window.__alphaLab.isLive === 'function' && window.__alphaLab.isLive());
+  let liveSym = null;
+  try { liveSym = (typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.liveSymbol) ? window.__alphaLab.liveSymbol() : null; } catch (e) { liveSym = null; }
+  const liveElsewhere = !!(alphaLive && liveSym && liveSym !== sym);
   const blockers = [];
-  if (!srsiAutoOn) blockers.push('SRSI 卫星自动交易未开启');
-  else if (!optReady15m) blockers.push('15m 未优选 → 卫星被硬约束禁止开仓（可一键自动优选）');
-  if (!alphaSignalOn) blockers.push('Alpha 信号未计算（基石区/解读卡无数据）');
-  else if (!alphaData) blockers.push('Alpha 信号计算中…');
+  if (!srsiAutoOn) blockers.push('本币对（' + sym + '）SRSI 卫星自动交易未开启');
+  else if (!optReady15m) blockers.push('本币对 15m 未优选 → 卫星被硬约束禁止开仓（可一键自动优选）');
+  if (!alphaSignalOn) blockers.push('本币对 Alpha 信号未计算（基石区/解读卡无数据）');
+  else if (!alphaData) blockers.push('本币对 Alpha 信号计算中…');
   if (!alphaLive) blockers.push('Alpha 基石实盘(paper) 未启动');
   const srsiRunning = srsiAutoOn && optReady15m;
-  return { srsiAutoOn, optReady15m, alphaSignalOn, alphaData, alphaLive, srsiRunning, alphaRunning: alphaLive, running: srsiRunning || alphaLive, blockers };
+  const alphaLiveHere = !!(alphaLive && liveSym === sym);
+  const runningHere = srsiRunning || alphaLiveHere;   // 本币对是否真有引擎在跑（驾驶舱/状态条以此为准）
+  return {
+    sym, srsiAutoOn, optReady15m, alphaSignalOn, alphaData, alphaDataSym, alphaStale, alphaLive, liveSym, liveElsewhere,
+    srsiRunning, alphaRunning: alphaLive, alphaLiveHere, running: srsiRunning || alphaLive, runningHere, blockers
+  };
 }
 
 // ===================== SRSI 响应速度 / 领先模式（2026-09-18 诊断落地）=====================
@@ -3925,8 +3941,8 @@ function drawMain(ctx, sym, tf, H) {
       let label, col, bg, bd;
       let st = null;
       try { st = signalEngineStatus(); } catch (e) { st = null; }
-      if (st && !st.running) {
-        label = '⛔ 信号引擎未启动 · 无信号可看（右侧驾驶舱 → ⚡ 启动信号引擎）';
+      if (st && !st.runningHere) {
+        label = '⛔ 本币对（' + (st.sym || sym) + '）信号引擎未启动 · 无信号可看（右侧驾驶舱 → ⚡ 启动信号引擎）';
         col = '#FFB300'; bg = 'rgba(255,179,0,.12)'; bd = 'rgba(255,179,0,.5)';
       } else {
         const w = _sigWatch[sym] || null;

@@ -192,15 +192,21 @@ export function stopGauge() { if (_gaugeRaf) { try { cancelAnimationFrame(_gauge
 
 function renderCockpit(snap, alphaSig, rd, now) {
   // 基石区
+  const api0 = globalThis.kchartApi;
+  const sym0 = (api0 && api0.getConfig ? api0.getConfig().symbol : null) || '';
   const facs = factorShares(alphaSig && alphaSig.factors);
   const fbox = $('pwaFactors');
   if (fbox) {
+    const on = !!(api0 && api0.getConfig && api0.getConfig().alphaSignalOn);
+    const emptyMsg = on
+      ? '⏳ 正在计算 <b>' + (sym0 || '本币对') + '</b> 的 Alpha 信号…（首次 10~30s）'
+      : '⛔ <b>' + (sym0 || '本币对') + '</b> 未启动 Alpha 信号计算 → 点上方「⚡ 启动信号引擎」（引擎开关<b>按币对独立</b>）';
     const html = facs.length ? facs.map(f => {
       const vtxt = (f.val >= 0 ? '+' : '') + f.val.toFixed(2);
       return `<div class="pwa-fac sc-${f.key}"><span class="nm">${f.label}</span>` +
         `<span class="bar"><i style="width:${Math.max(0, Math.min(100, f.sharePct)).toFixed(1)}%"></i></span>` +
         `<span class="vv">${vtxt} · ${Math.round(f.sharePct)}%</span></div>`;
-    }).join('') : '<div class="pwa-dim" style="font-size:10.5px">⏳ 等待 Alpha 信号…（进入盯盘页后自动计算）</div>';
+    }).join('') : '<div class="pwa-dim" style="font-size:10.5px">' + emptyMsg + '</div>';
     if (fbox.__sig !== html) { fbox.__sig = html; fbox.innerHTML = html; }
   }
   _targetW = Math.max(-1, Math.min(1, isFinite(rd.w) ? rd.w : 0));
@@ -774,27 +780,49 @@ function renderEngineBar() {
   if (pa) { pa.textContent = '★ 基石 ' + (st.alphaRunning ? '●' : '○'); pa.className = 'pwa-pill pwa-eng-pill ' + (st.alphaRunning ? 'on' : 'off'); }
   if (ps) { ps.textContent = '⚠ 卫星 ' + (st.srsiRunning ? '●' : '○'); ps.className = 'pwa-pill pwa-eng-pill ' + (st.srsiRunning ? 'on' : 'off'); }
   if (!box) return;
-  const sig = [st.running, st.srsiAutoOn, st.optReady15m, st.alphaSignalOn, st.alphaData, st.alphaLive, st.blockers.join('|')].join('~');
+  const sig = [st.sym, st.runningHere, st.srsiAutoOn, st.optReady15m, st.alphaSignalOn, st.alphaData, st.alphaDataSym, st.alphaLive, st.liveSym, st.blockers.join('|')].join('~');
   if (box.__sig === sig) return;
   box.__sig = sig;
-  if (st.running) {
+  if (st.runningHere) {
     const parts = [];
     parts.push(st.srsiRunning ? '卫星自动 ●' : '卫星 ○（' + (st.srsiAutoOn ? '15m 未优选' : '未开启') + '）');
-    parts.push(st.alphaRunning ? '基石实盘 ●' : '基石实盘 ○');
+    parts.push(st.alphaLiveHere ? '基石实盘 ● ' + st.sym : '基石实盘 ○');
     if (st.alphaSignalOn) parts.push('Alpha 信号 ' + (st.alphaData ? '●' : '…'));
     box.className = 'pwa-engine on';
-    box.innerHTML = '<div class="pe-row"><span class="pe-state on">● 信号引擎运行中</span>' +
+    box.innerHTML = '<div class="pe-row"><span class="pe-state on">● 本币对（' + st.sym + '）信号引擎运行中</span>' +
       '<span class="pe-parts">' + parts.join(' · ') + '</span>' +
-      '<button class="pe-btn ghost" id="pwaEngineStop">停止</button></div>';
+      '<button class="pe-btn ghost" id="pwaEngineStop">停止</button></div>' +
+      engineNotesHtml(st);
   } else {
     box.className = 'pwa-engine off';
-    box.innerHTML = '<div class="pe-row"><span class="pe-state off">⛔ 信号引擎未启动 — 当前不会有任何交易信号</span>' +
+    box.innerHTML = '<div class="pe-row"><span class="pe-state off">⛔ 本币对（' + st.sym + '）信号引擎未启动 — 不会有任何交易信号</span>' +
       '<button class="pe-btn" id="pwaEngineStart">⚡ 启动信号引擎</button></div>' +
-      '<div class="pe-why">' + st.blockers.map(b => '· ' + b).join('<br>') + '</div>';
+      '<div class="pe-why">' + st.blockers.map(b => '· ' + b).join('<br>') + '</div>' +
+      engineNotesHtml(st);
   }
-  const bs = $('pwaEngineStart'), bp = $('pwaEngineStop');
+  const bs = $('pwaEngineStart'), bp = $('pwaEngineStop'), br = $('pwaEngineRetarget');
   if (bs) bs.addEventListener('click', () => { startSignalEngine(); });
   if (bp) bp.addEventListener('click', () => { stopSignalEngine(); });
+  if (br) br.addEventListener('click', () => { retargetLiveToCurrent(); });
+}
+// 状态条下方的「如实说明」：引擎开关与优选**按币对独立**；基石实盘可能盯另一个币对
+function engineNotesHtml(st) {
+  const notes = [];
+  notes.push('引擎开关与 15m 优选<b>按币对独立</b>：每个币对需各自启动一次。');
+  if (!st.runningHere && st.alphaLive && st.liveSym && st.liveSym !== st.sym) notes.push('注：其它币对 <b>' + st.liveSym + '</b> 的基石实盘仍在运行（不随切币对停止）。');
+  if (st.runningHere && st.liveElsewhere) notes.push('基石实盘正盯 <b>' + st.liveSym + '</b>（与当前查看的 ' + st.sym + ' 不同） <button class="pe-btn tiny" id="pwaEngineRetarget">改为盯本币对</button>');
+  if (!st.alphaData && st.alphaSignalOn) notes.push('本币对 <b>' + st.sym + '</b> 的 Alpha 信号正在计算（首次 10~30s）。');
+  if (st.alphaStale) notes.push('上次 Alpha 计算的是 <b>' + st.alphaDataSym + '</b>。');
+  return '<div class="pe-why">' + notes.join('<br>') + '</div>';
+}
+// 把基石实盘改盯当前币对（显式按钮触发，不静默切换）
+function retargetLiveToCurrent() {
+  const api = globalThis.kchartApi;
+  const sym = api && api.getConfig ? api.getConfig().symbol : null;
+  if (!sym) return;
+  try { if (globalThis.__alphaLab && globalThis.__alphaLab.retargetLive) globalThis.__alphaLab.retargetLive(sym); } catch (e) {}
+  const box = $('pwaEngineBar'); if (box) box.__sig = '';
+  renderEngineBar();
 }
 
 // 一键启动：Alpha 信号计算 → （缺 15m 优选则自动跑一次）→ SRSI 卫星自动 → Alpha paper 实盘
@@ -815,7 +843,14 @@ export async function startSignalEngine() {
     setMsg('开启 SRSI 卫星自动交易…');
     try { if (api.setSrsiAutoOn) api.setSrsiAutoOn(true); } catch (e) {}
     setMsg('启动 Alpha 基石 paper 实盘…');
-    try { if (globalThis.__alphaLab && globalThis.__alphaLab.startLive) globalThis.__alphaLab.startLive(); } catch (e) {}
+    try {
+      const lab = globalThis.__alphaLab;
+      if (lab && lab.startLive) {
+        // 基石实盘只盯一个币对：一键启动始终把实盘目标设为**当前币对**（显式、可预期）
+        if (lab.isLive && lab.isLive() && lab.liveSymbol && lab.liveSymbol() !== cfg.symbol && lab.retargetLive) lab.retargetLive(cfg.symbol);
+        else if (!(lab.isLive && lab.isLive())) lab.startLive(cfg.symbol);
+      }
+    } catch (e) {}
     if (box) box.__sig = '';
     renderEngineBar();
     try { if (api.render) api.render(); } catch (e) {}
@@ -829,7 +864,12 @@ export async function startSignalEngine() {
 export function stopSignalEngine() {
   const api = globalThis.kchartApi;
   try { if (api && api.setSrsiAutoOn) api.setSrsiAutoOn(false); } catch (e) {}
-  try { if (globalThis.__alphaLab && globalThis.__alphaLab.stopLive) globalThis.__alphaLab.stopLive(); } catch (e) {}
+  // 只停「本币对」的基石实盘：若实盘盯的是别的币对，不越权停止它
+  try {
+    const lab = globalThis.__alphaLab;
+    const sym = api && api.getConfig ? api.getConfig().symbol : null;
+    if (lab && lab.isLive && lab.isLive() && (!lab.liveSymbol || !sym || lab.liveSymbol() === sym) && lab.stopLive) lab.stopLive();
+  } catch (e) {}
   const box = $('pwaEngineBar'); if (box) box.__sig = '';
   renderEngineBar();
   try { if (api && api.render) api.render(); } catch (e) {}
@@ -853,7 +893,8 @@ export function refreshShell() {
   if (_curTab === 'trade') { renderTrade(); renderTrades(); return; }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
   const now = Date.now();
-  const alphaSig = globalThis.__alphaSignals;
+  // 基石(Alpha)信号**按币对**取：切币对后不再显示上一个币对的旧值（2026-09-18 修复）
+  const alphaSig = (globalThis.__alphaSignalsBySym || {})[sym] || null;
   let ctx = null;
   try { ctx = getCockpitCtx(); } catch (e) { ctx = null; }
   if (!ctx || !ctx.horizon) ctx = computeCtx(sym);

@@ -352,6 +352,11 @@ async function loadSymbol(sym) {
   }
   try { await refreshPrice(sym); } catch (e) { /* 价格可选 */ }
   api.render();                       // 用实际数据重绘（含纪律面板实时价）
+  // 切币对后立即（重新）计算**本币对**的 Alpha 信号：不等 60s tick，否则驾驶舱会显示上一个币对的旧值
+  try {
+    const kc = api.getConfig();
+    if (kc.alphaSignalOn) { await updateAlphaSignal(sym, kc.mainTF, true); api.render(); }
+  } catch (e) { /* 静默：信号缺失时基石区显示「正在计算」 */ }
   if (api.renderMainTools) api.renderMainTools(); // 同步主图叠加药丸的 K/D 背景色
   refreshShell();                     // PWA 外壳：实时价 / KPI / 信号驾驶舱
   localLoop.kick();                   // K线就绪后立刻触发一次本机采样（无需等 60min 周期）
