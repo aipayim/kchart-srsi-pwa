@@ -542,6 +542,31 @@ function renderSigBar(snap, rd) {
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
 }
 
+// ---------- 主图卡头部：周期切换器（‹ ›） ----------
+function cycleMainTF(dir) {
+  const api = globalThis.kchartApi;
+  if (!api || !api.setMainTF || !api.getConfig) return;
+  const cfg = api.getConfig();
+  const list = (globalThis.KLINE_TF_LIST || ['1m','5m','10m','15m','30m','1h','4h','8h','1d','7d','30d']);
+  const i = list.indexOf(cfg.mainTF);
+  const n = list.length;
+  const next = list[((i < 0 ? 0 : i) + dir + n) % n];
+  api.setMainTF(next);
+}
+function renderTfCycle() {
+  const el = $('pwaTfCur');
+  if (!el) return;
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  const tf = (cfg && cfg.mainTF) || '--';
+  if (el.textContent !== tf) el.textContent = tf;
+}
+function bindTfCycle() {
+  const prev = $('pwaTfPrev'), next = $('pwaTfNext');
+  if (prev && !prev.__bound) { prev.__bound = true; prev.addEventListener('click', () => cycleMainTF(-1)); }
+  if (next && !next.__bound) { next.__bound = true; next.addEventListener('click', () => cycleMainTF(1)); }
+}
+
 // ---------- 工具栏 ⚙ / 币对弹层 ----------
 function bindToolbar() {
   const btn = $('pwaToolMore'), bar = $('pwaToolbar');
@@ -658,6 +683,7 @@ export function refreshShell() {
   renderKpis(pillar, rd, alphaSig);
   renderCockpit(snap, alphaSig, rd, now);
   renderSigBar(snap, rd);
+  renderTfCycle();
 }
 
 export function initPwaShell() {
@@ -666,6 +692,7 @@ export function initPwaShell() {
   bindTrade();
   bindTopAutoHide();
   bindToolbar();
+  bindTfCycle();
   initSettings();
   bindCockpitAcc();
   applyPhoneDefaults();

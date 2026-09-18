@@ -531,3 +531,21 @@ body.pwa .kchart-maintools .mt-legend{display:none}
 .pwa-caret{margin-left:6px;color:var(--text2);transition:transform .15s;font-size:11px}
 .pwa-card.closed .pwa-caret{transform:rotate(-90deg)}
 .pwa-card.closed .pwa-card-b{display:none}
+
+/* ============================================================================
+   盯盘优化（续3）：主图卡头部周期切换器 + 速览表手机列裁剪
+   ============================================================================ */
+.pwa-tfcycle{display:inline-flex;align-items:center;gap:2px;margin-left:8px;border:1px solid var(--border);
+  border-radius:9px;background:var(--card2);overflow:hidden}
+.pwa-tfcycle button{background:transparent;border:none;color:var(--text2);font-family:inherit;font-size:15px;
+  line-height:1;padding:5px 10px;cursor:pointer}
+.pwa-tfcycle button:hover{color:var(--accent)}
+.pwa-tfcycle #pwaTfCur{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);min-width:38px;text-align:center;text-transform:none}
+/* 速览表：手机隐藏「能量/闸门/参数」三列（信息在信号条/设置页），6 列不再横向裁切 */
+@media (max-width:640px){
+  body.pwa .kchart-ov-head-row,body.pwa .kchart-ov-row{grid-template-columns:42px 38px 38px 42px minmax(0,1fr) 50px;gap:5px;padding:2px 6px}
+  body.pwa .kchart-ov-head-row>span:nth-child(6),body.pwa .kchart-ov-row>span:nth-child(6),
+  body.pwa .kchart-ov-head-row>span:nth-child(8),body.pwa .kchart-ov-row>span:nth-child(8),
+  body.pwa .kchart-ov-head-row>span:nth-child(9),body.pwa .kchart-ov-row>span:nth-child(9){display:none}
+  body.pwa .pwa-tfcycle button{padding:5px 12px}
+}

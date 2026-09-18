@@ -5039,6 +5039,8 @@ export const kchartApi = {
   manualSignal,
   kToggleTradePanel,
   setSigOverlay,
+  setMainTF: (tf) => setMainTF(tf),
+  setKlineSel: (tf, on) => setKlineSel(tf, on),
   setDiscEvidence: (v) => { cfg.discEvidenceOpen = !!v; persist(); },
   setBars,
   setShow,

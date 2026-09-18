@@ -123,7 +123,12 @@
               <div id="kchartRuleMonitor" class="rule-monitor"></div>
               <div class="pwa-card pwa-scan">
                 <div class="pwa-card-h">
-                  <span class="ttl">主图 · SRSI 多周期</span>
+                  <span class="ttl">主图</span>
+                  <span class="pwa-tfcycle" title="切换主图周期（‹ ›）">
+                    <button type="button" id="pwaTfPrev" aria-label="上一周期">‹</button>
+                    <span id="pwaTfCur">15m</span>
+                    <button type="button" id="pwaTfNext" aria-label="下一周期">›</button>
+                  </span>
                   <span class="pwa-spacer"></span>
                   <div class="pwa-legend hide-phone">
                     <i style="color:#00e676">▲ 开多</i><i style="color:#ff5252">▼ 开空</i>
