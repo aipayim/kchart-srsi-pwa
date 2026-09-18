@@ -144,6 +144,7 @@ globalThis.ruleOptimizeRun = () => api.ruleOptimizeRun();
 globalThis.ruleOptimizeApply = () => api.ruleOptimizeApply();
 globalThis.ruleVersionSwitch = () => api.ruleVersionSwitch();
 globalThis.kToggleTradePanel = () => { try { localStorage.setItem('pwa_trade_panel_touched', '1'); } catch (e) {} api.kToggleTradePanel(); };
+globalThis.kchartSetSrsiAutoMode = (mode) => api.setSrsiAutoMode(mode);
 globalThis.setSigOverlay = (on) => api.setSigOverlay(on);
 globalThis.setDiscEvidence = (v) => api.setDiscEvidence(v);
 

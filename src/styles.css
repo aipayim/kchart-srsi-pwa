@@ -623,6 +623,11 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
    .kt-auto-panel.kt-danger{animation:kt-danger-glow 1.4s ease-in-out infinite}
    @keyframes kt-danger-glow{0%,100%{box-shadow:0 0 0 0 rgba(255,60,60,0);outline:0 solid rgba(255,60,60,0)}50%{box-shadow:0 0 14px 3px rgba(255,60,60,.55);outline:2px solid rgba(255,60,60,.6)}}
    .kt-danger-note{color:var(--red);font-weight:700;background:rgba(240,80,80,.14);padding:2px 6px;border-radius:4px;width:100%}
+   /* v1.6.16：最近拦截原因 + 可执行引导（静默拦截留痕） */
+   .kt-block-note{color:#f0a020;font-weight:700;background:rgba(240,160,32,.14);padding:2px 6px;border-radius:4px;width:100%}
+   .kt-block-guide{color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--border);padding:2px 6px;border-radius:4px;width:100%}
+   .kt-mini-btn{font-size:10px;padding:1px 8px;border-radius:4px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer}
+   .kt-mini-btn:hover{background:var(--accent);color:#fff}
    .kt-bt-danger{color:var(--red);font-weight:700;background:rgba(240,80,80,.12);padding:2px 6px;border-radius:4px}
   .kt-light{font-size:10px;padding:1px 6px;border-radius:4px}
   .kt-light.on{color:var(--green);background:rgba(40,200,120,.12)}

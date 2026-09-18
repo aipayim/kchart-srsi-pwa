@@ -9,7 +9,7 @@ import {
   cockpitNotifOn, setCockpitNotif
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
-import { horizonTrend, macroTrend } from '../tech2/kchart.js';
+import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
@@ -780,7 +780,7 @@ function renderEngineBar() {
   if (pa) { pa.textContent = '★ 基石 ' + (st.alphaRunning ? '●' : '○'); pa.className = 'pwa-pill pwa-eng-pill ' + (st.alphaRunning ? 'on' : 'off'); }
   if (ps) { ps.textContent = '⚠ 卫星 ' + (st.srsiRunning ? '●' : '○'); ps.className = 'pwa-pill pwa-eng-pill ' + (st.srsiRunning ? 'on' : 'off'); }
   if (!box) return;
-  const sig = [st.sym, st.runningHere, st.srsiAutoOn, st.optReady15m, st.alphaSignalOn, st.alphaData, st.alphaDataSym, st.alphaLive, st.liveSym, st.blockers.join('|')].join('~');
+  const sig = [st.sym, st.runningHere, st.srsiAutoOn, st.optReady15m, st.alphaSignalOn, st.alphaData, st.alphaDataSym, st.alphaLive, st.liveSym, st.blockers.join('|'), st.lastBlock ? st.lastBlock.reason + '@' + st.lastBlock.ts : ''].join('~');
   if (box.__sig === sig) return;
   box.__sig = sig;
   if (st.runningHere) {
@@ -800,10 +800,14 @@ function renderEngineBar() {
       '<div class="pe-why">' + st.blockers.map(b => '· ' + b).join('<br>') + '</div>' +
       engineNotesHtml(st);
   }
-  const bs = $('pwaEngineStart'), bp = $('pwaEngineStop'), br = $('pwaEngineRetarget');
+  const bs = $('pwaEngineStart'), bp = $('pwaEngineStop'), br = $('pwaEngineRetarget'), bm = $('pwaEngineModeUsdt');
   if (bs) bs.addEventListener('click', () => { startSignalEngine(); });
   if (bp) bp.addEventListener('click', () => { stopSignalEngine(); });
   if (br) br.addEventListener('click', () => { retargetLiveToCurrent(); });
+  if (bm) bm.addEventListener('click', () => {
+    try { if (api.setSrsiAutoMode) api.setSrsiAutoMode('usdt'); } catch (e) {}
+    box.__sig = ''; renderEngineBar();
+  });
 }
 // 状态条下方的「如实说明」：引擎开关与优选**按币对独立**；基石实盘可能盯另一个币对
 function engineNotesHtml(st) {
@@ -813,6 +817,14 @@ function engineNotesHtml(st) {
   if (st.runningHere && st.liveElsewhere) notes.push('基石实盘正盯 <b>' + st.liveSym + '</b>（与当前查看的 ' + st.sym + ' 不同） <button class="pe-btn tiny" id="pwaEngineRetarget">改为盯本币对</button>');
   if (!st.alphaData && st.alphaSignalOn) notes.push('本币对 <b>' + st.sym + '</b> 的 Alpha 信号正在计算（首次 10~30s）。');
   if (st.alphaStale) notes.push('上次 Alpha 计算的是 <b>' + st.alphaDataSym + '</b>。');
+  // v1.6.16：如实显示卫星「最近一次拦截原因」——不再静默
+  if (st.lastBlock) {
+    const b = st.lastBlock;
+    const tm = new Date(b.ts).toLocaleTimeString('zh-CN', { hour12: false });
+    notes.push('⛔ <b>卫星最近拦截</b>：' + (b.side === 'long' ? '开多' : '开空') + ' · ' + blockReasonText(b.reason) + ' · ' + tm);
+    const g = blockGuideText(b.reason, st.sym);
+    if (g) notes.push('💡 ' + g + (b.reason === 'coin-inventory-0' ? ' <button class="pe-btn tiny" id="pwaEngineModeUsdt">改用 U 本位开多</button>' : ''));
+  }
   return '<div class="pe-why">' + notes.join('<br>') + '</div>';
 }
 // 把基石实盘改盯当前币对（显式按钮触发，不静默切换）

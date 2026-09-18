@@ -239,9 +239,13 @@ export function signalEngineStatus() {
   const srsiRunning = srsiAutoOn && optReady15m;
   const alphaLiveHere = !!(alphaLive && liveSym === sym);
   const runningHere = srsiRunning || alphaLiveHere;   // 本币对是否真有引擎在跑（驾驶舱/状态条以此为准）
+  // v1.6.16：最近一次拦截原因（仅在本币对卫星已开时有效；未开则为 null）
+  const autoSt = _srsiAuto[sym] || null;
+  const lastBlock = (autoSt && autoSt.lastBlock) ? autoSt.lastBlock : null;
   return {
     sym, srsiAutoOn, optReady15m, alphaSignalOn, alphaData, alphaDataSym, alphaStale, alphaLive, liveSym, liveElsewhere,
-    srsiRunning, alphaRunning: alphaLive, alphaLiveHere, running: srsiRunning || alphaLive, runningHere, blockers
+    srsiRunning, alphaRunning: alphaLive, alphaLiveHere, running: srsiRunning || alphaLive, runningHere, blockers,
+    lastBlock, lastBlockText: lastBlock ? blockReasonText(lastBlock.reason) : null, lastBlockGuide: lastBlock ? blockGuideText(lastBlock.reason, sym) : null
   };
 }
 
@@ -5439,6 +5443,9 @@ export const kchartApi = {
   isPwaMode,
   openSrsiCardFor,
   setSrsiAutoOn,
+  setSrsiAutoMode,
+  blockReasonText,
+  blockGuideText,
   getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,
   optimizeSrsiForTf,
@@ -6487,6 +6494,54 @@ function _autoMarginMode(side, config) {
   return side === 'short' ? 'usdt' : 'coin';
 }
 
+// v1.6.16：SRSI 自动交易「最近一次拦截原因」文案 + 可执行引导（静默拦截留痕，同类 bug 第三次）
+export const BLOCK_REASON_TEXT = {
+  'no-price': '无行情价格',
+  'not-optimized': '15m 未优选（硬约束禁止开仓）',
+  'regime-lowdrift': '低波阴跌闸门·禁开新仓',
+  'hotstop': '热停开（1h ATR 过高）',
+  'same-limit': '同向自动仓已达上限',
+  'pd-block': 'PD-A 危险拦截（predictDanger 命中）',
+  'danger-block': '防爆过滤·危险单已避开',
+  'rev-wait': '防爆反手·等待价格确认破位',
+  'coin-inventory-0': '币本位库存为 0',
+  'no-balance': '可用保证金为 0',
+  'amt-0': '计算仓位为 0（受单笔上限/缩放限制）',
+  'confirm-wait': '等待确认 bar（尚未满根数）'
+};
+export function blockReasonText(reason) { return BLOCK_REASON_TEXT[reason] || reason || '未知'; }
+// 针对每种拦截原因给可执行建议（纯文本，供交易面板 / 驾驶舱共用）
+export function blockGuideText(reason, sym) {
+  switch (reason) {
+    case 'coin-inventory-0': return insufficientMsg('coin', sym, 0);
+    case 'not-optimized': return '点击「一键优选」完成 15m 优选后自动交易才会启用。';
+    case 'same-limit': return '同向自动仓已达上限，等已有仓位平掉后再开。';
+    case 'regime-lowdrift': return '当前处于低波阴跌（regime 闸门），禁止开新仓；等行情转好。';
+    case 'hotstop': return '1h ATR 过高触发热停开，等波动回落后再开。';
+    case 'pd-block': return '危险信号命中，本笔已避开（防爆保护，非故障）。';
+    case 'danger-block': return '防爆过滤判定为危险单，已避开（非故障）。';
+    case 'rev-wait': return '防爆反手已挂起，等价格逆向突破确认阈值才开反手单。';
+    case 'no-balance': return '子账户可用保证金为 0，请在「模拟真实交易设置」里补充资金。';
+    case 'amt-0': return '受单笔上限/仓位缩放影响，本次计算仓位为 0（可提高基准%或放宽上限）。';
+    case 'confirm-wait': return '信号已捕捉，正在等待确认 bar 收盘（属正常降频，非拦截）。';
+    case 'no-price': return '暂无行情价格，等待数据恢复。';
+    default: return '';
+  }
+}
+// 切换 SRSI 自动交易本位模式（follow/usdt/coin）—— 库存为 0 时的一键引导入口，不静默改语义
+// fix(1.6.16)：新增 window 钩子 kchartSetSrsiAutoMode（供面板内联 onclick 调用）
+export function setSrsiAutoMode(mode) {
+  if (['follow', 'usdt', 'coin'].indexOf(mode) < 0) return;
+  cfg.srsiAutoMode = mode;
+  persist();
+  if (typeof document !== 'undefined') {
+    const mEl = document.getElementById('ktSrsiMode');
+    if (mEl) mEl.value = mode;
+  }
+  renderSrsiAutoPanel();
+  if (typeof renderQuickTrade === 'function') renderQuickTrade();
+}
+
 // 读取模拟交易设置（现货USDT池 / 各币本位库存），供现货回测初始化使用。
 // 多源合并：主系统实时 S.sim、PWA 的 pwa_sim_settings、主系统持久化 smartTrader→.sim
 // （用户在主系统「交易设置·模拟真实交易」填的币库存落在 smartTrader，PWA 也能复用）。
@@ -6679,10 +6734,13 @@ export function runSrsiAutoTrade(sym, inj) {
   const _danger = (side) => emaOpp2(side, emaTf);
   const _autoSameCount = (side) => (engine.S.pos || []).filter(p => p.sym === sym && p.side === side && p.src === 'srsiAuto' && !p.reverse).length;
   const _barT15 = () => { const tt = (getTFData(sym, '15m') || {}).t || []; return tt.length ? tt[tt.length - 1] : null; };
+  // v1.6.16：所有静默 return 留痕（同类静默拦截 bug 第三次）——记录最近一次拦截原因，供交易面板/驾驶舱显示
+  const _block = (side, reason) => { st.lastBlock = { side, reason, ts: Date.now() }; };
   const _tryOpen = (side, rev) => {
-    if (price == null || !_canTrade) return;
+    if (price == null) { _block(side, 'no-price'); return; }
+    if (!_canTrade) { _block(side, 'not-optimized'); return; }
     const isRev = !!rev;
-    if (_rg && _rg.state === 'lowdrift') { st.regimeBlocked = (st.regimeBlocked || 0) + 1; return; } // GOAL29：低波阴跌禁开新仓（含反手）
+    if (_rg && _rg.state === 'lowdrift') { st.regimeBlocked = (st.regimeBlocked || 0) + 1; _block(side, 'regime-lowdrift'); return; } // GOAL29：低波阴跌禁开新仓（含反手）
     // 热停开：1h ATR > 1.3×sma20(1h ATR) 时禁止新开普通单（反手仍允许），防高波动爆仓
     if (!isRev && cfg.srsiAutoHotStop) {
       const _c1h = (getTFData(sym, '1h') || {}).c;
@@ -6692,17 +6750,17 @@ export function runSrsiAutoTrade(sym, inj) {
         if (_n >= 20) {
           let _s = 0; for (let _j = _n - 20; _j < _n; _j++) _s += _atr[_j];
           const _sma = _s / 20;
-          if (_sma > 0 && _atr[_n - 1] > 1.3 * _sma) return;
+          if (_sma > 0 && _atr[_n - 1] > 1.3 * _sma) { _block(side, 'hotstop'); return; }
         }
       }
     }
     // 仅约束「自动」开仓的同向数量；反手单为独立类别，不计入也不受此上限约束
     const _same = _autoSameCount(side);
-    if (!isRev && _same >= cfg.srsiAutoMaxSame) return;
+    if (!isRev && _same >= cfg.srsiAutoMaxSame) { _block(side, 'same-limit'); return; }
     // GOAL31-D：PD-A 危险拦截（predictDanger 多因子≥2 命中→拦截该笔普通开仓；反手单不拦；默认 off=零行为变化；ctx 与 fork /tmp/goal31-btsa.mjs 同构）
     if (!isRev && cfg.srsiAutoPdBlockOn) {
       const _pdCtx = { dir: side, k15: bs ? bs.k : null, atrPct15: (_atr15last != null && price) ? _atr15last / price * 100 : null, priceVsEma1h: (_e1h != null && isFinite(_e1h) && _e1h !== 0) ? (price - _e1h) / _e1h * 100 : null, priceVsEma15: (_e15 != null && isFinite(_e15) && _e15 !== 0) ? (price - _e15) / _e15 * 100 : null, recentCandlePct: _recentPct, sameCount: _same, emaAgree: ['4h', '1h', '30m'].filter(tf => emaTf[tf] === side).length, emaOpp2Weak: _danger(side) };
-      if (predictDanger(_pdCtx).danger) { st.pdBlocked = (st.pdBlocked || 0) + 1; return; }
+      if (predictDanger(_pdCtx).danger) { st.pdBlocked = (st.pdBlocked || 0) + 1; _block(side, 'pd-block'); return; }
     }
     const mm = _autoMarginMode(side);
     const isCoin = mm === 'coin';
@@ -6729,7 +6787,11 @@ export function runSrsiAutoTrade(sym, inj) {
     const capCoin = cfg.srsiAutoOpenCapCoin > 0 ? cfg.srsiAutoOpenCapCoin : Infinity;
     if (isCoin) amt = Math.min(amt, capCoin, capUsdt / price);
     else amt = Math.min(amt, capUsdt, capCoin * price);
-    if (amt <= 0) return;
+    if (amt <= 0) {
+      // 分因留痕：币本位库存 0 / U本位保证金 0 / 受上限缩放后为 0
+      _block(side, (isCoin && !(avail > 0)) ? 'coin-inventory-0' : (!isCoin && !(avail > 0)) ? 'no-balance' : 'amt-0');
+      return;
+    }
     const _order = engine.placeOrder({ symbol: sym, side, lev: useLev, amt, marginMode: mm, reinvest: false, src: 'srsiAuto', reverse: isRev, sub: sub.id });
     try { if (typeof window !== 'undefined' && _order) { (window.__srsiLiveTrades = window.__srsiLiveTrades || []).push({ t: Date.now(), side, action: 'open', price, rev: isRev }); } } catch (e) {}
     if (cfg.srsiAutoAtrStop && _order && _order.extra && _order.extra.positionIndex != null) {
@@ -6740,6 +6802,7 @@ export function runSrsiAutoTrade(sym, inj) {
       const _posK = engine.S.pos[_order.extra.positionIndex];
       if (_posK && bs && bs.k != null) _posK.openK = bs.k; // 信号出口(实验旋钮)：记录开仓时 15m K，供中轨离场判定
     }
+    st.lastBlock = null;   // 成功开仓 → 清除最近拦截记录
     st.lastTradeTs = Date.now();
     // 信号提醒：真的下单了 → 推入事件流（与实盘成交一一对应）
     try { pushSignalEvent({ sym, kind: 'srsi-open', side, price, barT: _barT15(), src: 'engine', w: null, text: (isRev ? '防爆反手 · ' : '') + useLev + 'x 仓位' + effPct.toFixed(0) + '%' }); } catch (e) {}
@@ -6762,9 +6825,9 @@ export function runSrsiAutoTrade(sym, inj) {
     const _pd = predictDanger({ dir: side, k15: bs.k, atrPct15: (_atr15last != null && price) ? _atr15last / price * 100 : null, emaOpp2Weak: _emaDanger, priceVsEma1h: (_e1h != null && _e1h !== 0) ? (price - _e1h) / _e1h * 100 : null, priceVsEma15: (_e15 != null && _e15 !== 0) ? (price - _e15) / _e15 * 100 : null, recentCandlePct: _recentPct });
     if (cfg.srsiAutoDanger === 'revconf') {
       // 危险(EMA120 背离≥2)→挂起等确认；非危险→正常开
-      if (_emaDanger) { st.pendingRev[side] = { price, ts: Date.now() }; return; }
+      if (_emaDanger) { st.pendingRev[side] = { price, ts: Date.now() }; _block(side, 'rev-wait'); return; }
       const dec = resolveEntryDecision(side, { danger: false, hotStop: cfg.srsiAutoHotStop, dangerMode: 'revconf' });
-      if (!dec.open) return;
+      if (!dec.open) { _block(side, 'hotstop'); return; }
       _tryOpen(dec.side, dec.rev);
       return;
     }
@@ -6776,7 +6839,7 @@ export function runSrsiAutoTrade(sym, inj) {
       hotStop: cfg.srsiAutoHotStop,
       dangerMode: cfg.srsiAutoDanger
     });
-    if (!dec.open) return;
+    if (!dec.open) { _block(side, dec.blockedBy === 'hotstop' ? 'hotstop' : 'danger-block'); return; }
     _tryOpen(dec.side, dec.rev);
   };
   // GOAL27 确认 bar（实盘）：srsiAutoConfirmBars>0 时边沿事件挂起，待 N 根 15m 收盘仍满足带内条件才执行（0=关=立即执行，行为不变）
@@ -6826,11 +6889,13 @@ export function runSrsiAutoTrade(sym, inj) {
   const _t15live = (getTFData(sym, '15m') || {});
   const _ts15 = _t15live.t || [];
   const _effN0 = _effConfirmNow();
+  // v1.6.16：未优选时也留痕（原本 _canTrade=false 直接跳过边沿派发，无任何记录）
+  if (!_canTrade && (bs.edge === 'enterUpper' || bs.edge === 'enterLower')) _block(bs.edge === 'enterUpper' ? 'short' : 'long', 'not-optimized');
   if (_canTrade && bs.edge === 'enterUpper') {
-    if (_effN0 > 0 && _ts15.length) st.pendingConfirm = { side: 'short', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now(), n: _effN0 };
+    if (_effN0 > 0 && _ts15.length) { st.pendingConfirm = { side: 'short', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now(), n: _effN0 }; _block('short', 'confirm-wait'); }
     else if (_effN0 <= 0) _execEdgeLive('short');
   } else if (_canTrade && bs.edge === 'enterLower') {
-    if (_effN0 > 0 && _ts15.length) st.pendingConfirm = { side: 'long', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now(), n: _effN0 };
+    if (_effN0 > 0 && _ts15.length) { st.pendingConfirm = { side: 'long', barT: _ts15[_ts15.length - 1], count: 0, setTs: Date.now(), n: _effN0 }; _block('long', 'confirm-wait'); }
     else if (_effN0 <= 0) _execEdgeLive('long');
   }
   // 挂单确认推进（每秒检查；新 15m 根出现=前根收盘，检查刚收盘根最终 K/D 仍带内；超时作废）
@@ -6920,6 +6985,13 @@ export function renderSrsiAutoPanel() {
   const _dangerTxt = _dangerNow
     ? `        <div class="kt-auto-row kt-danger-note">🚨 危险信号：当前开仓方向与大周期(4h/1h/30m) EMA120 趋势背离≥2，易爆仓${cfg.srsiAutoDanger === 'reverse' ? '（模型键命中才反手，否则避开）' : cfg.srsiAutoDanger === 'filter' ? '（已避开）' : '（仅提醒）'}。</div>`
     : '';
+  // v1.6.16：最近一次拦截原因（静默拦截留痕）——解决「信号被捕捉但永不成交却无任何提示」
+  const _blk = st.lastBlock;
+  const _blkGuide = _blk ? blockGuideText(_blk.reason, cfg.symbol) : '';
+  const _blkTxt = _blk
+    ? `<div class="kt-auto-row kt-block-note">⛔ 最近拦截：${_blk.side === 'long' ? '开多' : '开空'} · ${blockReasonText(_blk.reason)} · ${new Date(_blk.ts).toLocaleTimeString('zh-CN', { hour12: false })}</div>`
+      + (_blkGuide ? `<div class="kt-auto-row kt-block-guide">💡 ${_blkGuide}${_blk.reason === 'coin-inventory-0' ? ' <button class="kt-mini-btn" onclick="window.kchartSetSrsiAutoMode&&window.kchartSetSrsiAutoMode(\'usdt\')">改用 U 本位开多</button>' : ''}</div>` : '')
+    : '';
   const _dataReady = ((getTFData(cfg.symbol, '15m') || {}).c || []).length >= 130;
   const _availOk = sub && ((sub.bal > 0) || ((sub.coins && sub.coins[cfg.symbol] > 0)));
   const _mmOk = aLong < cfg.srsiAutoMaxSame && aShort < cfg.srsiAutoMaxSame;
@@ -6951,7 +7023,8 @@ export function renderSrsiAutoPanel() {
     <div class="kt-auto-row">当前持仓 多${aLong + mLong}(自动${aLong}/人工${mLong}) · 空${aShort + mShort}(自动${aShort}/人工${mShort}) ｜ 仓位 多<b>${_longPct}%</b>/空<b>${_shortPct}%</b> · 杠杆 ${cfg.srsiAutoLev}x ｜ 盯盘 ${bandTxt}</div>
     ${cfg.srsiAutoCloseManual ? '<div class="kt-auto-row kt-auto-note">⚙ 自动可平人工单：开（反向人工单净盈利时也会被动平）</div>' : ''}
     ${auxWarn}
-    ${_dangerTxt}`;
+    ${_dangerTxt}
+    ${_blkTxt}`;
   el.classList.toggle('kt-danger', !!cfg.srsiAutoDangerAlarm && _dangerNow);
 }
 
