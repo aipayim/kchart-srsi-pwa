@@ -425,3 +425,17 @@ body.pwa #ktThumbBar button{min-height:36px;font-size:13px;border-radius:10px;fo
 body.pwa #ktThumbBar .kt-tb-panel{flex:0 0 56px}
 /* 安装条：叠在 Tab 栏之上（避免覆盖 Tab 栏并制造空隙）；安全区由 Tab 栏统一处理 */
 body.pwa .pwa-install{padding-bottom:10px;border-radius:0}
+
+/* ---------- 顶栏防压扁 + 手机上把缩放/清空移入设置页 ---------- */
+.pwa-appbar > *{flex-shrink:0}
+.pwa-appbar .pwa-spacer{flex:1 1 auto;min-width:0}
+.pwa-price{min-width:0}
+.pwa-price .v,.pwa-price .c{white-space:nowrap}
+@media (max-width:640px){
+  .pwa-appbar .pwa-zoom,.pwa-appbar #pwaClearBtn{display:none}   /* 窄屏顶栏空间不足：改由设置页提供 */
+}
+.pwa-zoomctl{display:inline-flex;align-items:center;gap:6px}
+.pwa-zoomctl button{background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:8px;
+  font-family:inherit;font-size:11px;padding:5px 10px;cursor:pointer}
+.pwa-zoomctl button:hover{border-color:var(--accent);color:var(--accent)}
+.pwa-zoomctl #pwaZoomInfo{min-width:38px;text-align:center;font-family:var(--mono)}

@@ -278,6 +278,7 @@ function showInstall(text) {
   txt.innerHTML = text;
   bar.hidden = false;
   positionInstallBar();
+  setTimeout(positionInstallBar, 400);   // Tab 栏布局完成后纠偏（首帧可能高度为 0）
   syncThumbForInstall();
 }
 function hideInstall() {
@@ -400,6 +401,9 @@ async function init() {
   if (zoomIn) zoomIn.addEventListener('click', () => setZoom(Math.min(ZOOM_MAX, +(zoom + ZOOM_STEP).toFixed(2))));
   if (zoomOut) zoomOut.addEventListener('click', () => setZoom(Math.max(ZOOM_MIN, +(zoom - ZOOM_STEP).toFixed(2))));
   if (zoomLbl) zoomLbl.addEventListener('click', () => setZoom(1));
+  // 设置页「通知与外观」卡用的缩放钩子（手机顶栏已隐藏缩放控件，避免窄屏被压扁）
+  globalThis.pwaZoomStep = (d) => setZoom(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, +(zoom + d * ZOOM_STEP).toFixed(2))));
+  globalThis.pwaZoomReset = () => setZoom(1);
   try { const z = parseFloat(localStorage.getItem('pwa_zoom')); if (z) zoom = z; } catch (e) {}
   applyZoom();
   if (symInput) symInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') addSymbol(symInput.value); });
@@ -518,6 +522,7 @@ function initPwaTrade() {
     });
     if (api && api.checkUserTpSl && localPE) api.checkUserTpSl(localPE);
     if (api && api.renderQuickTrade) api.renderQuickTrade();
+    positionInstallBar();   // 安装条位置每秒重算（首次 showInstall 时 Tab 栏可能尚未布局完 → bottom 会算成 0，被 Tab 栏盖住但 ktStackOffset 仍计其高度 → 拇指条被顶高、中间露图表）
     // 纪律/速览面板实时刷新（每秒，_discSig/_ovSig 守卫下轻量；实时价每 tick 更新）
     const wrap = document.getElementById('kchartDiscWrap');
     if (api && api.refreshPanels && wrap && !wrap.classList.contains('closed')) api.refreshPanels();

@@ -466,7 +466,9 @@ function initSettings() {
       '<div class="setting-row"><label>主题</label><span class="pwa-seg"><button type="button" class="on" disabled>霓虹驾驶舱（A）</button></span></div>' +
       '<div class="setting-row"><label>动效 Motion UI</label><select id="pwaMotionSel"><option value="1">开启</option><option value="0">关闭</option></select></div>' +
       '<div class="setting-row"><label>信号通知</label><select id="pwaNotifSel"><option value="0">关闭</option><option value="1">开启（需浏览器授权）</option></select></div>' +
-      '<div class="setting-row"><label>页面缩放</label><span class="pwa-dim" id="pwaZoomInfo"></span><button type="button" id="pwaZoomReset">复位 100%</button></div>' +
+      '<div class="setting-row"><label>页面缩放</label><span class="pwa-zoomctl">' +
+        '<button type="button" id="pwaZoomDown">－</button><span class="pwa-dim" id="pwaZoomInfo">100%</span><button type="button" id="pwaZoomUp">＋</button><button type="button" id="pwaZoomReset2">复位</button></span></div>' +
+      '<div class="setting-row"><label>本地数据</label><button type="button" id="pwaClearLocal">清空本地设置并重建</button></div>' +
       '<div class="setting-row"><label>版本</label><span class="pwa-dim mono" id="pwaVerInfo"></span></div>';
     const ms = $('pwaMotionSel');
     ms.value = motionOn ? '1' : '0';
@@ -475,12 +477,25 @@ function initSettings() {
     ns.value = notifOn ? '1' : '0';
     ns.addEventListener('change', () => setCockpitNotif(ns.value === '1'));
     const zr = $('pwaZoomReset');
-    zr.addEventListener('click', () => { const l = $('pwaZoomLbl'); if (l) l.click(); });
+    if (zr) zr.addEventListener('click', () => { const l = $('pwaZoomLbl'); if (l) l.click(); });
+    const zd = $('pwaZoomDown');
+    if (zd) zd.addEventListener('click', () => { if (globalThis.pwaZoomStep) globalThis.pwaZoomStep(-1); syncZoomInfo(); });
+    const zu = $('pwaZoomUp');
+    if (zu) zu.addEventListener('click', () => { if (globalThis.pwaZoomStep) globalThis.pwaZoomStep(1); syncZoomInfo(); });
+    const zr2 = $('pwaZoomReset2');
+    if (zr2) zr2.addEventListener('click', () => { if (globalThis.pwaZoomReset) globalThis.pwaZoomReset(); syncZoomInfo(); });
+    const cl = $('pwaClearLocal');
+    if (cl) cl.addEventListener('click', () => { if (globalThis.pwaClearAll) globalThis.pwaClearAll(); });
     const vi = $('pwaVerInfo');
     if (vi) vi.textContent = 'v' + APP_VERSION + ' · ' + String(APP_BUILD_TIME).slice(0, 10);
   }
+  syncZoomInfo();
+}
+function syncZoomInfo() {
   const zi = $('pwaZoomInfo');
-  if (zi) { const l = $('pwaZoomLbl'); zi.textContent = l ? l.textContent : ''; }
+  if (!zi) return;
+  const l = $('pwaZoomLbl');
+  zi.textContent = l ? l.textContent : '';
 }
 
 // ---------- 手机：KPI + 币对条 滚动自动隐藏（仅窄屏 CSS 生效） ----------
