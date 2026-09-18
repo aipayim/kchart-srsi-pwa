@@ -861,24 +861,42 @@ export function setPwaMode(v) { _pwaMode = !!v; }
 export function isPwaMode() { return _pwaMode; }
 
 function _readJson(key) { try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; } }
-// 配额超限时清理优化历史缓存并原地重试，避免静默失败导致配置/参数无法持久化。
+// 配额超限时清理**可重建的派生键**并原地重试，避免静默失败导致配置/参数无法持久化。
 // 红线：任何配置/数据的本地持久化都不能因配额被静默吞掉（否则后续接交易所真实交易数据同样会丢）。
+// v1.6.18：原实现只清 `srsiOptHist:*`；用户实测配额爆满时仍失败（真凶常是回测缓存/日志）
+//   → 扩展为清理所有派生/可重建键（回测结果/原始K线/资金费/信号日志/驾驶舱事件/规则监测快照）。
+//   绝不清理用户配置与账户数据（smartTrader_kchart / pwa_srsi_opt / pwa_srsi_auto / pwa_paper_state / smartTrader）。
+const _REGEN_KEYS = ['smartTrader_kchart_bt', 'smartTrader_kchart_bt_raw', 'smartTrader_kchart_bt_fund', 'pwa_signal_events', 'smartTrader_cockpitEvents', 'smartTrader_ruleMonitor'];
 function pruneOptHistory() {
   try {
     const toDel = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.indexOf('srsiOptHist:') === 0) toDel.push(k);
+      if (!k) continue;
+      if (k.indexOf('srsiOptHist:') === 0 || _REGEN_KEYS.indexOf(k) >= 0) toDel.push(k);
     }
     toDel.forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
   } catch (e) {}
+}
+// 按体积列出最大的 localStorage 键（配额失败时打日志，便于定位真凶）
+export function storageTop(n) {
+  const arr = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      const v = localStorage.getItem(k) || '';
+      arr.push({ k, kb: Math.round(v.length / 1024) });
+    }
+  } catch (e) {}
+  arr.sort((a, b) => b.kb - a.kb);
+  return arr.slice(0, n || 8);
 }
 function _isQuotaErr(e) { return !!e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014); }
 export function _safeSetItem(key, str) {
   try { localStorage.setItem(key, str); return true; }
   catch (e) {
     if (_isQuotaErr(e)) { pruneOptHistory(); try { localStorage.setItem(key, str); return true; } catch (_) {} }
-    console.error('[SRSI-PERSIST] 写入失败(已尝试清理配额):', key, (e && e.name) || e);
+    try { console.error('[SRSI-PERSIST] 写入失败(已尝试清理配额):', key, (e && e.name) || e, '| 最大键:', JSON.stringify(storageTop(8))); } catch (_) {}
     return false;
   }
 }
@@ -3855,7 +3873,12 @@ function drawMain(ctx, sym, tf, H) {
       window.__manualSignal = manualSignal({ alphaDir, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, emaFast: pm16.emaFast, emaSlow: pm16.emaSlow });
       // GOAL28：行动卡数据（带界用 resolveEntryBands 的实际带，含用户自定义带；α权重 aw16 供显示）
       const _eb28 = resolveEntryBands(cfg);
-      window.__actionCard = actionCardData({ alphaDir, alphaW: aw16, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, upper: _eb28.upper, lower: _eb28.lower });
+      // v1.6.18：基石信号数据日（已收盘日线）+ 日内趋势（1h 优先、回退 15m）→ 行动卡标注 / 逆势警告
+      const _asig28 = (typeof window !== 'undefined' && window.__alphaSignalsBySym && window.__alphaSignalsBySym[sym16]) || (typeof window !== 'undefined' ? window.__alphaSignals : null) || null;
+      const _d1h28 = klineDirOf(sym16, '1h');
+      const _intradayDir = _d1h28 || klineDirOf(sym16, '15m');
+      const _intradayTf = _d1h28 ? '1h' : '15m';
+      window.__actionCard = actionCardData({ alphaDir, alphaW: aw16, k15, d15, prevK15, price: c[c.length - 1], atr: Array.isArray(atr15) ? (atr15[atr15.length - 1] || null) : atr15, upper: _eb28.upper, lower: _eb28.lower, alphaDataT: _asig28 && _asig28.d1T, intradayDir: _intradayDir, intradayTf: _intradayTf });
       window.__manualSigErr = null;
     } catch (e) { window.__manualSigErr = String(e && e.message || e).slice(0, 80); if (!window.__manualSigWarned) { window.__manualSigWarned = 1; console.log('[SIG-CARD] 计算失败:', window.__manualSigErr); } }
   }
@@ -3882,27 +3905,36 @@ function drawMain(ctx, sym, tf, H) {
       ? '入场 ' + fmtP(ac.price) + ' / 止损 ' + fmtP(ac.stop) + ' / 目标 ' + fmtP(ac.target) + ' · 仓 卫星 10-15%×5-7x'
       : '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x';
     const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m 带规则';
-    const l3 = '基石 α' + dirTxt + ' ' + Math.abs(ac.alphaW * 100).toFixed(0) + '% · ' + bandTxt;
+    // v1.6.18：基石方向标注「已收盘日线数据日」，避免把日线方向误读为实时方向
+    const _d1Txt = ac.alphaDataT ? ('日线' + new Date(ac.alphaDataT).toISOString().slice(5, 10) + '收盘') : '';
+    const l3 = '基石 α' + dirTxt + ' ' + Math.abs(ac.alphaW * 100).toFixed(0) + '%' + (_d1Txt ? '(' + _d1Txt + ')' : '') + ' · ' + bandTxt;
+    // v1.6.18：基石方向与日内趋势（1h/15m EMA）相反 → 逆势警告
+    const warnLine = ac.trendConflict ? ('⚠ 逆日内趋势（' + (ac.intradayTf || '1h') + ' ' + (ac.intradayDir === 'long' ? '↑' : '↓') + '）') : '';
     ctx.textAlign = 'left';
     ctx.font = '9px sans-serif';
-    let w28 = Math.max(Math.max(ctx.measureText(l0).width, ctx.measureText(l3).width), Math.max(ctx.measureText(ruleTxt).width, ctx.measureText(entryTxt).width)) + 14;
+    let w28 = Math.max(Math.max(ctx.measureText(l0).width, ctx.measureText(l3).width), Math.max(ctx.measureText(ruleTxt).width, ctx.measureText(entryTxt).width));
+    if (warnLine) w28 = Math.max(w28, ctx.measureText(warnLine).width);
+    w28 += 14;
     ctx.font = 'bold 15px sans-serif';
     w28 = Math.max(w28, ctx.measureText(bigTxt).width + 14);
     // GOAL19 基准：Y=主图区（PAD_T→mainBottom）中点（外层已有 mainBottom，勿重复声明）
     const cy28 = (PAD_T + mainBottom) / 2 - 40;
+    const h28 = warnLine ? 92 : 80;
     ctx.fillStyle = 'rgba(16,22,30,.8)';
-    ctx.fillRect(PAD_L + 6, cy28, w28, 80);
-    ctx.strokeStyle = col; ctx.globalAlpha = .65; ctx.strokeRect(PAD_L + 6, cy28, w28, 80); ctx.globalAlpha = 1;
+    ctx.fillRect(PAD_L + 6, cy28, w28, h28);
+    ctx.strokeStyle = col; ctx.globalAlpha = .65; ctx.strokeRect(PAD_L + 6, cy28, w28, h28); ctx.globalAlpha = 1;
     ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(160,175,190,.9)';
     ctx.fillText(l0, PAD_L + 13, cy28 + 13);
     ctx.font = 'bold 15px sans-serif'; ctx.fillStyle = col;
     ctx.fillText(bigTxt, PAD_L + 13, cy28 + 33);
     ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(230,238,245,.9)';
     ctx.fillText(l3, PAD_L + 13, cy28 + 49);
+    let _yy28 = cy28 + 62;
+    if (warnLine) { ctx.fillStyle = '#f59e0b'; ctx.fillText(warnLine, PAD_L + 13, _yy28); _yy28 += 13; }
     ctx.fillStyle = 'rgba(200,212,224,.85)';
-    ctx.fillText(ruleTxt, PAD_L + 13, cy28 + 62);
+    ctx.fillText(ruleTxt, PAD_L + 13, _yy28); _yy28 += 13;
     ctx.fillStyle = ac.stop != null ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
-    ctx.fillText(entryTxt, PAD_L + 13, cy28 + 75);
+    ctx.fillText(entryTxt, PAD_L + 13, _yy28);
     ctx.restore();
   }
   // 2026-09-18 审计修复：本块原为「有信号/Alpha live 时才进入」——导致引擎未启动时主图状态带**完全空白**，
@@ -4844,7 +4876,7 @@ export function manualSignal({ alphaDir, k15, d15, prevK15, price, atr, emaFast,
 // 规则语义与 GOAL16-B 长窗验证版一致：K 从 <lower 升破 ≥lower → upExit(规则开多)；从 >upper 跌破 ≤upper → dnExit(规则开空)。
 // 方向券（GOAL16-B 实锤：反向信号免成本皆负 → 反向仅提示勿动）：交叉方向=Alpha 同向 → enter(绿)；反向 → reverse(灰)；
 // 基石中性(无方向) → noBase(灰)；无交叉 → idle(等待)。止损=1.5×ATR、目标=2×ATR（GOAL28 定版，区别于 manualSignal 的 3×ATR）。
-export function actionCardData({ alphaDir, alphaW, k15, d15, prevK15, price, atr, upper, lower }) {
+export function actionCardData({ alphaDir, alphaW, k15, d15, prevK15, price, atr, upper, lower, alphaDataT, intradayDir, intradayTf }) {
   if (!Number.isFinite(price) || price <= 0) return null;
   const u = Number.isFinite(upper) && upper > 0 ? upper : 80;
   const lo = Number.isFinite(lower) && lower > 0 ? lower : 20;
@@ -4861,11 +4893,18 @@ export function actionCardData({ alphaDir, alphaW, k15, d15, prevK15, price, atr
   const atrOk = Number.isFinite(atr) && atr > 0;
   const stop = crossDir && atrOk ? (crossDir === 'long' ? price - 1.5 * atr : price + 1.5 * atr) : null;
   const target = crossDir && atrOk ? (crossDir === 'long' ? price + 2 * atr : price - 2 * atr) : null;
+  const aDir = alphaDir === 'long' || alphaDir === 'short' ? alphaDir : null;
+  const iDir = intradayDir === 'long' || intradayDir === 'short' ? intradayDir : null;
   return {
     cross, crossDir, inBand, verdict,
-    alphaDir: alphaDir === 'long' || alphaDir === 'short' ? alphaDir : null,
+    alphaDir: aDir,
     alphaW: Number.isFinite(alphaW) ? alphaW : 0,
-    side: crossDir, stop, target, price, upper: u, lower: lo
+    side: crossDir, stop, target, price, upper: u, lower: lo,
+    // v1.6.18：基石信号所依据的已收盘日线时间 + 日内趋势（供行动卡标注数据日 / 逆势警告）
+    alphaDataT: (alphaDataT != null && Number.isFinite(+alphaDataT)) ? +alphaDataT : null,
+    intradayDir: iDir,
+    intradayTf: (intradayTf === '15m' || intradayTf === '1h') ? intradayTf : null,
+    trendConflict: !!(aDir && iDir && aDir !== iDir)
   };
 }
 
@@ -5461,6 +5500,7 @@ export const kchartApi = {
   setSrsiAutoMode,
   blockReasonText,
   blockGuideText,
+  storageTop,
   getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,
   optimizeSrsiForTf,

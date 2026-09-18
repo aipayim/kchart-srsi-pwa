@@ -2,7 +2,7 @@
 // 不依赖 legacy.js / main.js，仅复用共享的 kchart.js（与主系统同一份 K线分析代码）
 import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈希化并注入 kchart.html 的 <head>
 import './pwa.css';     // PWA 重构外壳样式（规则全部限定 body.pwa，主系统零影响；须在 styles.css 之后以覆盖）
-import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset } from '../tech2/kchart.js';
+import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset, _safeSetItem } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
@@ -488,8 +488,9 @@ function loadPwaPaper() {
   } catch (e) {}
 }
 function savePwaPaper() {
+  // v1.6.18：走 _safeSetItem（配额失败时清理派生键后重试 + 显式报错），不再静默吞掉配额异常（AGENTS §5.30 红线）
   try {
-    localStorage.setItem(PWA_PAPER_KEY, JSON.stringify({
+    _safeSetItem(PWA_PAPER_KEY, JSON.stringify({
       subs: globalThis.S.subs || [], pos: globalThis.S.pos || [],
       closed: globalThis.S.closed || [], realized: globalThis.S.realized || 0
     }));

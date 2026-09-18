@@ -378,7 +378,10 @@ export async function updateAlphaSignal(sym, tf, force = false) {
         factors = { carry: f.carryW * scale, momo: f.momoW * scale, brk: f.brkW * scale, sum: f.sum, wRaw: f.w, scale, barT: t[lastFlipIdx], barIdx: lastFlipIdx };
       } catch (e) { factors = null; }
     }
-    return publishAlphaSignal({ sym, tf, ts: t, ws: r.ws, flips, lastW: posW, factors, updatedT: Date.now() });
+    // v1.6.18：当前 Alpha 方向所依据的「已收盘日线」时间（供行动卡标注数据日，防用户把日线方向误读为实时方向）
+    let d1T = null;
+    try { const ad2 = alignClosed(d1.t, 86400e3, t); const j2 = ad2[ad2.length - 1]; d1T = (j2 >= 0 && d1.t[j2] != null) ? d1.t[j2] : null; } catch (e) { d1T = null; }
+    return publishAlphaSignal({ sym, tf, ts: t, ws: r.ws, flips, lastW: posW, factors, d1T, updatedT: Date.now() });
   } catch (e) { return null; }
 }
 

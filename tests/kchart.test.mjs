@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3304,6 +3304,16 @@ ok('回测条件确认含危险信号防爆行', _cond.text.indexOf('危险信�
   ok('actionCard: α方向非法值→null', actionCardData({ alphaDir: 'x', price: 100 }).alphaDir === null);
   ok('actionCard: α权重非法→0', actionCardData({ price: 100, alphaW: NaN }).alphaW === 0);
   ok('actionCard: α权重透传', actionCardData({ price: 100, alphaW: 0.53 }).alphaW === 0.53);
+  // v1.6.18：基石数据日 + 日内趋势 + 逆势警告
+  ok('actionCard: alphaDataT 透传', actionCardData({ price: 100, alphaDataT: 1789603200000 }).alphaDataT === 1789603200000);
+  ok('actionCard: alphaDataT 非法→null', actionCardData({ price: 100, alphaDataT: 'x' }).alphaDataT === null && actionCardData({ price: 100 }).alphaDataT === null);
+  ok('actionCard: intradayDir 透传', actionCardData({ price: 100, intradayDir: 'long', intradayTf: '1h' }).intradayDir === 'long');
+  ok('actionCard: intradayDir 非法→null', actionCardData({ price: 100, intradayDir: 'x' }).intradayDir === null);
+  ok('actionCard: intradayTf 仅允许 15m/1h', actionCardData({ price: 100, intradayTf: '4h' }).intradayTf === null && actionCardData({ price: 100, intradayTf: '15m' }).intradayTf === '15m');
+  ok('actionCard: α多+日内下→逆势 true', actionCardData({ price: 100, alphaDir: 'long', intradayDir: 'short' }).trendConflict === true);
+  ok('actionCard: α空+日内上→逆势 true', actionCardData({ price: 100, alphaDir: 'short', intradayDir: 'long' }).trendConflict === true);
+  ok('actionCard: α多+日内上→不逆势', actionCardData({ price: 100, alphaDir: 'long', intradayDir: 'long' }).trendConflict === false);
+  ok('actionCard: 缺日内/α中性→不逆势', actionCardData({ price: 100, alphaDir: 'long' }).trendConflict === false && actionCardData({ price: 100, alphaDir: null, intradayDir: 'long' }).trendConflict === false);
 }
 
 // ===== GOAL24: 拇指条强制两段确认（kchartTradeOpen/Close forceArm）=====
@@ -3645,6 +3655,39 @@ console.log('\n[kchart: SRSI 领先模式 / 响应速度]');
     return r === null && cfg.srsiLead['5m'] !== true;
   })());
   delete globalThis.S; globalThis.window = {};
+}
+
+// ===== v1.6.18: _safeSetItem 配额自愈 + storageTop =====
+{
+  console.log('\n[kchart: v1.6.18 配额自愈 _safeSetItem/storageTop]');
+  const _ls2 = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls2 ? _ls2[k] : null),
+    setItem: (k, v) => { if (globalThis.__quotaOnce) { globalThis.__quotaOnce = false; const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; } _ls2[k] = String(v); },
+    removeItem: (k) => { delete _ls2[k]; },
+    get length() { return Object.keys(_ls2).length; },
+    key: (i) => Object.keys(_ls2)[i] != null ? Object.keys(_ls2)[i] : null,
+  };
+  _ls2['srsiOptHist:v8:X'] = 'x'.repeat(1000);
+  _ls2['smartTrader_kchart_bt'] = 'y'.repeat(1000);
+  _ls2['pwa_signal_events'] = 'z'.repeat(500);
+  _ls2['smartTrader_ruleMonitor'] = 'r'.repeat(400);
+  _ls2['pwa_srsi_opt'] = '{"BTCUSDT":1}';   // 用户配置：绝不能被清
+  globalThis.__quotaOnce = true;
+  const okWrite = _safeSetItem('smartTrader_kchart', '{"a":1}');
+  ok('配额一次→自愈后写入成功', okWrite === true && _ls2['smartTrader_kchart'] === '{"a":1}');
+  ok('清理派生键: srsiOptHist 已删', !('srsiOptHist:v8:X' in _ls2));
+  ok('清理派生键: 回测缓存已删', !('smartTrader_kchart_bt' in _ls2));
+  ok('清理派生键: 信号日志已删', !('pwa_signal_events' in _ls2));
+  ok('清理派生键: 规则监测快照已删', !('smartTrader_ruleMonitor' in _ls2));
+  ok('用户配置 pwa_srsi_opt 保留', _ls2['pwa_srsi_opt'] === '{"BTCUSDT":1}');
+  const top = storageTop(3);
+  ok('storageTop 返回数组且按体积降序', Array.isArray(top) && top.length >= 1 && (top.length < 2 || top[0].kb >= top[top.length - 1].kb));
+  // 永久失败 → 返回 false 且不抛
+  globalThis.localStorage.setItem = () => { const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; };
+  let threw = false, res;
+  try { res = _safeSetItem('k', 'v'); } catch (e) { threw = true; }
+  ok('永久配额失败→返回 false 且不抛', threw === false && res === false);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
