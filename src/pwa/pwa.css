@@ -385,3 +385,32 @@ body.pwa .kchart-settings .setting-row button:hover{border-color:var(--accent);c
 body.pwa .kchart-settings .kchart-ovhead{border-bottom:1px solid var(--border)}
 body.pwa .kchart-settings.closed .kchart-ovhead{border-bottom:none}
 body.pwa .kchart-settings-body{max-height:none;overflow:visible}
+
+/* ============================================================================
+   手机顶部压缩 + 滚动自动隐藏（只影响 PWA；桌面不变）
+   ============================================================================ */
+.pwa-kpis{max-height:260px;transition:max-height .3s ease,opacity .22s ease,padding .3s ease}
+.pwa-symbar{max-height:170px;transition:max-height .3s ease,opacity .22s ease,padding .3s ease}
+@media (max-width:900px){
+  .pwa-app.pwa-top-collapsed .pwa-kpis,
+  .pwa-app.pwa-top-collapsed .pwa-symbar{
+    max-height:0!important;opacity:0;overflow:hidden;padding-top:0!important;padding-bottom:0!important;margin:0!important
+  }
+}
+/* 手机：顶栏单行化 */
+@media (max-width:640px){
+  .pwa-appbar{flex-wrap:nowrap;padding:6px 10px;gap:6px}
+  .pwa-brand span:last-child{display:none}          /* 隐藏品牌文字，仅留 ◆ 标记 */
+  .pwa-brand .mk{width:22px;height:22px;font-size:11px;border-radius:6px}
+  .pwa-sym{padding:3px 8px;gap:6px}
+  .pwa-sym b{font-size:11.5px}
+  .pwa-sym .pwa-dim{display:none}
+  .pwa-price{gap:6px}
+  .pwa-price .v{font-size:15px}
+  .pwa-price .c{font-size:10px}
+  .pwa-icobtn{height:28px;min-width:28px;padding:0 6px;font-size:12px}
+  .pwa-zoom button{padding:4px 7px;font-size:12px}
+  .pwa-zoom #pwaZoomLbl{min-width:32px;font-size:10px;padding:0 3px}
+  .pwa-kpis{padding-top:8px}
+  .pwa-kpi{min-width:126px}
+}

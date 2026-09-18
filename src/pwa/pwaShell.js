@@ -62,6 +62,7 @@ export function goTab(tab, opts) {
   try { localStorage.setItem(TAB_KEY, tab); } catch (e) {}
   const content = $('pwaContent');
   if (content && !(opts && opts.keepScroll)) content.scrollTop = 0;
+  setTopCollapsed(false);   // 切页恢复顶部
   const api = globalThis.kchartApi;
   if (tab === 'kline') {
     if (api && api.render) { try { api.render(); } catch (e) {} }
@@ -152,12 +153,17 @@ function renderKpis(pillar, rd, alphaSig) {
     { k: '卫星确认 · ' + (rd.band === 'upper' ? '上带' : rd.band === 'lower' ? '下带' : '中性'), v: rd.confirmN + '/' + rd.confirmNeed, u: '', c: '#22d3ee', ring: confPct },
     { k: '距上次调仓', v: pillar.ageTxt, u: '', c: '#7c8aa3', spark: (alphaSig && alphaSig.ws) || [] }
   ];
-  box.innerHTML = kpis.map((x, i) => `
+  const sig = JSON.stringify(kpis.map(x => [x.k, x.v, x.u, x.c]));
+  if (box.__sig !== sig) {
+    box.__sig = sig;
+    box.innerHTML = kpis.map((x, i) => `
     <div class="pwa-card pwa-kpi">
       <div class="k"><span class="pwa-dot" style="background:${x.c};animation:none;box-shadow:none"></span>${x.k}</div>
       <div class="v" style="color:${x.c}">${x.v}${x.u ? '<small>' + x.u + '</small>' : ''}</div>
       <div class="sp"><canvas class="spark" data-i="${i}" data-kind="${x.ring !== undefined ? 'ring' : 'spark'}" data-c="${x.c}"></canvas></div>
     </div>`).join('');
+  }
+  // 画布每 tick 重绘（元素在签名未变时保留，不会闪）；滚动隐藏时宽度仍在，照常绘制
   box.querySelectorAll('canvas.spark').forEach(cv => {
     const i = +cv.dataset.i, kind = cv.dataset.kind, c = cv.dataset.c;
     const p = prep(cv); if (!p) return;
@@ -477,6 +483,26 @@ function initSettings() {
   if (zi) { const l = $('pwaZoomLbl'); zi.textContent = l ? l.textContent : ''; }
 }
 
+// ---------- 手机：KPI + 币对条 滚动自动隐藏（仅窄屏 CSS 生效） ----------
+function setTopCollapsed(on) {
+  const app = $('pwaApp');
+  if (!app) return;
+  app.classList.toggle('pwa-top-collapsed', !!on);
+}
+function bindTopAutoHide() {
+  const scroller = $('pwaContent');
+  if (!scroller || scroller.__topBound) return;
+  scroller.__topBound = true;
+  let lastY = scroller.scrollTop || 0;
+  scroller.addEventListener('scroll', () => {
+    const y = scroller.scrollTop;
+    if (y <= 24) { setTopCollapsed(false); lastY = y; return; }   // 回顶：立即显示
+    if (y - lastY > 8) setTopCollapsed(true);                     // 向下：收起
+    else if (lastY - y > 8) setTopCollapsed(false);               // 向上：显示
+    lastY = y;
+  }, { passive: true });
+}
+
 // ---------- 主刷新 ----------
 export function refreshShell() {
   if (typeof document === 'undefined') return;
@@ -506,6 +532,7 @@ export function initPwaShell() {
   if (typeof document === 'undefined') return;
   bindNav();
   bindTrade();
+  bindTopAutoHide();
   initSettings();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
