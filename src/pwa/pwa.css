@@ -414,3 +414,14 @@ body.pwa .kchart-settings-body{max-height:none;overflow:visible}
   .pwa-kpis{padding-top:8px}
   .pwa-kpi{min-width:126px}
 }
+
+/* ============================================================================
+   手机拇指交易条：紧凑化 + 去掉与 Tab 栏重复的安全区留白（消除「隔空」）
+   ============================================================================ */
+body.pwa #ktThumbBar{padding:5px 8px 6px;gap:5px;background:rgba(7,11,20,.94);backdrop-filter:blur(10px)}
+body.pwa #ktThumbStatus{font-size:10px;line-height:1.25}
+body.pwa #ktThumbBtns{gap:6px}
+body.pwa #ktThumbBar button{min-height:36px;font-size:13px;border-radius:10px;font-weight:700;padding:0 4px}
+body.pwa #ktThumbBar .kt-tb-panel{flex:0 0 56px}
+/* 安装条：叠在 Tab 栏之上（避免覆盖 Tab 栏并制造空隙）；安全区由 Tab 栏统一处理 */
+body.pwa .pwa-install{padding-bottom:10px;border-radius:0}

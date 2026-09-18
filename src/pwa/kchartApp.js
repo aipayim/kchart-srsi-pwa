@@ -277,12 +277,22 @@ function showInstall(text) {
   if (!bar || !txt) return;
   txt.innerHTML = text;
   bar.hidden = false;
+  positionInstallBar();
   syncThumbForInstall();
 }
 function hideInstall() {
   const bar = document.getElementById('pwaInstall');
   if (bar) bar.hidden = true;
+  positionInstallBar();
   syncThumbForInstall();
+}
+// PWA：安装条叠在底部 Tab 栏之上（否则它会盖住 Tab 栏并让拇指条下方出现空隙）；安全区由 Tab 栏统一处理
+function positionInstallBar() {
+  const bar = document.getElementById('pwaInstall');
+  if (!bar) return;
+  if (bar.hidden) { bar.style.bottom = ''; return; }
+  const tab = document.getElementById('pwaTabBar');
+  bar.style.bottom = ((tab && tab.offsetHeight) || 0) + 'px';
 }
 // GOAL26：拇指条底部叠层偏移 = Tab条高 + 安装条可见高（与 kchart.js ktStackOffset 同一公式，此处直接复用）
 function syncThumbForInstall() {
@@ -315,6 +325,7 @@ function setupInstallPrompt() {
     showInstall('📲 把本页安装到<b>主屏 / 桌面</b>，像 App 一样离线打开 K线分析');
   });
   window.addEventListener('appinstalled', () => hideInstall());
+  window.addEventListener('resize', positionInstallBar);
   // Safari / iOS 无该事件：给手动提示
   if (!('onbeforeinstallprompt' in window)) {
     const h = safariHint();
