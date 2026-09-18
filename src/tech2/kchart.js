@@ -5581,6 +5581,20 @@ function syncThumbBar() {
     tb.querySelector('#ktTbOrders').addEventListener('click', () => openOrderManager({ tab: 'positions' }));
   }
   tb.style.display = 'flex';
+  // 2026-09-18：PWA 下把拇指条**并入底部栈**（插到 #pwaTabBar 之前，随文档流排布），
+  // 彻底消除「拇指条与底部导航之间的空隙」——此前用 position:fixed + ktStackOffset 计算偏移，
+  // 在真机上会被 zoom / safe-area / 安装条高度 / 视口高度差异算出空隙（headless 无 zoom/safe-area 所以复现不出）。
+  // 主系统无 #pwaTabBar，保持原 fixed 行为不变。
+  const _tabHost = document.getElementById('pwaTabBar');
+  const _pwaStack = (_tabHost && _tabHost.parentElement) ? _tabHost.parentElement : null;
+  if (_pwaStack) {
+    if (tb.parentElement !== _pwaStack || tb.nextElementSibling !== _tabHost) _pwaStack.insertBefore(tb, _tabHost);
+    tb.style.position = 'relative'; tb.style.left = 'auto'; tb.style.right = 'auto'; tb.style.bottom = 'auto';
+  } else {
+    if (tb.parentElement !== document.body) document.body.appendChild(tb);
+    tb.style.position = 'fixed'; tb.style.left = '0'; tb.style.right = '0';
+    tb.style.bottom = ktStackOffset() + 'px';
+  }
   const sym = cfg.symbol;
   const pos = ((_tradeEngine.S && _tradeEngine.S.pos) || []).find(p => p.sym === sym);
   const price = (_tradeEngine.S && _tradeEngine.S.prices && _tradeEngine.S.prices[sym] && _tradeEngine.S.prices[sym].last) || null;
@@ -5604,7 +5618,6 @@ function syncThumbBar() {
   if (bL) { bL.textContent = armLong ? '确认开多?' : '▲ 开多'; bL.classList.toggle('armed', armLong); }
   if (bS) { bS.textContent = armShort ? '确认开空?' : '▼ 开空'; bS.classList.toggle('armed', armShort); }
   if (bC) { bC.textContent = armClose ? '确认平仓?' : '平仓'; bC.classList.toggle('armed', armClose); }
-  tb.style.bottom = ktStackOffset() + 'px';   // GOAL26：统一叠层公式（Tab条+安装条），每秒主循环校正
 }
 
 // GOAL9：把最近一次回测的参数快照应用到实盘自动交易（bt=_btCfgLoad()，eff=_btOverlayFor 产物）

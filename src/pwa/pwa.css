@@ -265,8 +265,9 @@ body.pwa a{color:var(--accent)}
 #pwaBtSlot{display:flex;flex-direction:column;gap:10px}
 
 /* ---------- 触屏：内容区底部为拇指条/安装条留白 ---------- */
-@media (pointer:coarse){.pwa-content{padding-bottom:104px}}
-@media (max-width:640px){.pwa-content{padding-bottom:96px}}
+/* 拇指条已并入底部栈（占文档流空间）→ 内容区不再需要为悬浮条预留 padding-bottom */
+@media (pointer:coarse){.pwa-content{padding-bottom:8px}}
+@media (max-width:640px){.pwa-content{padding-bottom:8px}}
 
 /* 主图叠加 chips 独占一行（与周期/子图同卡时换行显示） */
 body.pwa .kchart-maintools{flex-basis:100%;width:100%}
@@ -418,7 +419,11 @@ body.pwa .kchart-settings-body{max-height:none;overflow:visible}
 /* ============================================================================
    手机拇指交易条：紧凑化 + 去掉与 Tab 栏重复的安全区留白（消除「隔空」）
    ============================================================================ */
-body.pwa #ktThumbBar{padding:5px 8px 6px;gap:5px;background:rgba(7,11,20,.94);backdrop-filter:blur(10px)}
+body.pwa #ktThumbBar{padding:5px 8px 6px;gap:5px;background:rgba(7,11,20,.94);backdrop-filter:blur(10px);
+  /* 2026-09-18：并入底部栈（在 #pwaTabBar 之前，随文档流）——位置由 JS 插入保证，此处只锁布局属性，
+     不再用 position:fixed + 像素偏移，彻底消除真机上的空隙 */
+  position:relative;left:auto;right:auto;bottom:auto;flex-shrink:0;z-index:9997;
+  border-top:1px solid rgba(34,211,238,.18);border-radius:0}
 body.pwa #ktThumbStatus{font-size:10px;line-height:1.25}
 body.pwa #ktThumbBtns{gap:6px}
 body.pwa #ktThumbBar button{min-height:36px;font-size:13px;border-radius:10px;font-weight:700;padding:0 4px}

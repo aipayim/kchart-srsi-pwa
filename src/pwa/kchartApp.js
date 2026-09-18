@@ -291,18 +291,25 @@ function hideInstall() {
   positionInstallBar();
   syncThumbForInstall();
 }
-// PWA：安装条叠在底部 Tab 栏之上（否则它会盖住 Tab 栏并让拇指条下方出现空隙）；安全区由 Tab 栏统一处理
+// PWA：安装条叠在底部栈之上（Tab 栏 + 拇指条）；安全区由 Tab 栏统一处理
+// 2026-09-18：拇指条已并入文档流（在 Tab 栏之前），因此安装条要额外让出它的高度，否则会盖住拇指条
 function positionInstallBar() {
   const bar = document.getElementById('pwaInstall');
   if (!bar) return;
   if (bar.hidden) { bar.style.bottom = ''; return; }
   const tab = document.getElementById('pwaTabBar');
-  bar.style.bottom = ((tab && tab.offsetHeight) || 0) + 'px';
+  let h = (tab && tab.offsetHeight) || 0;
+  const tb = document.getElementById('ktThumbBar');
+  // 仅当拇指条处于「文档流内」（PWA 底部栈）时才计入高度；主系统的 fixed 拇指条不计
+  if (tb && tb.parentElement && tb.parentElement !== document.body && tb.offsetHeight > 0 && getComputedStyle(tb).display !== 'none') h += tb.offsetHeight;
+  bar.style.bottom = h + 'px';
 }
 // GOAL26：拇指条底部叠层偏移 = Tab条高 + 安装条可见高（与 kchart.js ktStackOffset 同一公式，此处直接复用）
+// 2026-09-18：拇指条在 PWA 下已并入文档流（见 kchart.js syncThumbBar），此时不再设 bottom（否则会把它顶离底部栈）
 function syncThumbForInstall() {
   const tb = document.getElementById('ktThumbBar');
   if (!tb) return;
+  if (tb.parentElement && tb.parentElement !== document.body) { tb.style.bottom = 'auto'; return; }
   tb.style.bottom = ktStackOffset() + 'px';
 }
 // GOAL26 → PWA 重构：四页导航（rail 桌面 / tabbar 触屏）由 pwaShell.js 接管（.pwa-tab 分组，不再用 data-tab-block）。
