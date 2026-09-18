@@ -484,6 +484,6 @@ async function tickLive() {
     _liveLog(`调仓 → 目标 ${(target * 100).toFixed(0)}% @ ${price.toFixed(0)}`);
     // 信号提醒：基石调仓 → 事件流（与真实成交一一对应）
     try { pushSignalEvent({ sym, kind: 'alpha-rebal', side: target > 0.05 ? 'long' : target < -0.05 ? 'short' : 'flat', price, w: target, src: 'alphaLive', barT: Date.now(), text: (target > 0 ? '加多/减空' : '加空/减多') + ' ' + Math.abs(target * 100).toFixed(0) + '%' }); } catch (e) {}
-    try { window.__alphaLiveW = target; (window.__alphaLiveMarks = window.__alphaLiveMarks || []).push({ t: Date.now(), dir: target }); } catch (e) {}
+    try { window.__alphaLiveW = target; (window.__alphaLiveMarks = window.__alphaLiveMarks || []).push({ t: Date.now(), dir: target }); if (globalThis.kchartApi && globalThis.kchartApi.saveSignalMarks) globalThis.kchartApi.saveSignalMarks(); } catch (e) {}
   } catch (e) { _liveLog('tick 失败：' + e.message); }
 }

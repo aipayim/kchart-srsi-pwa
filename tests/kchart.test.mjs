@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3688,6 +3688,35 @@ console.log('\n[kchart: SRSI 领先模式 / 响应速度]');
   let threw = false, res;
   try { res = _safeSetItem('k', 'v'); } catch (e) { threw = true; }
   ok('永久配额失败→返回 false 且不抛', threw === false && res === false);
+}
+
+// ===== v1.6.19: 信号标记持久化 saveSignalMarks/restoreSignalMarks =====
+{
+  console.log('\n[kchart: v1.6.19 信号标记持久化]');
+  const _ls3 = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls3 ? _ls3[k] : null),
+    setItem: (k, v) => { _ls3[k] = String(v); },
+    removeItem: (k) => { delete _ls3[k]; },
+  };
+  globalThis.window = globalThis.window || {};
+  window.__alphaLiveMarks = [{ t: 1, dir: 0.3 }, { t: 2, dir: -0.2 }];
+  window.__srsiLiveTrades = [{ t: 3, side: 'long', action: 'open' }];
+  saveSignalMarks();
+  const raw = JSON.parse(_ls3['smartTrader_kchart_marks'] || 'null');
+  ok('saveSignalMarks 写入两数组', !!raw && raw.alpha.length === 2 && raw.srsi.length === 1);
+  delete window.__alphaLiveMarks; delete window.__srsiLiveTrades;
+  restoreSignalMarks();
+  ok('restoreSignalMarks 恢复 alpha', Array.isArray(window.__alphaLiveMarks) && window.__alphaLiveMarks.length === 2 && window.__alphaLiveMarks[0].dir === 0.3);
+  ok('restoreSignalMarks 恢复 srsi', Array.isArray(window.__srsiLiveTrades) && window.__srsiLiveTrades.length === 1);
+  window.__alphaLiveMarks = [{ t: 9, dir: 0.9 }];
+  restoreSignalMarks();
+  ok('已有内存不覆盖', window.__alphaLiveMarks.length === 1 && window.__alphaLiveMarks[0].t === 9);
+  window.__alphaLiveMarks = Array.from({ length: 250 }, (_, i) => ({ t: i, dir: 1 }));
+  saveSignalMarks();
+  const raw2 = JSON.parse(_ls3['smartTrader_kchart_marks']);
+  ok('saveSignalMarks 封顶 200', raw2.alpha.length === 200 && raw2.alpha[0].t === 50);
+  delete window.__alphaLiveMarks; delete window.__srsiLiveTrades;
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
