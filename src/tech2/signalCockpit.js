@@ -109,6 +109,32 @@ function rrPath(ctx, x, y, w, h, r) {
   ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
+// 表盘顶部文字布局（纯函数，可单测）：大字 / 目标仓位标签 / 提示三者自适应排布，窄画布下自动换行或隐藏提示。
+// 背景：drawPosGauge 原为 640px 宽画布设计，但 PWA 驾驶舱卡里 canvas 仅 200px 宽（手机 170px）→
+// 三行文字同一 y 上互相重叠（实测出现 “+0%0.0%目标仓位 空仓” 乱码）。
+// 返回 { bigX, labX, labY, hintX, hintY, showHint }；hintX=null 表示提示放不下，应隐藏。
+export function posGaugeLayout(W, sizes, padX) {
+  const X0 = padX != null ? padX : 28;
+  const rightX = Math.max(X0, (finite(W) ? W : 0) - X0);
+  const bigW = Math.max(0, finite(sizes && sizes.bigW) ? sizes.bigW : 0);
+  const labW = Math.max(0, finite(sizes && sizes.labW) ? sizes.labW : 0);
+  const hintW = Math.max(0, finite(sizes && sizes.hintW) ? sizes.hintW : 0);
+  const labRow1X = X0 + bigW + 10;
+  const hintRow1X = rightX - hintW;
+  const hintRow1 = hintRow1X >= X0 + bigW + 8;                 // 提示同行右侧是否放得下
+  const labRow1 = hintRow1 ? (labRow1X + labW <= hintRow1X - 8)  // 同行还要避开提示
+    : (labRow1X + labW <= rightX);
+  const labX = labRow1 ? labRow1X : X0;
+  const labY = labRow1 ? 28 : 46;
+  let hintX = null, hintY = null;
+  if (hintRow1) { hintX = rightX; hintY = 30; }
+  else {
+    // 下移到第二行右对齐；若会压住已落在第二行的标签，则直接隐藏（提示是次要信息）
+    const row2LeftLimit = labRow1 ? X0 : (X0 + labW + 8);
+    if (hintRow1X >= row2LeftLimit) { hintX = rightX; hintY = 46; }
+  }
+  return { bigX: X0, labX, labY, hintX, hintY, showHint: hintX != null };
+}
 // 基石仓位表盘：横向 -100%..+100%，红/灰/绿分区 + 刻度 + 缓动指针 + 发光大字
 export function drawPosGauge(ctx, W, H, w, opts = {}) {
   if (!ctx || !W || !H) return;
@@ -133,13 +159,27 @@ export function drawPosGauge(ctx, W, H, w, opts = {}) {
   ctx.beginPath(); ctx.moveTo(x, yc - 13); ctx.lineTo(x - 7, yc - 23); ctx.lineTo(x + 7, yc - 23); ctx.closePath(); ctx.fill();
   ctx.fillRect(x - 1.5, yc - 23, 3, 32);
   ctx.restore();
-  // 大字 + 说明
+  // 大字 + 说明（自适应排布：窄画布自动换行/隐藏次要提示，避免文字重叠）
+  const tw = (s) => { try { const m = ctx.measureText(s); return (m && finite(m.width)) ? m.width : String(s).length * 6; } catch (e) { return String(s).length * 6; } };
+  const bigTxt = (val >= 0 ? '+' : '') + Math.round(val * 100) + '%';
+  const labTxt = '目标仓位 · ' + (val > 0.05 ? '多头' : val < -0.05 ? '空头' : '空仓');
+  const hintTxt = opts.hint || '调仓阈值 |Δw|>0.05';
+  ctx.font = '800 30px system-ui';
+  const bigW = tw(bigTxt);
+  ctx.font = '10px system-ui';
+  const labW = tw(labTxt);
+  ctx.font = '9px system-ui';
+  const hintW = tw(hintTxt);
+  const lay = posGaugeLayout(W, { bigW, labW, hintW }, X0);
   ctx.fillStyle = val >= 0 ? '#00E676' : '#FF5252'; ctx.font = '800 30px system-ui'; ctx.textAlign = 'left';
-  ctx.fillText((val >= 0 ? '+' : '') + Math.round(val * 100) + '%', X0, 30);
-  ctx.fillStyle = '#8b95a5'; ctx.font = '10px system-ui';
-  ctx.fillText('目标仓位 · ' + (val > 0.05 ? '多头' : val < -0.05 ? '空头' : '空仓'), X0 + 96, 28);
-  ctx.textAlign = 'right'; ctx.fillStyle = '#6B7688'; ctx.font = '9px system-ui';
-  ctx.fillText(opts.hint || '调仓阈值 |Δw|>0.05', W - X0, 30);
+  ctx.fillText(bigTxt, lay.bigX, 30);
+  ctx.fillStyle = '#8b95a5'; ctx.font = '10px system-ui'; ctx.textAlign = 'left';
+  ctx.fillText(labTxt, lay.labX, lay.labY);
+  if (lay.showHint) {
+    ctx.fillStyle = '#6B7688'; ctx.font = '9px system-ui'; ctx.textAlign = 'right';
+    ctx.fillText(hintTxt, lay.hintX, lay.hintY);
+  }
+  ctx.textAlign = 'left';
 }
 // w 历史面积图
 export function drawWHistory(ctx, W, H, ws, opts = {}) {

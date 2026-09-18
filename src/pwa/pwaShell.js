@@ -212,7 +212,8 @@ function renderCockpit(snap, alphaSig, rd, now) {
     if (p) { try { drawWHistory(p.ctx, p.w, p.h, ws, { label: 'w 历史（近 ' + ws.length + ' 根目标仓位）' }); } catch (e) {} }
   }
   const wm = $('pwaWMeta');
-  if (wm) wm.textContent = 'w 历史 · 近 ' + ws.length + ' 根目标仓位 · ' + (pillar_liveTxt(alphaSig));
+  // 不再重复画布上的「w 历史（近 N 根目标仓位）」标题，只留互补信息（标的/等待）
+  if (wm) wm.textContent = '组合 · ' + pillar_liveTxt(alphaSig);
 
   // 解读卡
   const rel = rd.rel;
