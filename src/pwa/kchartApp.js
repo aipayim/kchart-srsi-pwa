@@ -132,6 +132,7 @@ globalThis.kApplySrsiOpt = (tf) => api.applySrsiOpt(tf);
 globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
 globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
 globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
+globalThis.kSetSrsiLead = (tf, on) => api.setSrsiLead(tf, on);
 globalThis.kToggleOverview = () => api.toggleOverview();
 globalThis.kToggleDisc = () => api.toggleKDisc();
 globalThis.kToggleRuleMonitor = () => api.kToggleRuleMonitor();

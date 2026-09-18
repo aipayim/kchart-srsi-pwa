@@ -1266,3 +1266,182 @@ export function insufficientMsg(mm, sym, held) {
   }
   return '可用保证金不足';
 }
+
+// ===================== SRSI 领先性（响应速度 / 实时预演）=====================
+// 背景（2026-09-18 诊断，实测 BTCUSDT 90 天）：
+//   1) 由已实现价格算出的振荡器在数学上不可能「领先价格」——corr(ΔK_15m, 未来5m收益) 全为负；
+//      15m SRSI 破带/金叉事件对 5m 后市收益的 t 值 |t|<2（≈无统计边际）。
+//   2) 用户真正感知到的「慢/错过机会」来自参数响应速度：默认 RSI85/Stoch50/%K10/%D5 的 K 转折
+//      平均滞后价格 ~17 分钟（转折前价格已走掉 ~0.29%）；换成 R14/S14/K3 只滞后 ~4 分钟。
+//   本段提供「描述性」度量（用于前端把机制讲清楚）与「实时预演」（用实时价合成进行中 bar）。
+//   ⚠ 这些函数只用于展示与选参；zigzag 转折点本身依赖后续数据，不得作为交易信号（防前视）。
+
+// zigzagTurns：ZigZag 转折点（阈值 theta，比例）。返回 [{i, type:'high'|'low'}]。
+// 注意：转折点需等价格反向走够 theta 才被确认 → 该函数是「描述性」的，禁止用于实时交易决策。
+export function zigzagTurns(closes, theta = 0.008) {
+  const c = Array.isArray(closes) ? closes : [];
+  const out = [];
+  if (c.length < 3 || !(theta > 0)) return out;
+  let dir = 0, ext = 0;
+  for (let i = 1; i < c.length; i++) {
+    if (!isFinite(c[i]) || !isFinite(c[ext])) continue;
+    if (dir === 0) {
+      if (c[i] / c[ext] - 1 > theta) { dir = 1; ext = i; }
+      else if (c[i] / c[ext] - 1 < -theta) { dir = -1; ext = i; }
+    } else if (dir === 1) {
+      if (c[i] > c[ext]) ext = i;
+      else if (c[i] / c[ext] - 1 < -theta) { out.push({ i: ext, type: 'high' }); dir = -1; ext = i; }
+    } else {
+      if (c[i] < c[ext]) ext = i;
+      else if (c[i] / c[ext] - 1 > theta) { out.push({ i: ext, type: 'low' }); dir = 1; ext = i; }
+    }
+  }
+  return out;
+}
+
+// srsiExtremumRate：K 序列的「方向反转」占比（噪声代理）。越高越毛躁（假信号越多）。
+// 用严格变号判定（忽略平台期）——否则 K 饱和在 0/100 时平台会被误计为极值。
+export function srsiExtremumRate(kArr) {
+  const k = Array.isArray(kArr) ? kArr : [];
+  let turns = 0, n = 0;
+  for (let i = 1; i < k.length - 1; i++) {
+    if (k[i] == null || k[i - 1] == null || k[i + 1] == null) continue;
+    n++;
+    const d1 = Math.sign(k[i] - k[i - 1]), d2 = Math.sign(k[i + 1] - k[i]);
+    if (d1 !== 0 && d2 !== 0 && d1 !== d2) turns++;
+  }
+  return n ? turns / n : 0;
+}
+
+// adaptiveTurnTheta：当默认阈值在当前窗口内转折太少（估不准滞后）时逐步减半，直到转折数 ≥ minTurns。
+// 之所以需要：屏上只有 500 根 K 线，平静行情下 0.8% 的 ZigZag 可能一个转折都没有。
+// 下限 0.3%：再小就落到噪声级，测出的「滞后」会被噪声转折撞高（阈值不再可比）。
+export function adaptiveTurnTheta(closes, theta0 = 0.008, minTurns = 6, floor = 0.003) {
+  let theta = theta0;
+  for (let i = 0; i < 5; i++) {
+    if (zigzagTurns(closes, theta).length >= minTurns) return theta;
+    if (theta <= floor) break;
+    theta = Math.max(floor, theta / 2);
+  }
+  return theta;
+}
+
+// srsiTurnLag：K 的转折相对「价格 ZigZag 转折」的平均滞后（分钟，正=滞后，负=领先）。
+// 做法：每个价格转折点在 ±maxBars 内找最近的同型 K 极值，取索引差 × barMin。
+// 同时返回「转折确认前价格已走掉的幅度」missedPct（= 等 K 转向才动手会错过的行情）。
+// opts: { theta, barMin=15, maxBars=40, minTurns=6 }；未显式给 theta 时用 adaptiveTurnTheta 自适应。
+export function srsiTurnLag(kArr, closes, opts = {}) {
+  const barMin = opts.barMin != null ? opts.barMin : 15;
+  const maxBars = opts.maxBars != null ? opts.maxBars : 40;
+  const minTurns = opts.minTurns != null ? opts.minTurns : 6;
+  const k = Array.isArray(kArr) ? kArr : [];
+  const c = Array.isArray(closes) ? closes : [];
+  const theta = opts.theta != null ? opts.theta : adaptiveTurnTheta(c, 0.008, minTurns);
+  const turns = zigzagTurns(c, theta);
+  const offs = [], missed = [];
+  for (const tr of turns) {
+    let best = null;
+    const lo = Math.max(1, tr.i - maxBars), hi = Math.min(k.length - 2, tr.i + maxBars);
+    for (let j = lo; j <= hi; j++) {
+      if (k[j] == null || k[j - 1] == null || k[j + 1] == null) continue;
+      const isMin = k[j] <= k[j - 1] && k[j] <= k[j + 1];
+      const isMax = k[j] >= k[j - 1] && k[j] >= k[j + 1];
+      if (tr.type === 'low' && !isMin) continue;
+      if (tr.type === 'high' && !isMax) continue;
+      const d = Math.abs(j - tr.i);
+      if (best == null || d < best.d) best = { d, j };
+    }
+    if (!best) continue;
+    offs.push((best.j - tr.i) * barMin);
+    const sgn = tr.type === 'low' ? 1 : -1;
+    const p0 = c[tr.i], pK = c[best.j];
+    if (isFinite(p0) && p0 > 0 && isFinite(pK)) missed.push(sgn * (pK - p0) / p0 * 100);
+  }
+  const mean = (a) => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0);
+  const sorted = offs.slice().sort((a, b) => a - b);
+  const med = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+  return {
+    n: offs.length,
+    theta,
+    lagMin: mean(offs),          // 正=K 转折滞后价格（慢）
+    medMin: med,
+    leadPct: offs.length ? offs.filter(x => x < 0).length / offs.length : 0,
+    lagPct: offs.length ? offs.filter(x => x > 0).length / offs.length : 0,
+    missedPct: mean(missed),     // 转折确认前价格已走掉的幅度（%）
+    turnCount: turns.length
+  };
+}
+
+// 领先模式候选参数：响应速度由慢到快（噪声由低到高）。上下带沿用用户当前设置，不在此处改。
+export const LEAD_CANDIDATES = [
+  { rsiPeriod: 28, stochPeriod: 21, smoothK: 5, smoothD: 3 },
+  { rsiPeriod: 21, stochPeriod: 14, smoothK: 3, smoothD: 3 },
+  { rsiPeriod: 14, stochPeriod: 14, smoothK: 3, smoothD: 3 },
+  { rsiPeriod: 9, stochPeriod: 9, smoothK: 3, smoothD: 3 },
+  { rsiPeriod: 7, stochPeriod: 7, smoothK: 2, smoothD: 2 }
+];
+
+// pickLeadParams：从候选里挑「实测转折滞后最小、且方向反转率（噪声）不超过上限」的一组。
+// 噪声上限自适应：有 current 时取 min(0.30, max(0.20, 基准噪声×1.6))，否则 0.30。
+// 即「允许比当前参数毛躁一些，但不允许翻倍以上的噪声」。
+// 返回 { params, lagMin, noise, baseLagMin, baseNoise, improved }；数据不足返回 null。
+// 说明：这是「描述性选参」（用同一段历史衡量响应速度），不优化交易收益，也不引入前视（不写回交易逻辑）。
+export function pickLeadParams(closes, opts = {}) {
+  const c = Array.isArray(closes) ? closes : [];
+  if (c.length < 120) return null;
+  const theta = opts.theta != null ? opts.theta : adaptiveTurnTheta(c, 0.008, opts.minTurns != null ? opts.minTurns : 6);
+  const minTurns = opts.minTurns != null ? opts.minTurns : 6;
+  const barMin = opts.barMin != null ? opts.barMin : 15;
+  const bands = opts.bands || {};
+  const mk = (p) => ({ ...p, overbought: bands.overbought != null ? bands.overbought : 80, oversold: bands.oversold != null ? bands.oversold : 20 });
+  const measure = (p) => {
+    const k = srsiKD(c, p).k;
+    const t = srsiTurnLag(k, c, { theta, barMin, minTurns });
+    return { lagMin: t.lagMin, noise: srsiExtremumRate(k), n: t.n };
+  };
+  const base = opts.current ? measure(mk(opts.current)) : null;
+  const maxNoise = opts.maxNoise != null ? opts.maxNoise
+    : (base ? Math.min(0.30, Math.max(0.24, base.noise * 1.6)) : 0.30);
+  let best = null;
+  for (const cand of LEAD_CANDIDATES) {
+    const m = measure(mk(cand));
+    if (!(m.n >= 5)) continue;                 // 样本太少不参与（500 根窗口约 7 个转折，门槛过严会永远选不出）
+    if (m.noise > maxNoise) continue;          // 太毛躁直接淘汰
+    if (!best || m.lagMin < best.lagMin || (m.lagMin === best.lagMin && m.noise < best.noise)) {
+      best = { params: cand, lagMin: m.lagMin, noise: m.noise, n: m.n };
+    }
+  }
+  if (!best) return null;
+  return {
+    params: mk(best.params), lagMin: best.lagMin, noise: best.noise, n: best.n,
+    baseLagMin: base ? base.lagMin : null, baseNoise: base ? base.noise : null,
+    improved: base ? (best.lagMin < base.lagMin) : null,
+    maxNoise, theta
+  };
+}
+
+// srsiProjectLive：用实时价合成「进行中 bar」的临时收盘，预演该周期当前的 K/D 与带态。
+// closes 为含进行中那根的收盘序列（与 getTFData 一致：最后一根是未收盘 bar）。
+// 返回 { k, d, kClosed, dClosed, zone, zoneClosed, distUp, distDown, willCrossUp, willCrossDown }
+// 全部只用「此刻已知」的数据（历史收盘 + 当前价），无前视。
+export function srsiProjectLive(closes, cfg = {}, livePrice = null) {
+  const p = Array.isArray(closes) ? closes : [];
+  if (p.length < 3) return null;
+  const closed = p.slice(0, -1);
+  const live = (isFinite(livePrice) && livePrice > 0) ? livePrice : p[p.length - 1];
+  const ob = cfg.overbought != null ? cfg.overbought : 80;
+  const os = cfg.oversold != null ? cfg.oversold : 20;
+  const kd = srsiKD(closed.concat([live]), cfg);
+  const kdC = srsiKD(closed, cfg);
+  const k = kd.k[kd.k.length - 1], d = kd.d[kd.d.length - 1];
+  const kClosed = kdC.k[kdC.k.length - 1], dClosed = kdC.d[kdC.d.length - 1];
+  const zoneOf = (v) => (v == null ? null : (v >= ob ? 'overbought' : (v <= os ? 'oversold' : 'neutral')));
+  const zone = zoneOf(k), zoneClosed = zoneOf(kClosed);
+  return {
+    k, d, kClosed, dClosed, zone, zoneClosed,
+    distUp: k == null ? null : ob - k,        // >0 = 还在带下方，<0 = 已进上带
+    distDown: k == null ? null : k - os,
+    willCrossUp: zone === 'overbought' && zoneClosed !== 'overbought',
+    willCrossDown: zone === 'oversold' && zoneClosed !== 'oversold'
+  };
+}

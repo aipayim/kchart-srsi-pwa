@@ -499,7 +499,7 @@ body.pwa .pwa-install{padding-bottom:10px;border-radius:0}
 
 /* 手机：信号摘要条单行横滑（吸顶块更矮） */
 @media (max-width:640px){
-  .pwa-sigbar{flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:5px 10px;font-size:10px;scrollbar-width:none}
+  .pwa-sigbar{flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:5px 10px;font-size:10px;scrollbar-width:none;width:100%;max-width:100%;min-width:0;box-sizing:border-box}
   .pwa-sigbar::-webkit-scrollbar{display:none}
   .pwa-sigbar .sdir{padding:2px 8px}
   .pwa-sigbar .sconcl{white-space:nowrap;flex:0 0 auto}

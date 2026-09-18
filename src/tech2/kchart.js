@@ -3,7 +3,7 @@
 //   - 顶部：交易对 + K线周期多选（决定 SRSI 多子图）+ 主图周期单选 + 根线数 + 子图顺序 + SRSI 参数
 //   - 主图：真 OHLC 蜡烛（数据取自 S.klinesO/H/L 与 S.klines（close））
 //   - 子图：RSI / SRSI / MACD（顺序可拖拽），SRSI 对每个勾选 K 线周期渲染短→长堆叠
-import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState, barsFromPinch, insufficientMsg } from '../engine/indicators.js';
+import { srsiKD, srsiCrossings, srsiHooks, srsiSignal, ema, atrClose, ais, detectRegimeState, barsFromPinch, insufficientMsg, srsiTurnLag, srsiExtremumRate, pickLeadParams, srsiProjectLive } from '../engine/indicators.js';
 import { optimizeSrsi, srsiNeighborhoodGrid, srsiParamGrid, optimizeSrsiBand, optimizeGateBand, rollingGateOos, bandNeighborTPos, MANUAL_SWING_PARAMS, manualSwingParams, DEFAULT_SRSI_BAND, GATE_PARAMS_GRID } from '../engine/srsiOptimizer.js';
 import { fetchKlinesRange, fetchFundingRate } from '../pwa/data.js';
 import { runBacktest as alphaRunBacktest } from '../pwa/alphaCore.js';
@@ -165,6 +165,264 @@ function isDefaultSrsi(x) {
     x.overbought === DEFAULT_SRSI.overbought && x.oversold === DEFAULT_SRSI.oversold;
 }
 
+// ===================== SRSI 响应速度 / 领先模式（2026-09-18 诊断落地）=====================
+// 诊断结论（BTCUSDT 90 天实测，见 AGENTS）：
+//   · 由已实现价格算出的振荡器不可能「领先价格」；15m SRSI 破带/金叉事件对 5m 后市收益 |t|<2（≈无边际）。
+//   · 用户真正感知到的「慢 / 错过机会」来自参数响应速度：默认 RSI85/Stoch50/%K10/%D5 的 K 转折
+//     平均滞后价格 ~17 分钟（转折确认前价格已走掉 ~0.29%）；快参 R14/S14/K3 只滞后 ~4 分钟。
+// 因此这里做三件事：①实测并展示「滞后分钟」；②一键「领先模式」（实测选最快且不过噪的参数）；
+// ③实时预演（用当前价合成进行中 bar，提前看到带态变化）。
+// ⚠ 仅用于展示与选参：zigzag 转折点依赖后续数据，禁止作为交易信号（防前视，AGENTS §5.17）。
+const _leadCache = new Map();
+function _tfBarMinutes(tf) {
+  const t = (getTFData(cfg.symbol, tf).t) || [];
+  if (t.length >= 2 && t[t.length - 1] > t[t.length - 2]) return Math.max(1, Math.round((t[t.length - 1] - t[t.length - 2]) / 60000));
+  return Math.max(1, Math.round(tfMs(tf) / 60000));
+}
+// 实测该周期当前参数的「K 转折平均滞后分钟数」+ 极值占比（噪声）。结果按 币对|周期|参数|末价 缓存。
+export function srsiSpeedInfo(tf, params) {
+  if (!KLINE_TF.includes(tf) || !params) return null;
+  const c = (getTFData(cfg.symbol, tf).c || []).slice();
+  if (c.length < 120) return null;
+  const barMin = _tfBarMinutes(tf);
+  const key = [cfg.symbol, tf, params.rsiPeriod, params.stochPeriod, params.smoothK, params.smoothD, c.length, c[c.length - 1]].join('|');
+  if (_leadCache.has(key)) return _leadCache.get(key);
+  const k = srsiKD(c, params).k;
+  const t = srsiTurnLag(k, c, { barMin });
+  const info = { lagMin: t.lagMin, medMin: t.medMin, noise: srsiExtremumRate(k), n: t.n, missedPct: t.missedPct, barMin, turns: t.turnCount, theta: t.theta };
+  if (_leadCache.size > 60) _leadCache.clear();
+  _leadCache.set(key, info);
+  return info;
+}
+// 速度分级：按「滞后分钟 / 周期长度」的比例（相对周期长度的滞后越少越快）。
+export function speedGrade(info) {
+  if (!info || !(info.n >= 5)) return { tag: '--', cls: 'na', text: '数据不足' };
+  const ratio = info.barMin > 0 ? info.lagMin / info.barMin : 0;
+  if (ratio <= 0.5) return { tag: '快', cls: 'fast', text: '快' };
+  if (ratio <= 1.5) return { tag: '中', cls: 'mid', text: '中' };
+  return { tag: '慢', cls: 'slow', text: '慢' };
+}
+// 把「滞后分钟」格式化成「N 根（≈时长）」——跨周期可比，避免 1h 显示「300 分钟」这种不好读的数。
+export function fmtLag(info) {
+  if (!info || !(info.n >= 5)) return '--';
+  const bars = info.barMin > 0 ? info.lagMin / info.barMin : 0;
+  const m = info.lagMin;
+  let dur;
+  if (m < 60) dur = m.toFixed(0) + ' 分钟';
+  else if (m < 1440) dur = (m / 60).toFixed(1) + ' 小时';
+  else dur = (m / 1440).toFixed(1) + ' 天';
+  return bars.toFixed(1) + ' 根（≈' + dur + '）';
+}
+// 领先模式候选评估（带缓存）：返回 pickLeadParams 结果（无可用更快的候选时 null）。
+export function srsiLeadInfo(tf, params) {
+  if (!KLINE_TF.includes(tf) || !params) return null;
+  const c = (getTFData(cfg.symbol, tf).c || []).slice();
+  if (c.length < 120) return null;
+  const key = ['lead', cfg.symbol, tf, params.rsiPeriod, params.stochPeriod, params.smoothK, params.smoothD, params.overbought, params.oversold, c.length, c[c.length - 1]].join('|');
+  if (_leadCache.has(key)) return _leadCache.get(key);
+  let pick = null;
+  try {
+    pick = pickLeadParams(c, {
+      current: params, barMin: _tfBarMinutes(tf),
+      bands: { overbought: params.overbought, oversold: params.oversold }
+    });
+  } catch (e) { pick = null; }
+  if (_leadCache.size > 60) _leadCache.clear();
+  _leadCache.set(key, pick);
+  return pick;
+}
+// 领先模式：开启=用实测响应最快的参数（保留用户当前上下带）；关闭=原样恢复原参数。
+export function setSrsiLead(tf, on) {
+  tf = tf || cfg.srsiEditTf;
+  if (!KLINE_TF.includes(tf)) return null;
+  cfg.srsiLead = cfg.srsiLead || {}; cfg.srsiLeadPrev = cfg.srsiLeadPrev || {};
+  if (on) {
+    const cur = perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+    const pick = srsiLeadInfo(tf, cur);
+    if (!pick) { logLead(`[${tf}] 无法启用领先模式：K 线不足或无可用的更快候选`); return null; }
+    if (pick.improved === false) {
+      logLead(`[${tf}] 领先模式未启用：当前参数已足够快（滞后 ${pick.baseLagMin != null ? pick.baseLagMin.toFixed(0) : '--'} 分钟，最优候选 ${pick.lagMin.toFixed(0)} 分钟）`);
+      return { ...pick, applied: false };
+    }
+    if (!cfg.srsiLead[tf]) cfg.srsiLeadPrev[tf] = { ...cur };
+    cfg.srsiByTf[tf] = { ...cur, ...pick.params };
+    if (tf === cfg.srsiEditTf) cfg.srsi = { ...cfg.srsiByTf[tf] };
+    cfg.srsiLead[tf] = true;
+    logLead(`[${tf}] 领先模式：${cur.rsiPeriod}/${cur.stochPeriod}/${cur.smoothK}/${cur.smoothD} → ${pick.params.rsiPeriod}/${pick.params.stochPeriod}/${pick.params.smoothK}/${pick.params.smoothD}（实测滞后 ${pick.baseLagMin != null ? pick.baseLagMin.toFixed(0) : '--'} → ${pick.lagMin.toFixed(0)} 分钟）`);
+    persist(); renderKChart(); if (typeof document !== 'undefined') renderControls();
+    return { ...pick, applied: true };
+  }
+  const prev = cfg.srsiLeadPrev[tf];
+  if (prev) { cfg.srsiByTf[tf] = { ...prev }; if (tf === cfg.srsiEditTf) cfg.srsi = { ...prev }; }
+  delete cfg.srsiLead[tf]; delete cfg.srsiLeadPrev[tf];
+  logLead(`[${tf}] 领先模式已关闭，参数恢复`);
+  persist(); renderKChart(); if (typeof document !== 'undefined') renderControls();
+  return null;
+}
+function logLead(msg) {
+  try { console.log('[SRSI-LEAD] ' + msg); } catch (e) {}
+  try { if (typeof window !== 'undefined' && typeof window.log === 'function') window.log('[SRSI-LEAD] ' + msg); } catch (e) {}
+}
+
+// SRSI 参数卡里的「响应速度」行：实测滞后分钟 + 速度分级 + 领先模式开关
+// 文本节点带 id（kchartSpeedVal/kchartSpeedSub），供 updateSrsiSpeedRow 在 K 线就绪后就地刷新（不重建整张卡片）。
+function srsiSpeedHtml(tf, ep) {
+  const info = srsiSpeedInfo(tf, ep);
+  const g = speedGrade(info);
+  const leadOn = !!cfg.srsiLead[tf];
+  const ok = info && info.n >= 5;
+  const lagTxt = ok ? fmtLag(info) : '--';
+  const sub = ok ? ('转折确认前已走 ' + (info.missedPct ? info.missedPct.toFixed(2) + '%' : '--') + ' · 样本 ' + info.n) : 'K 线不足，无法实测（等数据加载）';
+  const lead = srsiLeadInfo(tf, ep);
+  const noGain = !leadOn && !!lead && lead.improved === false;
+  const btn = leadOn
+    ? '<button class="kchart-srsi-btn kchart-speed-btn on" id="kchartSpeedBtn" onclick="window.kSetSrsiLead(\'' + tf + '\',false)">✓ 领先模式已开（点击关闭）</button>'
+    : (noGain
+      ? '<button class="kchart-srsi-btn kchart-speed-btn" id="kchartSpeedBtn" disabled title="当前参数已是实测较快档">已是较快档</button>'
+      : '<button class="kchart-srsi-btn kchart-speed-btn" id="kchartSpeedBtn" onclick="window.kSetSrsiLead(\'' + tf + '\',true)">⚡ 开启领先模式</button>');
+  return '<div class="kchart-srsi-speed">' +
+    '<span class="kchart-speed-lbl">响应速度</span>' +
+    '<span class="kchart-speed-val kchart-speed-' + g.cls + '" id="kchartSpeedVal">K 转折平均滞后 ' + lagTxt + ' · ' + g.text + '</span>' +
+    '<span class="kchart-speed-sub" id="kchartSpeedSub">' + sub + '</span>' + btn +
+  '</div>';
+}
+
+// 就地刷新「响应速度」行 + 领先模式按钮（K 线晚到 / 参数变化后无需重建整卡）。由 updateSrsiProjLive 每帧调用。
+let _spdSig = '';
+function updateSrsiSpeedRow() {
+  const el = typeof document !== 'undefined' ? document.getElementById('kchartSpeedVal') : null;
+  const sub = typeof document !== 'undefined' ? document.getElementById('kchartSpeedSub') : null;
+  if (!el) return;
+  const tf = cfg.srsiEditTf;
+  const ep = perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const info = srsiSpeedInfo(tf, ep);
+  const lead = srsiLeadInfo(tf, ep);
+  const leadOn = !!cfg.srsiLead[tf];
+  const noGain = !leadOn && !!lead && lead.improved === false;
+  const sig = [tf, ep.rsiPeriod, ep.stochPeriod, ep.smoothK, ep.smoothD, info ? (info.n + ':' + info.lagMin.toFixed(1) + ':' + info.noise.toFixed(2)) : 'na', leadOn ? 'on' : (noGain ? 'nogain' : 'off')].join('|');
+  if (sig === _spdSig) return;
+  _spdSig = sig;
+  const g = speedGrade(info);
+  const ok = info && info.n >= 5;
+  el.className = 'kchart-speed-val kchart-speed-' + g.cls;
+  el.textContent = 'K 转折平均滞后 ' + (ok ? fmtLag(info) : '--') + ' · ' + g.text;
+  if (sub) sub.textContent = ok ? ('转折确认前已走 ' + (info.missedPct ? info.missedPct.toFixed(2) + '%' : '--') + ' · 样本 ' + info.n) : 'K 线不足，无法实测（等数据加载）';
+  const btn = typeof document !== 'undefined' ? document.getElementById('kchartSpeedBtn') : null;
+  if (btn) {
+    btn.disabled = noGain;
+    if (leadOn) { btn.className = 'kchart-srsi-btn kchart-speed-btn on'; btn.textContent = '✓ 领先模式已开（点击关闭）'; btn.onclick = () => window.kSetSrsiLead(tf, false); }
+    else if (noGain) { btn.className = 'kchart-srsi-btn kchart-speed-btn'; btn.textContent = '已是较快档'; btn.onclick = null; }
+    else { btn.className = 'kchart-srsi-btn kchart-speed-btn'; btn.textContent = '⚡ 开启领先模式'; btn.onclick = () => window.kSetSrsiLead(tf, true); }
+  }
+}
+
+// 机制说明（中文，前端讲清楚「为什么宽周期不能预判小周期」）
+function srsiLeadNoteHtml() {
+  return '<div class="kchart-srsi-note">' +
+    '<b>为什么宽周期 SRSI 不能「预判」小周期？</b> ' +
+    'SRSI 由<b>已经发生的价格</b>算出，数学上不可能领先价格（实测：15m 破带/金叉事件对 5m 后市的收益 ≈ 0，t 值 &lt; 2）。' +
+    '你感受到的「慢 / 错过机会」来自<b>参数响应速度</b>——默认 RSI85/Stoch50/%K10/%D5 是低噪声慢速配置，K 转折平均滞后价格 ~17 分钟（价格已走掉约 0.29% 后信号才出现）。' +
+    '开「⚡ 领先模式」改用实测响应最快的参数，转折滞后降到几分钟，代价是噪声/假信号变多。' +
+    '正确用法：把宽周期 SRSI 当<b>情境过滤</b>（现在处在超买/超卖区），而不是价格预测器。' +
+  '</div>';
+}
+
+// 盯盘页「领先模式 + 预演」行：优先主图叠加周期，否则辅助周期，否则主图周期。
+// 只在「主图/辅助」这种跨周期叠加场景下最有意义（这正是用户「宽周期 SRSI 套小周期 K 线」的用法）。
+function leadTfForDisplay() {
+  const ov = overlayTfsList(cfg);
+  if (ov.length) return ov[0];
+  const aux = KLINE_TF.filter(tf => cfg.srsiAux[tf]);
+  if (aux.length) return aux[0];
+  return cfg.mainTF;
+}
+// 渲染盯盘页领先行的静态骨架（含 ids），内容由 updateSrsiProjLive 每帧就地刷新。
+function updateOvLeadLive() {
+  const el = typeof document !== 'undefined' ? document.getElementById('kchartOvLead') : null;
+  if (!el) return;
+  const tf = leadTfForDisplay();
+  if (!el.dataset.tf || el.dataset.tf !== tf) {
+    el.dataset.tf = tf;
+    el.innerHTML = '<div class="kchart-ovlead-row"><span class="kchart-ovlead-lbl">⚡ 领先模式</span>' +
+      '<span class="kchart-ovlead-tf">' + tf + '</span>' +
+      '<span class="kchart-ovlead-spd" id="kchartOvLeadSpd">--</span>' +
+      '<button class="kchart-srsi-btn kchart-ovlead-btn" id="kchartOvLeadBtn">⚡ 开启领先模式</button></div>' +
+      '<div class="kchart-ovlead-proj" id="kchartOvLeadProj"></div>';
+    _spdSig = '';  // 强制下一帧刷新文本
+  }
+  const ep = perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const info = srsiSpeedInfo(tf, ep);
+  const lead = srsiLeadInfo(tf, ep);
+  const leadOn = !!cfg.srsiLead[tf];
+  const noGain = !leadOn && !!lead && lead.improved === false;
+  const sig = [tf, ep.rsiPeriod, ep.stochPeriod, ep.smoothK, ep.smoothD, info ? (info.n + ':' + info.lagMin.toFixed(1)) : 'na', leadOn ? 'on' : (noGain ? 'nogain' : 'off')].join('|');
+  if (sig !== _ovLeadSig) {
+    _ovLeadSig = sig;
+    const spd = document.getElementById('kchartOvLeadSpd');
+    if (spd) spd.textContent = info && info.n >= 5 ? ('K 转折平均滞后 ' + fmtLag(info) + ' · ' + speedGrade(info).text + '（样本 ' + info.n + '）') : 'K 线不足，无法实测';
+    const btn = document.getElementById('kchartOvLeadBtn');
+    if (btn) {
+      btn.disabled = noGain;
+      if (leadOn) { btn.className = 'kchart-srsi-btn kchart-ovlead-btn on'; btn.textContent = '✓ 领先模式已开'; btn.onclick = () => window.kSetSrsiLead(tf, false); }
+      else if (noGain) { btn.className = 'kchart-srsi-btn kchart-ovlead-btn'; btn.textContent = '已是较快档'; btn.onclick = null; }
+      else { btn.className = 'kchart-srsi-btn kchart-ovlead-btn'; btn.textContent = '⚡ 开启领先模式'; btn.onclick = () => window.kSetSrsiLead(tf, true); }
+    }
+  }
+  // 预演（每 5s 随实时价变化）
+  const projEl = document.getElementById('kchartOvLeadProj');
+  if (!projEl) return;
+  const S = typeof window !== 'undefined' ? window.S : null;
+  const c = (getTFData(cfg.symbol, tf).c || []);
+  const px = (S && S.prices && S.prices[cfg.symbol] && isFinite(S.prices[cfg.symbol].last)) ? S.prices[cfg.symbol].last : null;
+  const p = c.length >= 3 ? srsiProjectLive(c, ep, px) : null;
+  if (!p || p.k == null) { if (_ovProjSig) { _ovProjSig = ''; projEl.textContent = ''; } return; }
+  const psig = [tf, p.k.toFixed(2), p.zone, p.zoneClosed, px].join('|');
+  if (psig === _ovProjSig) return;
+  _ovProjSig = psig;
+  const zName = (z) => z === 'overbought' ? '超买带' : (z === 'oversold' ? '超卖带' : '中性区');
+  const n1 = (v) => (v == null ? '--' : v.toFixed(1));
+  let tail = '';
+  if (p.willCrossUp) tail = '⚠ 若此刻收盘将进入超买带（未确认）';
+  else if (p.willCrossDown) tail = '⚠ 若此刻收盘将进入超卖带（未确认）';
+  else if (p.zone === 'overbought') tail = '距上带 ' + n1(-p.distUp);
+  else if (p.zone === 'oversold') tail = '距下带 ' + n1(-p.distDown);
+  else tail = '距上带 ' + n1(p.distUp) + ' / 距下带 ' + n1(p.distDown);
+  projEl.innerHTML = '<span class="kchart-proj-lbl">预演</span> ' + tf + ' 进行中：若此刻收盘 K=' + n1(p.k) + ' D=' + n1(p.d) +
+    '<span class="kchart-proj-sub">已收盘 K=' + n1(p.kClosed) + ' · ' + zName(p.zone) + '</span>' +
+    '<span class="' + ((p.willCrossUp || p.willCrossDown) ? 'kchart-proj-alert' : 'kchart-proj-sub') + '">' + tail + '</span>';
+}
+let _ovLeadSig = '', _ovProjSig = '';
+// 由 renderKChart 每帧（PWA 5s / 主系统 1s 循环）调用；签名未变则不重建 DOM。
+let _projSig = '';
+function updateSrsiProjLive() {
+  const el = typeof document !== 'undefined' ? document.getElementById('kchartSrsiProj') : null;
+  if (!el) return;
+  const S = typeof window !== 'undefined' ? window.S : null;
+  const sym = cfg.symbol, tf = cfg.srsiEditTf;
+  try { updateSrsiSpeedRow(); } catch (e) {}
+  try { updateOvLeadLive(); } catch (e) {}
+  const c = (getTFData(sym, tf).c || []);
+  if (c.length < 3) { if (_projSig) { _projSig = ''; el.innerHTML = ''; } return; }
+  const px = (S && S.prices && S.prices[sym] && isFinite(S.prices[sym].last)) ? S.prices[sym].last : null;
+  const ep = perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const p = srsiProjectLive(c, ep, px);
+  if (!p || p.k == null) { if (_projSig) { _projSig = ''; el.innerHTML = ''; } return; }
+  const zName = (z) => z === 'overbought' ? '超买带' : (z === 'oversold' ? '超卖带' : '中性区');
+  const sig = [tf, ep.rsiPeriod, ep.stochPeriod, ep.smoothK, ep.smoothD, ep.overbought, ep.oversold, p.k.toFixed(2), p.kClosed, p.zone, p.zoneClosed, px].join('|');
+  if (sig === _projSig) return;
+  _projSig = sig;
+  const n1 = (v) => (v == null ? '--' : v.toFixed(1));
+  let tail = '';
+  if (p.willCrossUp) tail = ' <b class="kchart-proj-alert">⚠ 若此刻收盘将进入' + zName('overbought') + '（未确认）</b>';
+  else if (p.willCrossDown) tail = ' <b class="kchart-proj-alert">⚠ 若此刻收盘将进入' + zName('oversold') + '（未确认）</b>';
+  else if (p.zone === 'overbought') tail = ' 距上带 ' + n1(-p.distUp) + '';
+  else if (p.zone === 'oversold') tail = ' 距下带 ' + n1(-p.distDown) + '';
+  else tail = ' 距上带 ' + n1(p.distUp) + ' / 距下带 ' + n1(p.distDown);
+  el.innerHTML = '<span class="kchart-proj-lbl">预演</span>' +
+    '<span class="kchart-proj-val">' + tf + ' 进行中：若此刻收盘 K=' + n1(p.k) + ' D=' + n1(p.d) + '</span>' +
+    '<span class="kchart-proj-sub">已收盘 K=' + n1(p.kClosed) + ' · ' + zName(p.zone) + '</span>' + tail;
+}
+
 // 取某 TF 的 SRSI 参数（考虑 7d/30d 聚合特例与旧全局默认）
 export function perTfSrsi(tf, byTf, fallback) {
   if (byTf && byTf[tf]) return byTf[tf];
@@ -278,6 +536,8 @@ export function defaultKConfig() {
     srsiOptPreview: {},        // 参数优选预览：{ [tf]: optimizeSrsi 结果 }（持久化，便于刷新后查看）
     srsiOptDeep: false,        // 参数优选：是否用 1440 全网格（默认邻近网格 ~360）
     srsiOptSource: {},         // 已采用优化参数的周期标记：{ [tf]: 'optimized' }
+    srsiLead: {},              // 领先模式：{ [tf]: true } —— 该周期用实测响应最快的参数（见 LEAD_CANDIDATES）
+    srsiLeadPrev: {},          // 开领先模式前该周期的原参数（关掉时原样恢复）
     optPreviewOn: false,       // 主图叠加「优化预览」（虚线 K/D + 上下带，不写入配置）
     mainOverlay: false,         // 主图 SRSI 多周期叠加开关
     ovQuickTfs: [],             // 主图顶部 chip 栏：参与显隐快选的周期集合（overlay/aux 之外的持久记忆）
@@ -404,6 +664,9 @@ function normalizeCfg(c) {
     if (pr.role === 'swing' && !('bestSelection' in pr)) delete c.srsiOptPreview[tf];
   });
   if (!c.srsiOptSource || typeof c.srsiOptSource !== 'object') c.srsiOptSource = {};
+  if (!c.srsiLead || typeof c.srsiLead !== 'object') c.srsiLead = {};
+  if (!c.srsiLeadPrev || typeof c.srsiLeadPrev !== 'object') c.srsiLeadPrev = {};
+  { const L = {}; KLINE_TF.forEach(tf => { if (c.srsiLead[tf]) L[tf] = true; }); c.srsiLead = L; }
   if (typeof c.optPreviewOn !== 'boolean') c.optPreviewOn = false;
   if (typeof c.srsiOptDeep !== 'boolean') c.srsiOptDeep = false;
   // 主图快选 chip 栏集合：迁移期用 overlayTfs ∪ srsiAux 回填，并统一按 KLINE_TF 顺序去重
@@ -810,6 +1073,9 @@ function renderControls() {
         `<button class="kchart-srsi-btn" onclick="window.kCopyCfgToAll()">复制本币对到全部</button>` +
         `<button class="kchart-srsi-btn" onclick="window.kResetSymbolCfg()">重置本币对</button>` +
       `</div>` +
+      srsiSpeedHtml(cfg.srsiEditTf, ep) +
+      `<div class="kchart-srsi-proj" id="kchartSrsiProj"></div>` +
+      srsiLeadNoteHtml() +
       optSectionHtml(cfg.srsiEditTf);
   }
   renderMainTools();
@@ -963,7 +1229,8 @@ export function renderSrsiOverview(hz, capMin) {
       const ep = perTfSrsi(footTf, cfg.srsiByTf, cfg.srsi);
       const auxTag = cfg.srsiAux[footTf] ? ' ·辅助' : '';
       return `<div class="kchart-ov-footparams"><span class="kchart-ov-foottf">⚙${footTf}</span> SRSI参数: RSI${ep.rsiPeriod} / Stoch${ep.stochPeriod} / %K${ep.smoothK} / %D${ep.smoothD} / 超买${ep.overbought} · 超卖${ep.oversold}${auxTag}</div>`;
-    })();
+    })() +
+    `<div class="kchart-ov-lead" id="kchartOvLead"></div>`;
 }
 
 // 速览表行点击 → 切换主图；点「破带/钩」单元格 → 弹出释义（桌面悬停 title + 手机点按，与能量球一致）
@@ -3050,6 +3317,7 @@ function syncCanvasSize() {
 export function renderKChart() {
   syncCanvasSize();
   renderQuickTrade();
+  try { updateSrsiProjLive(); } catch (e) {}
   loadTsevWeights(); // 后台拉取并训练 TSEV 权重（dev 可用；失败则回落经典逻辑）
   if (!_ctx) return;
   const S = window.S;
@@ -5104,6 +5372,13 @@ export const kchartApi = {
   __clearSrsiOpt: clearSrsiOpt,
   __setSrsiOptPreview: setSrsiOptPreview,
   __setSrsiOptDeep: setSrsiOptDeep,
+  setSrsiLead,
+  __srsiSpeedInfo: srsiSpeedInfo,
+  __speedGrade: speedGrade,
+  __fmtLag: fmtLag,
+  __pickLeadParams: pickLeadParams,
+  __srsiLeadInfo: srsiLeadInfo,
+  updateSrsiProjLive,
   __roleForTf: roleForTf,
   __optSectionHtml: optSectionHtml,
   runSrsiAutoTrade,

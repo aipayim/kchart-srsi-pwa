@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3596,6 +3596,55 @@ console.log('\n[kchart: GOAL29 backtestSrsiAuto regime 闸门集成]');
   runSrsiAutoTrade('BTCUSDT', { engine: mkEngPd(), klineDir: kdPd, srsiDir: sdPd, band: { edge: 'enterUpper', band: 'upper', k: 95, d: 92 } });
   ok('实盘 PD off 零行为变化（照常开空）', pdOrders.length === 1 && pdOrders[0].side === 'short');
   kchartApi.__setCfgForTest(__defaultKConfig());
+}
+
+console.log('\n[kchart: SRSI 领先模式 / 响应速度]');
+{
+  kchartApi.__clearStore();
+  const _ls = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls ? _ls[k] : null),
+    setItem: (k, v) => { _ls[k] = String(v); },
+    removeItem: (k) => { delete _ls[k]; },
+  };
+  const closes = []; for (let i = 0; i < 400; i++) closes.push(100 + 8 * Math.sin(i / 9) + i * 0.02);
+  const times = closes.map((_, i) => 1700000000000 + i * 300000);
+  globalThis.window = { S: {} };
+  globalThis.S = {
+    klines: { BTCUSDT: { '5m': closes } }, klinesO: { BTCUSDT: { '5m': closes } },
+    klinesH: { BTCUSDT: { '5m': closes } }, klinesL: { BTCUSDT: { '5m': closes } },
+    klinesV: { BTCUSDT: { '5m': closes.map(() => 1) } }, klinesT: { BTCUSDT: { '5m': times } },
+    prices: { BTCUSDT: { last: closes[closes.length - 1] } },
+  };
+  const c0 = __defaultKConfig(); c0.symbol = 'BTCUSDT'; c0.srsiEditTf = '5m';
+  c0.srsiByTf['5m'] = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  c0.srsi = { ...c0.srsiByTf['5m'] };
+  kchartApi.__setCfgForTest(c0);
+  const info = srsiSpeedInfo('5m', c0.srsiByTf['5m']);
+  ok('speedInfo 实测滞后>0', !!info && info.n > 5 && info.lagMin > 0);
+  ok('speedInfo barMin=5（由时间戳推出）', info.barMin === 5);
+  ok('speedInfo 噪声在 0..1', info.noise >= 0 && info.noise <= 1);
+  ok('speedGrade 慢（默认参数）', speedGrade(info).text === '慢');
+  ok('speedGrade 数据不足', speedGrade({ n: 3 }).text === '数据不足' && speedGrade(null).text === '数据不足');
+  ok('speedGrade 快', speedGrade({ n: 10, lagMin: 0, barMin: 15 }).text === '快');
+  ok('speedGrade 中', speedGrade({ n: 10, lagMin: 8, barMin: 15 }).text === '中');
+  ok('speedGrade 慢(比例)', speedGrade({ n: 10, lagMin: 30, barMin: 15 }).text === '慢');
+  const pick = setSrsiLead('5m', true);
+  ok('setSrsiLead 返回推荐且更快', !!pick && pick.improved === true && pick.lagMin < pick.baseLagMin);
+  ok('setSrsiLead 已切换参数', cfg.srsiByTf['5m'].rsiPeriod !== 85);
+  ok('setSrsiLead 标记开启', cfg.srsiLead['5m'] === true);
+  ok('setSrsiLead 记住原参数', !!cfg.srsiLeadPrev['5m'] && cfg.srsiLeadPrev['5m'].rsiPeriod === 85);
+  ok('setSrsiLead 保留上下带', cfg.srsiByTf['5m'].overbought === 80 && cfg.srsiByTf['5m'].oversold === 20);
+  setSrsiLead('5m', false);
+  ok('setSrsiLead 关闭恢复原参数', cfg.srsiByTf['5m'].rsiPeriod === 85 && cfg.srsiByTf['5m'].stochPeriod === 50);
+  ok('setSrsiLead 关闭清除标记', !cfg.srsiLead['5m'] && !cfg.srsiLeadPrev['5m']);
+  ok('setSrsiLead 非法周期→null', setSrsiLead('99x', true) === null);
+  ok('setSrsiLead 数据不足→null', (() => {
+    globalThis.S.klines.BTCUSDT['5m'] = closes.slice(0, 50);
+    const r = setSrsiLead('5m', true);
+    return r === null && cfg.srsiLead['5m'] !== true;
+  })());
+  delete globalThis.S; globalThis.window = {};
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
