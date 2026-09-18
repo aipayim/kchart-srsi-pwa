@@ -155,9 +155,9 @@
             </div>
 
             <div class="pwa-col" id="pwaCockpitCol">
-              <div class="pwa-card">
-                <div class="pwa-card-h"><span class="ttl">信号驾驶舱</span><span class="pwa-spacer"></span>
-                  <span class="pwa-pill a">★ 基石</span><span class="pwa-pill w">⚠ 卫星</span></div>
+              <div class="pwa-card" data-acc="pillar">
+                <div class="pwa-card-h pwa-acc-h"><span class="ttl">信号驾驶舱</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill a">★ 基石</span><span class="pwa-pill w">⚠ 卫星</span><span class="pwa-caret">▾</span></div>
                 <div class="pwa-card-b">
                   <div class="pwa-cockpit-top">
                     <canvas id="pwaPosGauge"></canvas>
@@ -167,9 +167,9 @@
                   <div class="pwa-dim mono" id="pwaWMeta" style="font-size:9.5px;margin-top:4px">w 历史 · 目标仓位</div>
                 </div>
               </div>
-              <div class="pwa-card">
-                <div class="pwa-card-h"><span class="ttl">解读卡</span><span class="pwa-spacer"></span>
-                  <span class="pwa-pill" id="pwaRelPill">—</span></div>
+              <div class="pwa-card" data-acc="readout">
+                <div class="pwa-card-h pwa-acc-h"><span class="ttl">解读卡</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill" id="pwaRelPill">—</span><span class="pwa-caret">▾</span></div>
                 <div class="pwa-card-b">
                   <div class="pwa-cockpit-sub">
                     <canvas id="pwaRadar"></canvas>
@@ -179,9 +179,9 @@
                   <div class="pwa-concl" id="pwaConcl">—</div>
                 </div>
               </div>
-              <div class="pwa-card">
-                <div class="pwa-card-h"><span class="ttl">事件流</span><span class="pwa-spacer"></span>
-                  <span class="pwa-dim" style="font-size:10px">近 12h</span></div>
+              <div class="pwa-card" data-acc="events">
+                <div class="pwa-card-h pwa-acc-h"><span class="ttl">事件流</span><span class="pwa-spacer"></span>
+                  <span class="pwa-dim" style="font-size:10px">近 12h</span><span class="pwa-caret">▾</span></div>
                 <div class="pwa-card-b">
                   <canvas id="pwaEvSpark"></canvas>
                   <div class="pwa-evlist" id="pwaEvList"></div>

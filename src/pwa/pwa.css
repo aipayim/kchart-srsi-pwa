@@ -523,3 +523,11 @@ body.pwa .kchart-maintools .mt-legend{display:none}
   body.pwa #discPricePath{width:264px!important;height:165px!important}
   body.pwa .disc-energy-legend,body.pwa .disc-path-basis{font-size:9px}
 }
+
+/* ============================================================================
+   盯盘优化（续2）：次要区块可折叠（手机默认收起），减少长页滑动
+   ============================================================================ */
+.pwa-acc-h{cursor:pointer;user-select:none}
+.pwa-caret{margin-left:6px;color:var(--text2);transition:transform .15s;font-size:11px}
+.pwa-card.closed .pwa-caret{transform:rotate(-90deg)}
+.pwa-card.closed .pwa-card-b{display:none}

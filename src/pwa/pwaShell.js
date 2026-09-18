@@ -579,20 +579,59 @@ function bindToolbar() {
   }
 }
 
-// ---------- 首次进入：窄屏默认精简子图（2 个），避免一屏一个子图滑不停 ----------
-function applyPhoneSubDefault() {
+// ---------- 首次进入：窄屏默认精简（子图 2 个 / 纪律面板收起 / 驾驶舱收起），减少长页滑动 ----------
+function isNarrow() {
+  return (typeof window.matchMedia === 'function')
+    && (window.matchMedia('(max-width:900px)').matches || window.matchMedia('(pointer:coarse)').matches);
+}
+function applyPhoneDefaults() {
+  const api = globalThis.kchartApi;
   try {
-    if (localStorage.getItem('pwa_sub_default') === '1') return;
-    localStorage.setItem('pwa_sub_default', '1');
-    const narrow = (typeof window.matchMedia === 'function')
-      && (window.matchMedia('(max-width:900px)').matches || window.matchMedia('(pointer:coarse)').matches);
-    if (!narrow) return;
-    const api = globalThis.kchartApi;
-    const c = api && api.getConfig ? api.getConfig() : null;
-    if (!c || !api.setKPreset) return;
-    const n = Object.keys(c.klineSel || {}).filter(k => c.klineSel[k]).length;
-    if (n > 4) api.setKPreset('mini');
+    // ① 子图精简
+    if (localStorage.getItem('pwa_sub_default') !== '1') {
+      localStorage.setItem('pwa_sub_default', '1');
+      if (isNarrow() && api && api.setKPreset) {
+        const c = api.getConfig ? api.getConfig() : null;
+        const n = c ? Object.keys(c.klineSel || {}).filter(k => c.klineSel[k]).length : 0;
+        if (n > 4) api.setKPreset('mini');
+      }
+    }
+    // ② 纪律面板：窄屏首次默认收起（信号摘要条已给结论）
+    if (localStorage.getItem('pwa_disc_default') !== '1') {
+      localStorage.setItem('pwa_disc_default', '1');
+      const c = api && api.getConfig ? api.getConfig() : null;
+      if (isNarrow() && c && c.discOpen && api.toggleKDisc) api.toggleKDisc();
+    }
+    // ③ 驾驶舱三卡：窄屏首次默认收起
+    if (localStorage.getItem('pwa_cockpit_acc') !== '1') {
+      localStorage.setItem('pwa_cockpit_acc', '1');
+      if (isNarrow()) applyCockpitAcc(true);
+    }
   } catch (e) { /* ignore */ }
+}
+function applyCockpitAcc(collapsed) {
+  document.querySelectorAll('.pwa-card[data-acc]').forEach(card => {
+    card.classList.toggle('closed', !!collapsed);
+    try { localStorage.setItem('pwa_acc_' + card.getAttribute('data-acc'), collapsed ? '0' : '1'); } catch (e) {}
+  });
+}
+function bindCockpitAcc() {
+  document.querySelectorAll('.pwa-card[data-acc]').forEach(card => {
+    const head = card.querySelector('.pwa-acc-h');
+    if (!head || head.__bound) return;
+    head.__bound = true;
+    // 恢复上次状态（窄屏默认收起由 applyPhoneDefaults 处理）
+    try {
+      const saved = localStorage.getItem('pwa_acc_' + card.getAttribute('data-acc'));
+      if (saved === '0') card.classList.add('closed');
+      else if (saved === '1') card.classList.remove('closed');
+    } catch (e) {}
+    head.addEventListener('click', () => {
+      const closed = card.classList.toggle('closed');
+      try { localStorage.setItem('pwa_acc_' + card.getAttribute('data-acc'), closed ? '0' : '1'); } catch (e) {}
+      if (!closed) refreshShell();   // 展开时立即补绘 canvas
+    });
+  });
 }
 
 // ---------- 主刷新 ----------
@@ -628,7 +667,8 @@ export function initPwaShell() {
   bindTopAutoHide();
   bindToolbar();
   initSettings();
-  applyPhoneSubDefault();
+  bindCockpitAcc();
+  applyPhoneDefaults();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
   let saved = null;
