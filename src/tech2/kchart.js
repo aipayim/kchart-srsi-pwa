@@ -509,6 +509,21 @@ function updateSrsiProjLive() {
     '<span class="kchart-proj-sub">已收盘 K=' + n1(p.kClosed) + ' · ' + zName(p.zone) + '</span>' + tail;
 }
 
+// v1.6.17：驾驶舱「信号接近度」数据源——15m 进行中 bar 的 K 距「实际触发带」（resolveEntryBands）多远。
+// 与卫星真实触发口径一致（用 resolveEntryBands，而非仅 15m 优选带），供驾驶舱进度条 + 脉冲动画。
+export function srsiProximityNow(sym, tf) {
+  sym = sym || cfg.symbol; tf = tf || '15m';
+  const c = (getTFData(sym, tf) || {}).c || [];
+  if (c.length < 3) return null;
+  const ep = perTfSrsi(tf, cfg.srsiByTf, cfg.srsi);
+  const S = typeof window !== 'undefined' ? window.S : null;
+  const px = (S && S.prices && S.prices[sym] && isFinite(S.prices[sym].last)) ? S.prices[sym].last : null;
+  const p = srsiProjectLive(c, ep, px);
+  if (!p || p.k == null) return null;
+  const eb = resolveEntryBands(cfg);
+  return { sym, tf, k: p.k, d: p.d, kClosed: p.kClosed, upper: eb.upper, lower: eb.lower };
+}
+
 // 取某 TF 的 SRSI 参数（考虑 7d/30d 聚合特例与旧全局默认）
 export function perTfSrsi(tf, byTf, fallback) {
   if (byTf && byTf[tf]) return byTf[tf];
@@ -5488,6 +5503,7 @@ export const kchartApi = {
   __pickLeadParams: pickLeadParams,
   __srsiLeadInfo: srsiLeadInfo,
   updateSrsiProjLive,
+  srsiProximityNow,
   __roleForTf: roleForTf,
   __optSectionHtml: optSectionHtml,
   runSrsiAutoTrade,

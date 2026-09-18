@@ -4,7 +4,7 @@
 // 所有数据来自既有引擎：window.S / window.__alphaSignals / ruleMonitor 影子快照 / kchart cfg。
 import {
   buildPillarModel, factorShares, drawPosGauge, drawWHistory,
-  buildReadoutModel, drawRadar, drawRelVis,
+  buildReadoutModel, drawRadar, drawRelVis, proxText, proxWarn,
   loadCockpitEvents, drawEvSpark, renderEventsHtml,
   cockpitNotifOn, setCockpitNotif
 } from '../tech2/signalCockpit.js';
@@ -190,6 +190,30 @@ function gaugeFrame() {
 export function startGauge() { if (!_gaugeRaf && typeof requestAnimationFrame === 'function') _gaugeRaf = requestAnimationFrame(gaugeFrame); }
 export function stopGauge() { if (_gaugeRaf) { try { cancelAnimationFrame(_gaugeRaf); } catch (e) {} _gaugeRaf = 0; } }
 
+// v1.6.17：卫星接近度条——稳定 DOM（仅改 width/文本，保留 CSS 过渡与脉冲动画）
+function renderProx(p) {
+  const host = $('pwaProx');
+  if (!host) return;
+  if (!p) { host.style.display = 'none'; return; }
+  if (!host.__built) {
+    host.__built = true;
+    host.innerHTML = '<span class="pwa-prox-lbl">③ 卫星 接近度</span>' +
+      '<span class="pwa-prox-bar"><i></i></span>' +
+      '<span class="pwa-prox-val"></span>' +
+      '<span class="pwa-prox-warn"></span>';
+  }
+  host.style.display = '';
+  const barI = host.querySelector('.pwa-prox-bar i');
+  const val = host.querySelector('.pwa-prox-val');
+  const warn = host.querySelector('.pwa-prox-warn');
+  const pct = Math.round(Math.max(0, Math.min(1, p.closeness)) * 100);
+  if (barI) barI.style.width = pct + '%';
+  if (val) val.textContent = proxText(p);
+  if (warn) warn.textContent = proxWarn(p);
+  host.className = 'pwa-prox ' + (p.nearest === 'up' ? 'up' : 'down') +
+    (p.inBand ? ' inband' : (p.closeness >= 0.75 ? ' near' : '')) + (p.willCross ? ' cross' : '');
+}
+
 function renderCockpit(snap, alphaSig, rd, now) {
   // 基石区
   const api0 = globalThis.kchartApi;
@@ -258,6 +282,8 @@ function renderCockpit(snap, alphaSig, rd, now) {
     ].map(([b, t], i) => `<div class="pwa-qa"><span class="n">${i + 1}</span><div class="t"><b>${b}</b><p>${t}</p></div></div>`).join('');
     if (qa.__sig !== html) { qa.__sig = html; qa.innerHTML = html; }
   }
+  // v1.6.17：卫星接近度条（稳定 DOM + 宽度过渡 + 靠近脉冲/预演闪烁）
+  renderProx(rd.prox);
   const cl = $('pwaConcl');
   if (cl && rd.concl) {
     cl.className = 'pwa-concl' + (rd.concl.cls === 'bad' ? ' bad' : rd.concl.cls === 'good' ? ' good' : '');
@@ -913,7 +939,7 @@ export function refreshShell() {
   let snap = null;
   try { snap = getLastRuleSnapshot(); } catch (e) { snap = null; }
   const pillar = buildPillarModel(alphaSig, now, globalThis.__alphaLiveW);
-  const rd = buildReadoutModel({ snap, alphaSig, now, horizon: ctx && ctx.horizon, macro: ctx && ctx.macro });
+  const rd = buildReadoutModel({ snap, alphaSig, now, horizon: ctx && ctx.horizon, macro: ctx && ctx.macro, proximity: (() => { try { return api.srsiProximityNow ? api.srsiProximityNow(sym, '15m') : null; } catch (e) { return null; } })() });
   renderKpis(pillar, rd, alphaSig);
   renderCockpit(snap, alphaSig, rd, now);
   renderSigBar(snap, rd);

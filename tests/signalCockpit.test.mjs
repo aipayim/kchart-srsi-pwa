@@ -19,6 +19,7 @@ import {
   fmtAge, wHistoryPoints, drawPosGauge, posGaugeLayout, drawWHistory, buildPillarModel,
   renderPillarSkeleton, renderPillarHtml, updatePillar,
   conclusionOf, buildReadoutModel, drawRadar, drawRelVis, renderReadoutHtml,
+  proximityOf, proxText, proxWarn,
   cockpitStateOf, detectCockpitEvents, renderEventsHtml, drawEvSpark, cockpitEvents, loadCockpitEvents, clearCockpitEvents
 } from '../src/tech2/signalCockpit.js';
 import { comboFactors, comboWeight } from '../src/pwa/alphaCore.js';
@@ -252,6 +253,39 @@ console.log('\n[signalCockpit: conclusionOf / buildReadoutModel]');
   ok('空输入不抛 + PD 危险', m3.pdDanger === true && m3.w === 0);
   const html = renderReadoutHtml(m);
   ok('解读 HTML 含雷达/关系 canvas + 结论', html.includes('scRadar') && html.includes('scRelVis') && html.includes('结论'));
+}
+
+console.log('\n[signalCockpit: 卫星接近度 proximityOf / proxText / proxWarn]');
+{
+  // 中性区：K=50，带 20/80 → 中点，closeness=0，最近带按距离取（50 到上下等距→up）
+  const mid = proximityOf(50, 80, 20, 50);
+  ok('中性中点 closeness=0', mid && close(mid.closeness, 0, 1e-9) && mid.zone === 'neutral' && !mid.inBand);
+  // 贴近下带：K=22，带 20/80 → 距下带 2，半带 30 → closeness=1-2/30
+  const nearDown = proximityOf(22, 80, 20, 25);
+  ok('近下带 nearest=down', nearDown.nearest === 'down' && close(nearDown.closeness, 1 - 2 / 30, 1e-9));
+  ok('近下带 未进带 willCross=false', nearDown.inBand === false && nearDown.willCross === false);
+  // 已进上带：K=85，kClosed=70（还在带外）→ inBand + willCross
+  const inUp = proximityOf(85, 80, 20, 70);
+  ok('进上带 inBand + closeness=1', inUp.inBand && inUp.zone === 'upper' && close(inUp.closeness, 1, 1e-9));
+  ok('进上带 willCross=true', inUp.willCross === true && inUp.nearest === 'up');
+  // 已进带且已收盘也进带 → 不是“预演”
+  ok('已收盘也进带 → willCross=false', proximityOf(85, 80, 20, 82).willCross === false);
+  // 进下带 willCross（kClosed 还在带上方）
+  ok('进下带 willCross=true', proximityOf(15, 80, 20, 30).willCross === true);
+  // 非法/边界
+  ok('null/非数 → null', proximityOf(null, 80, 20) === null && proximityOf(NaN, 80, 20) === null && proximityOf(50, 20, 20) === null);
+  // proxText / proxWarn
+  ok('proxText 距下带', proxText(nearDown) === '距下带 2.0');
+  ok('proxText 已在上带', proxText(inUp) === '已在上带');
+  ok('proxWarn 预演', proxWarn(inUp).includes('预演') || proxWarn(inUp).includes('将进带'));
+  ok('proxWarn 接近中(≥0.75)', proxWarn(proximityOf(23, 80, 20, 25)).includes('接近中'));
+  ok('proxWarn 远 → 空', proxWarn(mid) === '' && proxText(null) === '' && proxWarn(null) === '');
+  // buildReadoutModel 接入
+  const snap = { band: 'lower', confirmN: 1, pd: { score: 0, danger: false } };
+  const m = buildReadoutModel({ snap, alphaSig: null, now: 0, proximity: { k: 22, kClosed: 25, upper: 80, lower: 20 } });
+  ok('buildReadoutModel 带 prox', m.prox && m.prox.nearest === 'down');
+  ok('无 proximity → prox=null', buildReadoutModel({ snap, alphaSig: null, now: 0 }).prox === null);
+  ok('解读 HTML 含接近度条', renderReadoutHtml(m).includes('pwa-prox'));
 }
 
 console.log('\n[signalCockpit: 解读卡绘制冒烟]');

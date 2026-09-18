@@ -342,8 +342,42 @@ export function conclusionOf(rel, w, confirmN, confirmNeed, pdDanger) {
   return { txt: `基石主导持${sideTxt(alphaDirOf(w))}；卫星无信号，等待带态穿越`, cls: 'neu' };
 }
 
+// 信号接近度（纯函数，可单测）：K 值距上/下带有多近（用于驾驶舱「卫星接近度」条 + 脉冲动画）。
+// 返回 { zone, nearest:'up'|'down', distUp, distDown, closeness(0..1, 1=贴带/进带), inBand, willCross }。
+// closeness：中性区 = 1 - 距最近带 / 半带宽（中点=0，贴带→1）；已进带 = 1。
+// willCross：进行中 K 已进带、而已收盘 K 还在带外（预演将破带，尚未确认）。
+export function proximityOf(k, upper, lower, kClosed) {
+  if (![k, upper, lower].every((v) => v != null && Number.isFinite(+v))) return null;
+  k = +k; upper = +upper; lower = +lower;
+  if (!(upper > lower)) return null;
+  const zone = k >= upper ? 'upper' : (k <= lower ? 'lower' : 'neutral');
+  const distUp = upper - k, distDown = k - lower;
+  const nearest = zone === 'upper' ? 'up' : (zone === 'lower' ? 'down' : (distUp <= distDown ? 'up' : 'down'));
+  const half = Math.max(1e-6, (upper - lower) / 2);
+  const distToBand = zone === 'neutral' ? Math.min(distUp, distDown) : 0;
+  const closeness = zone === 'neutral' ? Math.max(0, Math.min(1, 1 - distToBand / half)) : 1;
+  const kc = (kClosed != null && Number.isFinite(+kClosed)) ? +kClosed : null;
+  const willCross = (zone === 'upper' && kc != null && kc < upper) || (zone === 'lower' && kc != null && kc > lower);
+  return { zone, nearest, distUp, distDown, closeness, inBand: zone !== 'neutral', willCross };
+}
+
+// 接近度文案（纯函数，可单测）："距下带 6.2" / "已在上带" + 警示语
+// 颜色约定与主图一致：nearest='down'（接近下带→看多）绿；'up'（接近上带→看空）红。
+export function proxText(p) {
+  if (!p) return '';
+  const band = p.nearest === 'up' ? '上带' : '下带';
+  const dist = Math.abs(p.nearest === 'up' ? p.distUp : p.distDown).toFixed(1);
+  return p.inBand ? ('已在' + band) : ('距' + band + ' ' + dist);
+}
+export function proxWarn(p) {
+  if (!p) return '';
+  if (p.willCross) return '⚠ 若此刻收盘将进带（未确认）';
+  if (!p.inBand && p.closeness >= 0.75) return '接近中';
+  return '';
+}
+
 // 解读模型（纯函数，可单测）
-export function buildReadoutModel({ snap, alphaSig, now, horizon, macro } = {}) {
+export function buildReadoutModel({ snap, alphaSig, now, horizon, macro, proximity } = {}) {
   const s = snap || {};
   const reg = s.regime || null;
   const atrPct = reg && finite(reg.atrPct) ? reg.atrPct : null;
@@ -361,6 +395,10 @@ export function buildReadoutModel({ snap, alphaSig, now, horizon, macro } = {}) 
   const confirmN = finite(s.confirmN) ? s.confirmN : 0;
   const confirmNeed = (s.pendConfirmRaw && finite(s.pendConfirmRaw.n) && s.pendConfirmRaw.n > 0) ? s.pendConfirmRaw.n : 2;
   const pdScore = s.pd ? s.pd.score : 0, pdDanger = !!(s.pd && s.pd.danger);
+  // v1.6.17：信号接近度（K 距上/下带）——驾驶舱「卫星接近度」条 + 脉冲动画的数据源
+  const prox = (proximity && proximity.k != null)
+    ? proximityOf(proximity.k, proximity.upper, proximity.lower, proximity.kClosed)
+    : null;
   const rel = relationOf({ alphaW: w, band, macroSpreadPct: macro ? macro.spreadPct : null });
   const concl = conclusionOf(rel, w, confirmN, confirmNeed, pdDanger);
   return {
@@ -368,7 +406,7 @@ export function buildReadoutModel({ snap, alphaSig, now, horizon, macro } = {}) 
     regimeStateTxt, regimeGate: s.regimeGate || 'off',
     w, wDir: alphaDirOf(w), mainFac, ageTxt: pm.ageTxt,
     band, confirmN, confirmNeed, pdScore, pdDanger,
-    rel, concl, macroTf: macro ? macro.tf : null
+    prox, rel, concl, macroTf: macro ? macro.tf : null
   };
 }
 
@@ -435,6 +473,7 @@ export function renderReadoutHtml(m) {
     qa('② 基石', `Alpha <b class="${m.wDir === 'long' ? 'g' : m.wDir === 'short' ? 'r' : ''}">${dirTxt} ${Math.abs(m.w * 100).toFixed(0)}%</b>${meter(Math.abs(m.w), 'var(--green,#00E676)')}${esc(m.ageTxt)} 调仓${m.mainFac ? ' · 主因 ' + esc(m.mainFac.label) : ''} ${confidenceBadge('alpha')}`) +
     qa('③ 卫星', `SRSI <b>${m.band === 'upper' ? '上带' : m.band === 'lower' ? '下带' : '中性'}</b>${meter(m.confirmNeed > 0 ? m.confirmN / m.confirmNeed : 0, 'var(--gold,#FFD740)')}确认 <b>${m.confirmN}/${m.confirmNeed}</b> · 闸门 ${m.regimeGate === 'off' ? '关' : '<span class="g">' + esc(m.regimeGate) + '</span>'} · PD-A ${m.pdDanger ? '<span class="r">危险 ' + m.pdScore + '/5</span>' : '<span class="g">无危险 ' + m.pdScore + '/5</span>'} ${confidenceBadge('srsi')}`) +
     qa('④ 关系', `<span class="sc-rel-badge ${relCls}">${relTxt(m.rel.kind)}</span> 基石${dirTxt}${m.rel.satDir ? ' ↔ 卫星' + sideTxt(m.rel.satDir) : ''}${m.macroTf ? ' · 宏观 ' + esc(m.macroTf) + (m.rel.macroAligned === true ? ' <span class="g">同向</span>' : m.rel.macroAligned === false ? ' <span class="r">反向</span>' : '') : ''}`) +
+    (m.prox ? `<div class="pwa-prox ${m.prox.nearest === 'up' ? 'up' : 'down'}${m.prox.inBand ? ' inband' : (m.prox.closeness >= 0.75 ? ' near' : '')}${m.prox.willCross ? ' cross' : ''}"><span class="pwa-prox-lbl">③ 卫星 接近度</span><span class="pwa-prox-bar"><i style="width:${pct(m.prox.closeness)}%"></i></span><span class="pwa-prox-val">${proxText(m.prox)}</span>${proxWarn(m.prox) ? `<span class="pwa-prox-warn">${proxWarn(m.prox)}</span>` : ''}</div>` : '') +
     `<div class="sc-concl sc-concl-${m.concl.cls}">→ 结论：<b>${esc(m.concl.txt)}</b></div>` +
     '</div>';
 }
