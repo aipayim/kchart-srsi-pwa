@@ -518,6 +518,83 @@ function bindTopAutoHide() {
   }, { passive: true });
 }
 
+// ---------- 主图信号摘要条（不滚动即可见） ----------
+function renderSigBar(snap, rd) {
+  const box = $('pwaSigBar');
+  if (!box) return;
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  const mainTF = (cfg && cfg.mainTF) || '--';
+  const t = rd.trendLabel || '--';
+  const tCls = t === '趋势上' ? 'long' : t === '趋势下' ? 'short' : '';
+  const wDir = rd.wDir === 'long' ? '多' : rd.wDir === 'short' ? '空' : '平';
+  const wCls = rd.wDir === 'long' ? 'long' : rd.wDir === 'short' ? 'short' : '';
+  const band = rd.band === 'upper' ? '上带' : rd.band === 'lower' ? '下带' : '中性';
+  const k = snap && snap.k != null ? snap.k.toFixed(1) : '--';
+  const d = snap && snap.d != null ? snap.d.toFixed(1) : '--';
+  const html =
+    `<span class="sdir ${tCls}">${t}</span>` +
+    `<span class="sdir ${wCls}">基石 ${wDir} ${Math.abs((rd.w || 0) * 100).toFixed(0)}%</span>` +
+    `<span class="sitem">卫星 <b>${band}</b> 确认 <b>${rd.confirmN}/${rd.confirmNeed}</b></span>` +
+    `<span class="sitem">${mainTF} K<b>${k}</b> D<b>${d}</b></span>` +
+    `<span class="sitem">PD <b>${rd.pdDanger ? '危险' : rd.pdScore + '/5'}</b></span>` +
+    (rd.concl ? `<span class="sconcl">→ ${rd.concl.txt}</span>` : '');
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+}
+
+// ---------- 工具栏 ⚙ / 币对弹层 ----------
+function bindToolbar() {
+  const btn = $('pwaToolMore'), bar = $('pwaToolbar');
+  if (btn && bar && !btn.__bound) {
+    btn.__bound = true;
+    let open = false;
+    try { open = localStorage.getItem('pwa_tool_more') === '1'; } catch (e) {}
+    const apply = (v) => { bar.classList.toggle('more-open', v); btn.classList.toggle('on', v); btn.setAttribute('aria-expanded', v ? 'true' : 'false'); };
+    apply(open);
+    btn.addEventListener('click', () => {
+      open = !open;
+      apply(open);
+      try { localStorage.setItem('pwa_tool_more', open ? '1' : '0'); } catch (e) {}
+    });
+  }
+  const tog = $('pwaSymToggle');
+  if (tog && !tog.__bound) {
+    tog.__bound = true;
+    tog.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const app = $('pwaApp');
+      if (app) app.classList.toggle('symopen');
+    });
+    // 点面板内任意按钮 / 点外部 → 关闭
+    document.addEventListener('click', (e) => {
+      const app = $('pwaApp');
+      if (!app || !app.classList.contains('symopen')) return;
+      const t = e.target;
+      if (t && t.closest && (t.closest('#pwaSymbar') || t.closest('#pwaSymToggle'))) {
+        if (t.closest('#pwaSymbar') && t.closest('button')) setTimeout(() => app.classList.remove('symopen'), 150);
+        return;
+      }
+      app.classList.remove('symopen');
+    });
+  }
+}
+
+// ---------- 首次进入：窄屏默认精简子图（2 个），避免一屏一个子图滑不停 ----------
+function applyPhoneSubDefault() {
+  try {
+    if (localStorage.getItem('pwa_sub_default') === '1') return;
+    localStorage.setItem('pwa_sub_default', '1');
+    const narrow = (typeof window.matchMedia === 'function')
+      && (window.matchMedia('(max-width:900px)').matches || window.matchMedia('(pointer:coarse)').matches);
+    if (!narrow) return;
+    const api = globalThis.kchartApi;
+    const c = api && api.getConfig ? api.getConfig() : null;
+    if (!c || !api.setKPreset) return;
+    const n = Object.keys(c.klineSel || {}).filter(k => c.klineSel[k]).length;
+    if (n > 4) api.setKPreset('mini');
+  } catch (e) { /* ignore */ }
+}
+
 // ---------- 主刷新 ----------
 export function refreshShell() {
   if (typeof document === 'undefined') return;
@@ -541,6 +618,7 @@ export function refreshShell() {
   const rd = buildReadoutModel({ snap, alphaSig, now, horizon: ctx && ctx.horizon, macro: ctx && ctx.macro });
   renderKpis(pillar, rd, alphaSig);
   renderCockpit(snap, alphaSig, rd, now);
+  renderSigBar(snap, rd);
 }
 
 export function initPwaShell() {
@@ -548,7 +626,9 @@ export function initPwaShell() {
   bindNav();
   bindTrade();
   bindTopAutoHide();
+  bindToolbar();
   initSettings();
+  applyPhoneSubDefault();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
   let saved = null;

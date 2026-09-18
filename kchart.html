@@ -61,7 +61,7 @@
     <!-- ===== 顶栏 ===== -->
     <header class="pwa-appbar">
       <div class="pwa-brand"><span class="mk">◆</span><span>SMART-TRADER<small>ALPHA COCKPIT</small></span></div>
-      <div class="pwa-sym"><span class="pwa-dot"></span><b id="pwaSymName">BTCUSDT</b><span class="pwa-dim" style="font-size:10px">永续</span></div>
+      <div class="pwa-sym" id="pwaSymToggle" title="点击切换交易对"><span class="pwa-dot"></span><b id="pwaSymName">BTCUSDT</b><span class="pwa-dim" style="font-size:10px">永续</span><span class="pwa-symcaret">▾</span></div>
       <div class="pwa-price">
         <span class="v mono" id="pwaPriceV">—</span>
         <span class="c mono" id="pwaPriceC">—</span>
@@ -81,7 +81,7 @@
     <div class="pwa-kpis" id="pwaKpis"></div>
 
     <!-- ===== 交易对条 ===== -->
-    <div class="pwa-symbar">
+    <div class="pwa-symbar" id="pwaSymbar">
       <span class="kchart-lbl">币对</span>
       <input id="symInput" type="text" value="BTCUSDT" placeholder="如 BTCUSDT" autocomplete="off" spellcheck="false">
       <button id="symBtn">载入</button>
@@ -98,29 +98,34 @@
         <section class="pwa-tab on" data-tab="kline">
           <div class="pwa-grid-k">
             <div class="pwa-col">
-              <div class="pwa-card pwa-toolbar">
-                <span class="kchart-lbl">周期</span>
-                <span class="kchart-presets">
-                  <button class="kchart-preset" data-preset="scalp" onclick="window.setKPreset('scalp')">短线</button>
-                  <button class="kchart-preset" data-preset="day" onclick="window.setKPreset('day')">日内</button>
-                  <button class="kchart-preset" data-preset="swing" onclick="window.setKPreset('swing')">波段</button>
-                  <button class="kchart-preset" data-preset="all" onclick="window.setKPreset('all')">全选</button>
-                </span>
-                <span class="kchart-tfs" id="kchartTFRow"></span>
-                <div class="pwa-spacer" style="flex:1"></div>
-                <span class="kchart-lbl">根线</span>
-                <input type="range" id="kchartBars" min="60" max="300" step="10" oninput="window.setKBars(this.value)">
-                <span id="kchartBarsLbl" class="kchart-lbl"></span>
-                <span class="kchart-lbl">子图</span>
-                <span id="kchartSubToggles" class="kchart-subtog"></span>
-                <div class="kchart-maintools" id="kchartMainTools"></div>
+              <div class="pwa-card pwa-toolbar pwa-sticky" id="pwaToolbar">
+                <div class="pwa-tfbar">
+                  <span class="kchart-tfs" id="kchartTFRow"></span>
+                  <button class="pwa-more" id="pwaToolMore" type="button" title="更多图表设置（预设/根线/子图/主图叠加/图例）" aria-expanded="false">⚙</button>
+                </div>
+                <div class="pwa-sigbar" id="pwaSigBar"></div>
+                <div class="pwa-toolmore" id="pwaToolMorePanel">
+                  <span class="kchart-presets">
+                    <button class="kchart-preset" data-preset="mini" onclick="window.setKPreset('mini')">精简</button>
+                    <button class="kchart-preset" data-preset="scalp" onclick="window.setKPreset('scalp')">短线</button>
+                    <button class="kchart-preset" data-preset="day" onclick="window.setKPreset('day')">日内</button>
+                    <button class="kchart-preset" data-preset="swing" onclick="window.setKPreset('swing')">波段</button>
+                    <button class="kchart-preset" data-preset="all" onclick="window.setKPreset('all')">全选</button>
+                  </span>
+                  <span class="kchart-lbl">根线</span>
+                  <input type="range" id="kchartBars" min="60" max="300" step="10" oninput="window.setKBars(this.value)">
+                  <span id="kchartBarsLbl" class="kchart-lbl"></span>
+                  <span class="kchart-lbl">子图</span>
+                  <span id="kchartSubToggles" class="kchart-subtog"></span>
+                  <div class="kchart-maintools" id="kchartMainTools"></div>
+                </div>
               </div>
               <div id="kchartRuleMonitor" class="rule-monitor"></div>
               <div class="pwa-card pwa-scan">
                 <div class="pwa-card-h">
                   <span class="ttl">主图 · SRSI 多周期</span>
                   <span class="pwa-spacer"></span>
-                  <div class="pwa-legend">
+                  <div class="pwa-legend hide-phone">
                     <i style="color:#00e676">▲ 开多</i><i style="color:#ff5252">▼ 开空</i>
                     <i style="color:#22d3ee">◆ Alpha 多</i><i style="color:#f59e0b">◆ Alpha 空</i>
                     <i style="color:#b39dff">◆ 金钩</i>

@@ -2012,6 +2012,7 @@ export function kPresetCombos(name) {
     return { mainTF: null, sel, all: true };
   }
   const P = {
+    mini:    { tfs: ['15m', '1h'],        main: '15m' },
     scalp:   { tfs: ['1m', '5m', '15m'],   main: '5m' },
     day:     { tfs: ['15m', '1h', '4h'],   main: '1h' },
     swing:   { tfs: ['4h', '1d', '7d'],    main: '1d' }

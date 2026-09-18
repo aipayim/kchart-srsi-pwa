@@ -439,3 +439,75 @@ body.pwa .pwa-install{padding-bottom:10px;border-radius:0}
   font-family:inherit;font-size:11px;padding:5px 10px;cursor:pointer}
 .pwa-zoomctl button:hover{border-color:var(--accent);color:var(--accent)}
 .pwa-zoomctl #pwaZoomInfo{min-width:38px;text-align:center;font-family:var(--mono)}
+
+/* ============================================================================
+   盯盘体验优化：吸顶工具栏 + TF 芯片重设计 + 信号摘要条 + 币对弹层 + KPI 变矮
+   ============================================================================ */
+/* ---- 吸顶工具栏 ---- */
+.pwa-toolbar{flex-direction:column;align-items:stretch;gap:0}
+.pwa-sticky{position:sticky;top:0;z-index:18;background:rgba(10,15,24,.95);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.pwa-tfbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pwa-toolmore{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:8px;margin-top:8px;border-top:1px solid var(--border)}
+.pwa-more{display:none}
+
+/* ---- 信号摘要条（主图正上方，不滚动即可见） ---- */
+.pwa-sigbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 12px;
+  border-bottom:1px solid var(--border);font-size:11px;background:rgba(34,211,238,.045)}
+.pwa-sigbar .sdir{font-weight:800;padding:2px 10px;border-radius:999px;border:1px solid var(--border);color:var(--text2);white-space:nowrap}
+.pwa-sigbar .sdir.long{color:var(--green);border-color:rgba(0,230,118,.45);background:rgba(0,230,118,.10)}
+.pwa-sigbar .sdir.short{color:var(--red);border-color:rgba(255,82,82,.45);background:rgba(255,82,82,.10)}
+.pwa-sigbar .sitem{color:var(--text2);white-space:nowrap;font-family:var(--mono)}
+.pwa-sigbar .sitem b{color:var(--text)}
+.pwa-sigbar .sconcl{color:var(--warn);font-size:10.5px;min-width:0}
+.pwa-sigbar .spd{font-family:var(--mono)}
+
+/* ---- 币对弹层（手机：点顶栏币对名展开） ---- */
+.pwa-sym{cursor:pointer;transition:border-color .15s}
+.pwa-sym:hover{border-color:var(--accent)}
+.pwa-symcaret{display:none}
+
+/* ---- 手机端：TF 芯片加大 + 横滑 + ⚙ 收起高级项 + KPI 变矮 ---- */
+@media (max-width:640px){
+  .pwa-tfbar{flex-wrap:wrap;row-gap:6px}
+  .pwa-tfbar .kchart-tfs{flex:1 1 0;min-width:0;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;
+    padding:2px 0 4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+  .pwa-tfbar .kchart-tfs::-webkit-scrollbar{display:none}
+  .pwa-tfbar .kchart-tfbtn{flex:0 0 auto;min-width:54px;min-height:44px;padding:4px 10px;border-radius:11px;
+    font-size:12.5px;font-weight:600;position:relative;justify-content:center}
+  .pwa-tfbar .kchart-tfbtn.main{border-color:var(--green);color:var(--green);background:rgba(0,230,118,.10)}
+  .pwa-tfbar .kchart-tfdot{width:6px;height:6px}
+  .pwa-tfbar .kchart-tfsq{position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:6px;
+    border:1px solid var(--border);background:rgba(255,255,255,.05)}
+  .pwa-tfbar .kchart-tfsq.on{background:var(--accent);border-color:var(--accent);box-shadow:0 0 8px rgba(34,211,238,.5)}
+  .pwa-more{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:11px;flex:0 0 auto;
+    border:1px solid var(--border);background:var(--card2);color:var(--text2);font-size:17px;cursor:pointer}
+  .pwa-more.on{color:var(--accent);border-color:var(--accent)}
+  .pwa-toolmore{display:none}
+  .pwa-toolbar.more-open .pwa-toolmore{display:flex}
+  /* 币对弹层 */
+  .pwa-symcaret{display:inline;font-size:9px;color:var(--text2);margin-left:1px}
+  .pwa-app:not(.symopen) .pwa-symbar{display:none}
+  .pwa-app.symopen .pwa-symbar{display:flex;position:absolute;top:46px;left:8px;right:8px;z-index:45;
+    background:rgba(10,15,24,.98);border:1px solid var(--border);border-radius:12px;padding:10px;
+    box-shadow:0 12px 30px rgba(0,0,0,.6);backdrop-filter:blur(10px)}
+  /* KPI 变矮 */
+  .pwa-kpi{padding:7px 10px;gap:4px;min-width:118px}
+  .pwa-kpi .k{font-size:9px}
+  .pwa-kpi .v{font-size:16px}
+  .pwa-kpi .sp{height:18px}
+}
+
+/* 手机：信号摘要条单行横滑（吸顶块更矮） */
+@media (max-width:640px){
+  .pwa-sigbar{flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:5px 10px;font-size:10px;scrollbar-width:none}
+  .pwa-sigbar::-webkit-scrollbar{display:none}
+  .pwa-sigbar .sdir{padding:2px 8px}
+  .pwa-sigbar .sconcl{white-space:nowrap;flex:0 0 auto}
+}
+
+/* 手机：芯片角标不压字 + 主图卡标题变小 */
+@media (max-width:640px){
+  .pwa-tfbar .kchart-tfbtn{min-width:62px;padding:4px 18px 4px 8px}
+  .pwa-tfbar .kchart-tfsq{top:3px;right:3px;width:15px;height:15px;border-radius:5px}
+  .pwa-card-h .ttl{font-size:13px}
+}
