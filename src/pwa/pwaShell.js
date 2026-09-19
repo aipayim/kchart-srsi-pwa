@@ -10,7 +10,7 @@ import {
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
-import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine } from '../tech2/signalAlerts.js';
+import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -717,12 +717,15 @@ function setAlertPref(name, on) { const p = ALERT_PREFS[name]; if (!p) return; t
 let _toastN = 0;
 function showToast(ev) {
   const host = $('pwaToastHost'); if (!host) return;
-  const m = kindMeta(ev.kind);
+  const m = kindMeta(ev.kind, sideOf(ev));
   const el = document.createElement('div');
   el.className = 'pwa-toast ' + (m.severity === 'trade' ? 'trade' : m.severity === 'preview' ? 'preview' : 'signal');
   el.style.borderLeftColor = m.color;
-  const rest = signalLine(ev).replace(m.label, '').replace(/^\s+/, '');
-  el.innerHTML = '<b style="color:' + m.color + '">' + m.label + '</b>' +
+  // v1.6.26：主图标记符前缀到信号名前（与「最近信号」/主图图例同形）
+  let rest = signalLine(ev);
+  if (m.icon && rest.indexOf(m.icon + ' ') === 0) rest = rest.slice(m.icon.length + 1);
+  rest = rest.replace(m.label, '').replace(/^\s+/, '');
+  el.innerHTML = '<b style="color:' + m.color + '">' + (m.icon ? m.icon + ' ' : '') + m.label + '</b>' +
     (rest ? '<span>' + rest + '</span>' : '') +
     '<span class="pwa-toast-t">' + fmtSignalTime(ev.ts) + '</span>';
   host.appendChild(el);

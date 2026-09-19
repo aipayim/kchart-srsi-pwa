@@ -585,9 +585,10 @@ body.pwa .kchart-maintools .mt-legend{display:none}
 .pwa-engine .pe-btn.tiny{margin-left:0;font-size:9.5px;padding:1px 6px;font-weight:400}
 .sig-alerts{max-height:230px;overflow:auto}
 .sig-alert-empty{color:var(--text2);font-size:10px;padding:6px 2px;line-height:1.6}
-.sig-ev{display:flex;gap:6px;align-items:baseline;padding:4px 2px;border-bottom:1px dashed rgba(255,255,255,.06);font-size:10px;line-height:1.5}
+.sig-ev{display:flex;gap:6px;align-items:baseline;padding:4px 6px;border-bottom:1px dashed rgba(255,255,255,.06);font-size:10px;line-height:1.5;border-left:3px solid transparent}
 .sig-ev:last-child{border-bottom:none}
 .sig-ev-t{flex:none;color:var(--text2);font-family:var(--mono);font-size:9.5px}
+.sig-ev-i{flex:none;font-weight:700;font-size:11px;line-height:1}
 .sig-ev-k{flex:none;font-weight:700}
 .sig-ev-d{color:var(--text2);min-width:0}
 .sig-ev-preview .sig-ev-d{color:#FFB300}

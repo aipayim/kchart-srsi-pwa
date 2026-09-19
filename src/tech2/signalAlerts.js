@@ -12,27 +12,44 @@
 export const SIG_EVENTS_KEY = 'pwa_signal_events';
 export const MAX_SIGNAL_EVENTS = 100;   // v1.6.25：50/60 → 100（用户要求：主图上的信号都要可回溯）
 
-// 事件种类 → 展示元数据（label/side/severity/color）
+// 事件种类 → 展示元数据（label/side/severity/color/icon）
 // severity: 'trade'=真的成交 | 'signal'=策略信号（带边沿/确认/调仓） | 'preview'=预演（尚未确认）
+// icon: 与主图图例**同形**（▲▼●◆◇），便于把面板条目与主图标记对上；方向相关的在 kindMeta 里按 side 动态给。
 export const SIGNAL_KINDS = {
-  'srsi-edge-upper': { label: '卫星·破上带（做空信号）', side: 'short', severity: 'signal', color: '#ff6b6b' },
-  'srsi-edge-lower': { label: '卫星·破下带（做多信号）', side: 'long', severity: 'signal', color: '#2ecc71' },
-  'srsi-confirm': { label: '卫星·确认推进', side: null, severity: 'signal', color: '#58a6ff' },
-  'srsi-open': { label: '卫星·开仓', side: null, severity: 'trade', color: '#22d3ee' },
-  'srsi-close': { label: '卫星·平仓', side: null, severity: 'trade', color: '#8899aa' },
-  'srsi-preview': { label: '卫星·预演将破带', side: null, severity: 'preview', color: '#FFB300' },
+  'srsi-edge-upper': { label: '卫星·破上带（做空信号）', side: 'short', severity: 'signal', color: '#ff6b6b', icon: '▼' },
+  'srsi-edge-lower': { label: '卫星·破下带（做多信号）', side: 'long', severity: 'signal', color: '#2ecc71', icon: '▲' },
+  'srsi-confirm': { label: '卫星·确认推进', side: null, severity: 'signal', color: '#58a6ff', icon: '●' },
+  'srsi-open': { label: '卫星·开仓', side: null, severity: 'trade', color: '#22d3ee', icon: '▲' },
+  'srsi-close': { label: '卫星·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '●' },
+  'srsi-preview': { label: '卫星·预演将破带', side: null, severity: 'preview', color: '#FFB300', icon: '◌' },
   // v1.6.25：主图「机会点 / 钩」也入流（与主图标记一一对应）
-  'srsi-cross-buy': { label: '卫星·机会·跌入超卖（看多）', side: 'long', severity: 'signal', color: '#2ecc71' },
-  'srsi-cross-sell': { label: '卫星·机会·升入超买（看空）', side: 'short', severity: 'signal', color: '#ff6b6b' },
-  'srsi-hook-gold': { label: '卫星·金钩（看多）', side: 'long', severity: 'signal', color: '#00E676' },
-  'srsi-hook-death': { label: '卫星·死钩（看空）', side: 'short', severity: 'signal', color: '#FF5252' },
-  'alpha-rebal': { label: '基石·调仓', side: null, severity: 'trade', color: '#22d3ee' },
-  'alpha-open': { label: '基石·开仓', side: null, severity: 'trade', color: '#22d3ee' },
-  'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa' }
+  'srsi-cross-buy': { label: '卫星·机会·跌入超卖（看多）', side: 'long', severity: 'signal', color: '#2ecc71', icon: '●' },
+  'srsi-cross-sell': { label: '卫星·机会·升入超买（看空）', side: 'short', severity: 'signal', color: '#ff6b6b', icon: '●' },
+  'srsi-hook-gold': { label: '卫星·金钩（看多）', side: 'long', severity: 'signal', color: '#00E676', icon: '◆' },
+  'srsi-hook-death': { label: '卫星·死钩（看空）', side: 'short', severity: 'signal', color: '#FF5252', icon: '◆' },
+  'alpha-rebal': { label: '基石·调仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
+  'alpha-open': { label: '基石·开仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
+  'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '◇' }
 };
 
-export function kindMeta(kind) {
-  return SIGNAL_KINDS[kind] || { label: kind || '未知信号', side: null, severity: 'signal', color: '#8b95a5' };
+// 事件方向（side 优先，否则由 w 推导）——供图标/颜色按方向变化
+export function sideOf(ev) {
+  if (!ev) return null;
+  if (ev.side === 'long' || ev.side === 'short' || ev.side === 'flat') return ev.side;
+  if (ev.w != null && Number.isFinite(+ev.w)) { const v = +ev.w; return v > 0.02 ? 'long' : v < -0.02 ? 'short' : 'flat'; }
+  return null;
+}
+
+// kindMeta(kind, side)：side 传入时按方向给图标/颜色（真实开仓 ▲/▼、基石 ◆ 多青空黄）
+export function kindMeta(kind, side) {
+  const m = SIGNAL_KINDS[kind];
+  if (!m) return { label: kind || '未知信号', side: null, severity: 'signal', color: '#8b95a5', icon: '•' };
+  const sd = side || m.side || null;
+  const out = Object.assign({}, m, { side: sd });
+  if (kind === 'srsi-open') { out.icon = sd === 'long' ? '▲' : '▼'; out.color = sd === 'long' ? '#2ecc71' : '#ff6b6b'; }
+  else if (kind === 'alpha-rebal' || kind === 'alpha-open') { out.icon = '◆'; out.color = sd === 'long' ? '#22d3ee' : sd === 'short' ? '#f59e0b' : '#8899aa'; }
+  else if (kind === 'srsi-close') { out.icon = '●'; out.color = '#8899aa'; }
+  return out;
 }
 
 // 去重键：同一币/同一种类/同方向/同一根 bar（或同一毫秒）只算一次
@@ -137,32 +154,34 @@ export function offSignalEvent(fn) {
   if (i >= 0) _subs.splice(i, 1);
 }
 
-// 一行摘要文本（供 toast / 通知 / 列表复用）
+// 一行摘要文本（供 toast / 通知 / 列表复用）——前缀主图标记符（与面板一致，便于一眼对形）
 export function signalLine(ev) {
-  const m = kindMeta(ev && ev.kind);
+  const m = kindMeta(ev && ev.kind, sideOf(ev));
   const sym = (ev && ev.sym) || '';
   const parts = [m.label];
   if (ev && ev.count != null && ev.need != null) parts.push(ev.count + '/' + ev.need);
   if (ev && ev.price != null) parts.push('@' + (Math.abs(ev.price) >= 100 ? ev.price.toFixed(0) : ev.price.toFixed(4)));
   if (ev && ev.w != null) parts.push('w ' + (ev.w >= 0 ? '+' : '') + (ev.w * 100).toFixed(0) + '%');
-  return (sym ? sym + ' ' : '') + parts.join(' ');
+  return (m.icon ? m.icon + ' ' : '') + (sym ? sym + ' ' : '') + parts.join(' ');
 }
 
 // 最近信号列表 HTML（空态明确说明「引擎是否在跑」，不再让用户猜）
+// v1.6.26：每条 = 时间 → **主图标记符（与图例同形）** → 信号名（按类型着色） → 明细；整行左侧色条按类型着色。
 export function renderRecentSignalsHtml(n) {
   const list = recentSignals(n == null ? 8 : n);
   if (!list.length) return '<div class="sig-alert-empty">暂无信号记录。若引擎未启动，请点上方「⚡ 启动信号引擎」。</div>';
   return list.map(ev => {
-    const m = kindMeta(ev.kind);
+    const m = kindMeta(ev.kind, sideOf(ev));
     const sev = m.severity === 'trade' ? 'sig-ev-trade' : m.severity === 'preview' ? 'sig-ev-preview' : 'sig-ev-signal';
-    return '<div class="sig-ev ' + sev + '">' +
+    return '<div class="sig-ev ' + sev + '" style="border-left-color:' + m.color + '">' +
       '<span class="sig-ev-t">' + fmtSignalTime(ev.ts) + '</span>' +
+      '<span class="sig-ev-i" style="color:' + m.color + '" title="主图标记">' + (m.icon || '•') + '</span>' +
       '<span class="sig-ev-k" style="color:' + m.color + '">' + m.label + '</span>' +
       '<span class="sig-ev-d">' + (ev.side ? '方向 ' + sideText(ev.side) + ' · ' : '') +
         (ev.count != null && ev.need != null ? '确认 ' + ev.count + '/' + ev.need + ' · ' : '') +
         (ev.price != null ? '@' + (Math.abs(ev.price) >= 100 ? ev.price.toFixed(0) : ev.price.toFixed(4)) : '') +
         (ev.w != null ? ' w ' + (ev.w >= 0 ? '+' : '') + (ev.w * 100).toFixed(0) + '%' : '') +
-        (ev.text ? ' ' + ev.text : '') + '</span>' +
+        (ev.text ? ' ' + String(ev.text) : '') + '</span>' +
     '</div>';
   }).join('');
 }

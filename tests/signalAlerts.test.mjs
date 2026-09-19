@@ -4,7 +4,7 @@
 //       renderRecentSignalsHtml 空态与行渲染 / signalLine 摘要
 import {
   SIG_EVENTS_KEY, MAX_SIGNAL_EVENTS, SIGNAL_KINDS,
-  signalEventKey, kindMeta, fmtSignalTime, sideText,
+  signalEventKey, kindMeta, fmtSignalTime, sideText, sideOf,
   pushSignalEvent, loadSignalEvents, recentSignals, clearSignalEvents,
   renderRecentSignalsHtml, signalLine, onSignalEvent, offSignalEvent
 } from '../src/tech2/signalAlerts.js';
@@ -31,6 +31,15 @@ console.log('\n[signalAlerts: 纯函数]');
   ok('kindMeta 已知种类', kindMeta('srsi-edge-lower').side === 'long' && kindMeta('srsi-edge-lower').severity === 'signal');
   ok('kindMeta 未知回退', kindMeta('zzz').label === 'zzz' && kindMeta(null).label === '未知信号');
   ok('kindMeta 未知 color 有值', /^#/.test(kindMeta('zzz').color));
+  // v1.6.26：主图标记符（icon）与按方向动态着色
+  ok('每种 kind 都有 icon', Object.keys(SIGNAL_KINDS).every(k => SIGNAL_KINDS[k].icon));
+  ok('钩=◆ / 机会=● / 预演=◌', kindMeta('srsi-hook-gold').icon === '◆' && kindMeta('srsi-cross-buy').icon === '●' && kindMeta('srsi-preview').icon === '◌');
+  ok('破下带=▲ / 破上带=▼', kindMeta('srsi-edge-lower').icon === '▲' && kindMeta('srsi-edge-upper').icon === '▼');
+  ok('未知 kind icon 回退 •', kindMeta('zzz').icon === '•');
+  ok('srsi-open 按方向给 ▲/▼ 与颜色', kindMeta('srsi-open', 'long').icon === '▲' && kindMeta('srsi-open', 'long').color === '#2ecc71' && kindMeta('srsi-open', 'short').icon === '▼' && kindMeta('srsi-open', 'short').color === '#ff6b6b');
+  ok('alpha-rebal 按方向给颜色（多青/空黄/平灰）', kindMeta('alpha-rebal', 'long').color === '#22d3ee' && kindMeta('alpha-rebal', 'short').color === '#f59e0b' && kindMeta('alpha-rebal', 'flat').color === '#8899aa');
+  ok('alpha-close=◇', kindMeta('alpha-close').icon === '◇');
+  ok('sideOf：side 优先 / w 推导 / 无→null', sideOf({ side: 'short' }) === 'short' && sideOf({ w: -0.3 }) === 'short' && sideOf({ w: 0.3 }) === 'long' && sideOf({ w: 0 }) === 'flat' && sideOf({}) === null);
 
   const k1 = signalEventKey({ sym: 'BTCUSDT', kind: 'srsi-edge-upper', side: 'short', barT: 1000 });
   const k2 = signalEventKey({ sym: 'BTCUSDT', kind: 'srsi-edge-upper', side: 'short', barT: 1000 });
@@ -94,17 +103,30 @@ console.log('\n[signalAlerts: 事件流]');
   pushSignalEvent({ sym: 'BTCUSDT', kind: 'srsi-edge-upper', side: 'short', price: 77900, barT: 1, ts: Date.now() });
   pushSignalEvent({ sym: 'BTCUSDT', kind: 'srsi-confirm', side: 'short', count: 2, need: 2, price: 77950, barT: 2, ts: Date.now() });
   pushSignalEvent({ sym: 'BTCUSDT', kind: 'srsi-open', side: 'short', price: 77960, barT: 3, ts: Date.now() });
+  pushSignalEvent({ sym: 'BTCUSDT', kind: 'srsi-open', side: 'long', price: 77970, barT: 4, ts: Date.now() });
   const html = renderRecentSignalsHtml(8);
   ok('列表含破上带标签', html.includes('卫星·破上带（做空信号）'));
   ok('列表含确认计数', html.includes('确认 2/2'));
   ok('列表含价格', html.includes('77900'));
   ok('列表带 trade 样式类', html.includes('sig-ev-trade'));
+  // v1.6.26：标记符 + 类型着色 + 左侧色条
+  ok('列表每行有主图标记符 span', (html.match(/sig-ev-i/g) || []).length === 4);
+  ok('列表含 ▼（破上带/开空）与 ▲（开多）', html.includes('>▼</span>') && html.includes('>▲</span>'));
+  ok('列表信号名按类型着色（破上带红 / 开多绿）', html.includes('color:#ff6b6b">卫星·破上带') && html.includes('color:#2ecc71">卫星·开仓'));
+  ok('列表整行左侧色条按类型', html.includes('border-left-color:#ff6b6b'));
+  ok('列表 text 非字符串也不出 [object Object]', (() => {
+    clearSignalEvents();
+    pushSignalEvent({ sym: 'X', kind: 'alpha-rebal', w: 0.1, barT: 9, ts: Date.now() });
+    const h = renderRecentSignalsHtml(4);
+    return !h.includes('[object Object]');
+  })());
   ok('列表空数据不抛', renderRecentSignalsHtml(0) === '' || renderRecentSignalsHtml(0).length >= 0);
 
   // signalLine
   const line = signalLine({ sym: 'BTCUSDT', kind: 'alpha-rebal', w: -0.28, price: 77900 });
   ok('signalLine 含标的与种类', line.includes('BTCUSDT') && line.includes('基石·调仓'));
   ok('signalLine 含 w 百分比', line.includes('-28%'));
+  ok('signalLine 前缀主图标记符', line.indexOf('◆ ') === 0 && signalLine({ sym: 'X', kind: 'srsi-hook-death', side: 'short' }).indexOf('◆ ') === 0);
   ok('signalLine 空事件不抛', typeof signalLine(null) === 'string');
 
   // 持久化
