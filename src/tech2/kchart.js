@@ -3668,12 +3668,7 @@ function renderActionCardDom() {
   if (el.__sig !== sig) {
     el.__sig = sig;
     el.style.borderColor = v.color;
-    el.innerHTML = '<div class="kac-title">' + v.title + '</div>'
-      + '<div class="kac-big" style="color:' + v.color + '">' + v.big + '</div>'
-      + '<div class="kac-sub">' + v.sub + '</div>'
-      + (v.warn ? '<div class="kac-warn">' + v.warn + '</div>' : '')
-      + '<div class="kac-rule">' + v.rule + '</div>'
-      + '<div class="kac-entry" style="opacity:' + (v.entryStrong ? 0.95 : 0.8) + '">' + v.entry + '</div>';
+    el.innerHTML = actionCardHtml(v);
   }
   el.style.display = '';
   _placeActionCard(el, box);
@@ -5806,14 +5801,49 @@ export function actionCardView(sym, ac) {
     ? '入场 ' + fmtP(ac.price) + ' / 止损 ' + fmtP(ac.stop) + ' / 目标 ' + fmtP(ac.target) + ' · 仓 卫星 10-15%×5-7x'
     : '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x';
   const d1 = ac.alphaDataT ? ('日线' + new Date(ac.alphaDataT).toISOString().slice(5, 10) + '收盘') : '';
+  // v1.6.24：分段着色——让「不同状态 → 不同颜色」在卡片正文里也看得出来（不只边框+大字）
+  //   基石行：α多→绿 / α空→红 / 中性→灰；带态：下带→绿 / 上带→红 / 中带→灰
+  //   入场行：可入场时 止损红 / 目标绿（不可入场则整行灰）
+  const DIR_GRAY = 'rgba(160,175,190,.85)';
+  const SEP = 'rgba(160,175,190,.55)';
+  const dirColor = ac.alphaDir === 'long' ? '#2ecc71' : ac.alphaDir === 'short' ? '#ff6b6b' : DIR_GRAY;
+  const bandColor = ac.inBand === 'lower' ? '#2ecc71' : ac.inBand === 'upper' ? '#ff6b6b' : 'rgba(200,212,224,.7)';
+  const baseTxt = '基石 α' + dirTxt + ' ' + Math.abs((ac.alphaW || 0) * 100).toFixed(0) + '%' + (d1 ? '(' + d1 + ')' : '');
+  const subParts = [{ t: baseTxt, c: dirColor }, { t: ' · ', c: SEP }, { t: bandTxt, c: bandColor }];
+  const entryStrong = ac.stop != null && ac.target != null;
+  const entryParts = entryStrong
+    ? [
+      { t: '入场 ' + fmtP(ac.price), c: 'rgba(230,238,245,.95)' },
+      { t: ' / ', c: SEP },
+      { t: '止损 ' + fmtP(ac.stop), c: '#ff6b6b' },
+      { t: ' / ', c: SEP },
+      { t: '目标 ' + fmtP(ac.target), c: '#2ecc71' },
+      { t: ' · 仓 卫星 10-15%×5-7x', c: DIR_GRAY },
+    ]
+    : [{ t: '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x', c: 'rgba(160,175,190,.8)' }];
   return {
     color, big,
     title: (sym || cfg.sym) + ' · 15m 带规则',
-    sub: '基石 α' + dirTxt + ' ' + Math.abs((ac.alphaW || 0) * 100).toFixed(0) + '%' + (d1 ? '(' + d1 + ')' : '') + ' · ' + bandTxt,
+    sub: baseTxt + ' · ' + bandTxt,
+    subParts,
     warn: ac.trendConflict ? ('⚠ 逆日内趋势（' + (ac.intradayTf || '1h') + ' ' + (ac.intradayDir === 'long' ? '↑' : '↓') + '）') : '',
     rule, entry,
-    entryStrong: ac.stop != null && ac.target != null,
+    entryParts,
+    entryStrong,
+    dirColor, bandColor,
   };
+}
+
+// 行动卡 HTML（纯函数，可单测）：DOM 浮层用；canvas 回退仍用 actionCardView 的纯文本字段
+export function actionCardHtml(v) {
+  if (!v) return '';
+  const seg = (parts) => (parts || []).map(p => '<span style="color:' + p.c + '">' + p.t + '</span>').join('');
+  return '<div class="kac-title">' + v.title + '</div>'
+    + '<div class="kac-big" style="color:' + v.color + '">' + v.big + '</div>'
+    + '<div class="kac-sub">' + seg(v.subParts) + '</div>'
+    + (v.warn ? '<div class="kac-warn">' + v.warn + '</div>' : '')
+    + '<div class="kac-rule">' + v.rule + '</div>'
+    + '<div class="kac-entry">' + seg(v.entryParts) + '</div>';
 }
 
 // 浮层位置钳制（纯函数，可单测）：留 4px 边距，容器小于卡片时贴左上
@@ -5954,6 +5984,7 @@ export const kchartApi = {
   pulseAlpha,
   withAlpha,
   actionCardView,
+  actionCardHtml,
   clampBoxPos,
   getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,

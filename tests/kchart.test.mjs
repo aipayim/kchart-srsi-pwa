@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, clampBoxPos } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, actionCardHtml, clampBoxPos } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3842,6 +3842,26 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('actionCardView reverse 规则行', v3.rule.includes('反向信号仅提示'));
   ok('actionCardView noBase 观望', actionCardView('X', { ...base, verdict: 'noBase' }).big === '观望·基石中性');
   ok('actionCardView ac=null → null', actionCardView('X', null) === null);
+  // v1.6.24：分段着色（不同状态→不同颜色）
+  ok('actionCardView subParts 三段（基石/分隔/带态）', v1.subParts.length === 3 && v1.subParts[1].t === ' · ');
+  ok('actionCardView 基石α多→绿', v1.subParts[0].c === '#2ecc71' && v1.subParts[0].t.includes('基石 α多 30%'));
+  ok('actionCardView 下带→绿', v1.subParts[2].c === '#2ecc71' && v1.subParts[2].t.includes('K,D均在下带'));
+  ok('actionCardView 基石α空→红 / 中带→灰', v2.subParts[0].c === '#ff6b6b' && v2.subParts[2].c !== '#2ecc71' && v2.subParts[2].c !== '#ff6b6b');
+  ok('actionCardView 上带→红', actionCardView('X', { ...base, inBand: 'upper' }).subParts[2].c === '#ff6b6b');
+  ok('actionCardView sub 保留纯文本（canvas 回退用）', typeof v1.sub === 'string' && v1.sub.includes('基石 α多') && v1.sub.includes(' · '));
+  ok('actionCardView 入场分段：止损红/目标绿', v1.entryParts.length === 6 && v1.entryParts[2].c === '#ff6b6b' && v1.entryParts[4].c === '#2ecc71');
+  ok('actionCardView 不可入场→入场整行单段灰', v2.entryParts.length === 1 && v2.entryParts[0].c.includes('160,175,190'));
+  ok('actionCardView 方向/带态颜色字段', v1.dirColor === '#2ecc71' && v1.bandColor === '#2ecc71' && v2.dirColor === '#ff6b6b');
+  // actionCardHtml：可入场状态的分段着色落到 DOM 字符串
+  const h1 = actionCardHtml(v1);
+  ok('actionCardHtml 含标题/大字/规则/入场四段', h1.includes('kac-title') && h1.includes('kac-big') && h1.includes('kac-rule') && h1.includes('kac-entry'));
+  ok('actionCardHtml 大字用状态色', h1.includes('color:#2ecc71">可入场 做多'));
+  ok('actionCardHtml 止损红 / 目标绿', h1.includes('color:#ff6b6b">止损') && h1.includes('color:#2ecc71">目标'));
+  ok('actionCardHtml 基石行分段着色', h1.includes('color:#2ecc71">基石 α多') && h1.includes('color:#2ecc71">K,D均在下带'));
+  ok('actionCardHtml 无警告时不含 warn 段', !h1.includes('kac-warn'));
+  const h2 = actionCardHtml(v3);
+  ok('actionCardHtml 逆势时含 warn 段', h2.includes('kac-warn') && h2.includes('逆日内趋势'));
+  ok('actionCardHtml 空视图 → 空串', actionCardHtml(null) === '');
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
