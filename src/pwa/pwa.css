@@ -563,6 +563,16 @@ body.pwa .kchart-maintools .mt-legend{display:none}
   line-height:1;padding:5px 10px;cursor:pointer}
 .pwa-tfcycle button:hover{color:var(--accent)}
 .pwa-tfcycle #pwaTfCur{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);min-width:38px;text-align:center;text-transform:none}
+/* v1.6.20：主图卡头内联「主图叠加 SRSI 周期」快选（小方块，可横滑；不占额外行） */
+.pwa-srsi-tfs{display:inline-flex;align-items:center;gap:3px;margin-left:6px;max-width:100%;overflow-x:auto;
+  scrollbar-width:none;white-space:nowrap;flex:0 1 auto;min-width:0}
+.pwa-srsi-tfs::-webkit-scrollbar{display:none}
+.pwa-srsitf{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;line-height:1;padding:4px 5px;border-radius:6px;
+  border:1px solid var(--border);background:var(--card2);color:var(--text2);cursor:pointer;user-select:none;position:relative}
+.pwa-srsitf.on{color:var(--c,#22d3ee);border-color:var(--c,#22d3ee);background:color-mix(in srgb,var(--c,#22d3ee) 16%,transparent)}
+.pwa-srsitf.aux{font-weight:700}
+/* 手机：隐藏横滑的「各周期K线」行（主图周期用 ‹ › 切；叠加周期用主图卡头的小方块） */
+@media (max-width:900px){ body.pwa .pwa-tfbar .kchart-tfs{display:none!important} }
 /* 速览表：手机隐藏「能量/闸门/参数」三列（信息在信号条/设置页），6 列不再横向裁切 */
 @media (max-width:640px){
   body.pwa .kchart-ov-head-row,body.pwa .kchart-ov-row{grid-template-columns:42px 38px 38px 42px minmax(0,1fr) 50px;gap:5px;padding:2px 6px}

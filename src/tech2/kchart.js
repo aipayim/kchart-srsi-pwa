@@ -1232,7 +1232,29 @@ function renderControls() {
 // 复用签名守卫：先以「轻量签名」(状态 + 各周期末值/参数/长度) 判断是否需重建，
 // 仅在数据或状态变化时才跑 srsiKD；renderKChart 每帧调用也不抖。
 let _mtSig = '';
+// v1.6.20：手机 PWA「主图」卡头内联的「主图叠加 SRSI 周期」快选（小方块，可横滑）。
+// 与 #kchartMainTools 的 chips 同源（toggleOvQuickTf），解决手机上该选择藏在 ⚙ 面板里不易发现的问题。
+function renderSrsiTfQuick() {
+  const el = typeof document !== 'undefined' ? document.getElementById('pwaSrsiTfs') : null;
+  if (!el) return;
+  let sig = cfg.symbol + '|';
+  const html = KLINE_TF.map(tf => {
+    const overlay = !!(cfg.overlayTfs && cfg.overlayTfs[tf]);
+    const aux = !!(cfg.srsiAux && cfg.srsiAux[tf]);
+    const hidden = !!(cfg.ovHide && cfg.ovHide[tf]);
+    const on = (overlay || aux) && !hidden;
+    sig += tf + (on ? 1 : 0) + (aux ? 1 : 0) + ';';
+    const col = aux ? '#4dabf7' : tfColor(tf);
+    return `<span class="pwa-srsitf${on ? ' on' : ''}${aux ? ' aux' : ''}" data-tf="${tf}" style="--c:${col}" title="${tf}${aux ? '（辅助闸门）' : ''}：点选${on ? '隐藏' : '显示'}主图叠加">${tf}</span>`;
+  }).join('');
+  if (el.__sig === sig) return;
+  el.__sig = sig;
+  el.innerHTML = html;
+  el.querySelectorAll('.pwa-srsitf').forEach(c => c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf'))));
+}
+
 function renderMainTools() {
+  renderSrsiTfQuick();
   const el = typeof document !== 'undefined' ? document.getElementById('kchartMainTools') : null;
   if (!el) return;
   const sym = cfg.symbol;
