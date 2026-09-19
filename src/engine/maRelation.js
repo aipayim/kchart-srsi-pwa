@@ -4,6 +4,9 @@
 //
 // 术语：本周期 = 主图 K 线周期；日线/周线/4H = 更高周期（默认已按主图 bar 对齐传入，见 buildMaRelation 说明）。
 
+import { winLossByAtr } from './indicators.js';
+import { THRESH } from './thresholds.js';
+
 export const MA_REL_DEFAULTS = {
   type: 'sma',          // 'sma' | 'ema'
   fast: 20, mid: 60, slow: 120,
@@ -22,6 +25,7 @@ export const MA_REL_DEFAULTS = {
 function num(v) { return typeof v === 'number' && Number.isFinite(v); }
 function arr(v) { return Array.isArray(v) ? v : []; }
 function nullArr(n) { return new Array(n).fill(null); }
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
 // 均线序列：type 'sma'|'ema'；返回与 closes 等长数组，不足周期处为 null。
 // EMA 采用「前 period 个值的 SMA 起步」递推，与 indicators.js 的 ema() 口径一致。
@@ -254,15 +258,20 @@ export function buildMaRelation(input) {
     const daily = {}; for (const p of dPer) daily[p] = nullArr(n);
     const weekly = {}; for (const p of wPer) weekly[p] = nullArr(n);
     const market = maMarketState(inp.closes1d, {});
-    return {
+    const out0 = {
       opts: o, ma, vwap: nullArr(n), daily, weekly,
       squeeze: { spreadPct: null, squeezed: false },
-      market, signals: [],
+      market, signals: [], closes, atr,
       info: {
         distFast: null, distDaily20: null, distWeekly20: null, distWeekly200: null,
         devAtr: false, squeezed: false, lastSignal: null,
+        px: null, atrPct: null,
       },
     };
+    out0.stand = standProgress(out0);
+    out0.breakout = squeezeBreakout(out0);
+    out0.stats = signalForwardStats([], closes, atr);
+    return out0;
   }
 
   // 本周期均线与 VWAP
@@ -365,11 +374,12 @@ export function buildMaRelation(input) {
     devAtr = Math.abs(distFast) > o.devAtr * atrPct;
   }
 
-  return {
+  const out = {
     opts: o, ma, vwap, daily, weekly,
     t: mainT,                 // v1.6.32：主图 bar 时间戳（解读面板的信号列表要显示时间）
     squeeze: { spreadPct: sqLast.spreadPct, squeezed: sqLast.squeezed },
     market, signals,
+    closes, atr,              // v1.6.36：回踩→站稳进度 / 突破预告 / 信号胜率需读原始序列
     info: {
       distFast,
       distDaily20: maDistPct(closes[lastI], d20[lastI]),
@@ -383,6 +393,11 @@ export function buildMaRelation(input) {
       atrPct: (num(atr[lastI]) && num(closes[lastI]) && closes[lastI] > 0) ? atr[lastI] / closes[lastI] * 100 : null,
     },
   };
+  // v1.6.36：三项新增分析（纯函数，结果随 data 一起返回；livePrice 由解读面板按实时价重算）
+  out.stand = standProgress(out);
+  out.breakout = squeezeBreakout(out);
+  out.stats = signalForwardStats(signals, closes, atr);
+  return out;
 }
 
 // ============================================================
@@ -403,6 +418,143 @@ function _pct(v) {
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 }
 function _lastNum(arr) { if (!Array.isArray(arr) || !arr.length) return null; const v = arr[arr.length - 1]; return (v != null && isFinite(v)) ? v : null; }
+// v1.6.36：文字进度条（纯字符串，供面板显示「回踩→站稳」进度）
+function _bar(p, n) {
+  const k = (typeof p === 'number' && isFinite(p)) ? Math.round(clamp01(p) * (n || 8)) : 0;
+  return '▰'.repeat(k) + '▱'.repeat(Math.max(0, (n || 8) - k));
+}
+
+// ============================================================
+// v1.6.36：回踩 → 站稳 进度（用户需求：让小白直观看懂「距 MA20 站稳还有多远」）
+// 站稳定义（全项目一致）：**收盘价**站上 MA20（影线不算）。
+// 纯函数：只读 data（buildMaRelation 返回）+ opts.livePrice（可选，用实时价算「现在离站稳多远」）。
+// progress 0..1：带外→0，贴近带→0.6，带内→0.6..1，收盘确认站上→1。
+// ============================================================
+export function standProgress(data, opts) {
+  const base = { ok: false, side: null, stage: 'none', above: null, standBars: 0, inBandBars: 0, distStandPct: null, distBandPct: null, progress: null, label: '数据不足' };
+  if (!data || !data.ma || !Array.isArray(data.ma.fast)) return base;
+  const closes = Array.isArray(data.closes) ? data.closes : [];
+  const maF = data.ma.fast;
+  const atrArr = Array.isArray(data.atr) ? data.atr : [];
+  const n = closes.length;
+  if (n < 3 || maF.length !== n) return base;
+  const state = (data.market && data.market.state) || 'RANGE';
+  const side = state === 'BULL' ? 'long' : state === 'BEAR' ? 'short' : null;
+  const i = n - 1;                       // 最新 bar（可能是进行中）
+  const ic = n - 2;                      // 最后一根**已收盘** bar（站稳以收盘确认）
+  const live = (opts && num(opts.livePrice)) ? opts.livePrice : null;
+  const px = live != null ? live : (num(data.info && data.info.px) ? data.info.px : closes[i]);
+  const f = maF[i];
+  if (!num(px) || !num(f) || f <= 0) return base;
+  const atrAbs = (num(atrArr[i]) && atrArr[i] > 0) ? atrArr[i] : Math.abs(f) * 0.01;
+  const bandHalf = 0.2 * atrAbs;         // 回踩带半宽 = 0.2×ATR
+  const bandLo = f - bandHalf, bandHi = f + bandHalf;
+
+  const inBandOf = (c) => num(c) && c >= bandLo - 1e-9 && c <= bandHi + 1e-9;
+  const goodSideOf = (c) => side === 'short' ? (num(c) && c < f) : (num(c) && c >= f);
+  let standBars = 0;
+  if (side) for (let k = ic; k >= 0; k--) { if (goodSideOf(closes[k])) standBars++; else break; }
+  let inBandBars = 0;
+  for (let k = ic; k >= 0; k--) { if (inBandOf(closes[k])) inBandBars++; else break; }
+
+  const distStand = side === 'short' ? (px - f) : (f - px);          // >0 = 还没站上
+  const distBand = side === 'short' ? (px - bandHi) : (bandLo - px); // >0 = 还没进带
+  const distStandPct = distStand / f * 100;
+  const distBandPct = distBand / f * 100;
+  const crossed = side === 'short' ? (num(closes[ic]) && closes[ic] < f) : (num(closes[ic]) && closes[ic] >= f);
+
+  let progress;
+  if (!side) progress = 1 - clamp01(Math.abs(px - f) / Math.max(2 * atrAbs, 1e-9));  // 震荡：距 MA20 贴合度
+  else if (crossed && distStand <= 0) progress = 1;
+  else if (distStand <= 0) progress = 0.85;
+  else if (distBand <= 0) progress = 0.6 + 0.4 * clamp01(1 - distStand / Math.max(bandHalf, 1e-9));
+  else progress = 0.6 * clamp01(1 - distBand / Math.max(3 * atrAbs, 1e-9));
+
+  let stage, label;
+  if (!side) {
+    stage = 'range';
+    label = '震荡：距 MA20 ' + Math.abs((px - f) / f * 100).toFixed(2) + '%（±0.2×ATR 内视为贴合）';
+  } else {
+    const dir = side === 'short' ? '做空' : '做多';
+    const edge = side === 'short' ? '反抽带' : '回踩带';
+    const okSide = side === 'short' ? '下方' : '上方';
+    if (crossed && distStand <= 0) { stage = 'stand'; label = '已站稳 MA20（连续 ' + standBars + ' 根收盘在' + okSide + '）→ ' + dir + '条件成立'; }
+    else if (distStand <= 0) { stage = 'ready'; label = '现价已' + (side === 'short' ? '跌破' : '站上') + ' MA20，等这根收盘确认（已连续 ' + standBars + ' 根）'; }
+    else if (distBand <= 0) { stage = 'inband'; label = '已进' + edge + '内 · 距站稳还差 ' + Math.abs(distStandPct).toFixed(2) + '%' + (inBandBars > 0 ? '（连续 ' + inBandBars + ' 根在带内）' : ''); }
+    else { stage = distBand <= atrAbs ? 'near' : 'far'; label = '距' + edge + ' ' + Math.abs(distBandPct).toFixed(2) + '% · 距站稳 ' + Math.abs(distStandPct).toFixed(2) + '%'; }
+  }
+  return { ok: true, side, stage, above: px >= f, standBars, inBandBars, distStandPct, distBandPct, progress: clamp01(progress), label };
+}
+
+// ============================================================
+// v1.6.36：均线密集「突破预告」（理论里的 L2 只报「打开后」——这是提前预警）
+// 密集区 = 三条均线的 [min, max]；价格贴近上/下沿（≤0.5×ATR）或已在区内 → 提示「即将选择方向」。
+// ============================================================
+export function squeezeBreakout(data) {
+  const base = { ok: false, squeezed: false, watching: false, nearEdge: false, hi: null, lo: null, mid: null, upPct: null, downPct: null, refUp: null, refDown: null, closer: null, label: '数据不足' };
+  if (!data || !data.ma) return base;
+  const vals = [_lastNum(data.ma.fast), _lastNum(data.ma.mid), _lastNum(data.ma.slow)].filter(num);
+  if (vals.length < 2) return base;
+  const hi = Math.max(...vals), lo = Math.min(...vals), mid = (hi + lo) / 2;
+  const closes = Array.isArray(data.closes) ? data.closes : [];
+  const atrArr = Array.isArray(data.atr) ? data.atr : [];
+  const i = closes.length - 1;
+  const px = num(data.info && data.info.px) ? data.info.px : (i >= 0 ? closes[i] : null);
+  if (!num(px) || px <= 0) return base;
+  const atrAbs = (num(atrArr[i]) && atrArr[i] > 0) ? atrArr[i] : Math.abs(px) * 0.01;
+  const atrPct = atrAbs / px * 100;
+  const upPct = (hi - px) / px * 100;     // >0 = 价格在密集区上沿下方
+  const downPct = (px - lo) / px * 100;   // >0 = 价格在密集区下沿上方
+  const inside = px >= lo && px <= hi;
+  const nearUp = Math.abs(upPct) <= 0.5 * atrPct;
+  const nearDown = Math.abs(downPct) <= 0.5 * atrPct;
+  const nearEdge = inside || nearUp || nearDown;
+  const squeezed = !!(data.squeeze && data.squeeze.squeezed);
+  const watching = squeezed && nearEdge;
+  const closer = Math.abs(upPct) <= Math.abs(downPct) ? 'up' : 'down';
+  const label = watching
+    ? '密集区收窄 · 价格贴近' + (closer === 'up' ? '上沿' : '下沿') + ' → 关注向' + (closer === 'up' ? '上' : '下') + '突破 ' + _fmtPx(closer === 'up' ? hi : lo) + '（收盘确认）'
+    : squeezed ? '均线密集（尚未贴近边缘）· 等收盘突破 ' + _fmtPx(hi) + ' / ' + _fmtPx(lo)
+      : '均线未密集（无突破预告）';
+  return { ok: true, squeezed, watching, nearEdge, hi, lo, mid, upPct, downPct, refUp: hi, refDown: lo, closer, label };
+}
+
+// ============================================================
+// v1.6.36：历史信号前瞻胜率（L1/L2/L3 按 2×ATR 止盈 / 1.5×ATR 止损判定）
+// 诚实展示：这套理论在**本币本周期**的数据上到底有没有优势（复用 winLossByAtr，与因子消融同口径）。
+// 纯函数；样本不足时 winRate=null。
+// ============================================================
+export function signalForwardStats(signals, closes, atr, opts) {
+  const o = opts || {};
+  const tpAtr = num(o.tpAtr) ? o.tpAtr : THRESH.BT_TP_ATR;
+  const slAtr = num(o.slAtr) ? o.slAtr : THRESH.BT_SL_ATR;
+  const horizon = num(o.horizon) ? o.horizon : THRESH.BT_HORIZON;
+  const out = { n: 0, wins: 0, losses: 0, unresolved: 0, winRate: null, avgPnlPct: null, byType: {} };
+  const list = Array.isArray(signals) ? signals : [];
+  let pnlSum = 0, pnlN = 0, valid = 0;
+  for (const s of list) {
+    if (!s || !num(s.i) || !s.side) continue;
+    valid++;
+    const r = winLossByAtr(closes, atr, { entryIdx: s.i, direction: s.side === 'long' ? 'buy' : 'sell', tpAtr, slAtr, horizon });
+    const key = s.type || 'L1';
+    const t = out.byType[key] || (out.byType[key] = { n: 0, wins: 0, losses: 0, unresolved: 0, winRate: null });
+    t.n++;
+    if (r.win === 1) { out.wins++; t.wins++; }
+    else if (r.win === -1) { out.losses++; t.losses++; }
+    else { out.unresolved++; t.unresolved++; }
+    if (r.win != null && num(r.pnlPct)) { pnlSum += r.pnlPct; pnlN++; }
+  }
+  out.n = valid;
+  const resolved = out.wins + out.losses;
+  out.winRate = resolved > 0 ? out.wins / resolved : null;
+  out.avgPnlPct = pnlN > 0 ? pnlSum / pnlN : null;
+  for (const k of Object.keys(out.byType)) {
+    const t = out.byType[k];
+    const rr = t.wins + t.losses;
+    t.winRate = rr > 0 ? t.wins / rr : null;
+  }
+  return out;
+}
 
 // 返回 { tone, verdict, rows, signals }
 //   rows      = 状态解读行（每维度一行）
@@ -410,7 +562,7 @@ function _lastNum(arr) { if (!Array.isArray(arr) || !arr.length) return null; co
 export function maRelReadout(data, opts2) {
   const o2 = opts2 || {};
   const sigLimit = (o2.sigLimit != null && isFinite(o2.sigLimit)) ? Math.max(0, Math.floor(o2.sigLimit)) : 10;
-  const empty = { tone: 'none', verdict: '未启用均线关系（在主图工具面板点「📐 均线关系」开启）', rows: [], signals: [] };
+  const empty = { tone: 'none', verdict: '未启用均线关系（在主图工具面板点「📐 均线关系」开启）', rows: [], signals: [], stand: null, breakout: null, stats: null };
   if (!data || !data.opts) return empty;
   const o = data.opts;
   const closes = (data.ma && data.ma.fast) || [];
@@ -426,6 +578,10 @@ export function maRelReadout(data, opts2) {
   const state = mk.state || 'RANGE';
   const tone = state === 'BULL' ? 'bull' : state === 'BEAR' ? 'bear' : 'range';
   const rows = [];
+  // v1.6.36：新增三项分析（在下方对应位置 push 行，结果一并返回供渲染层使用）
+  const sp = standProgress(data, { livePrice: o2.livePrice });
+  const bo = squeezeBreakout(data);
+  const st2 = (data.stats && data.stats.n != null) ? data.stats : signalForwardStats(data.signals, data.closes, data.atr);
 
   // 1) 大环境
   const stIcon = tone === 'bull' ? '▲' : tone === 'bear' ? '▼' : '◆';
@@ -446,6 +602,21 @@ export function maRelReadout(data, opts2) {
       label: '价在本周期MA' + (o.fast || 20) + ' ' + (up ? '上方' : '下方') + '（' + (up ? '偏多' : '偏空') + '）',
       detail: 'MA' + (o.fast || 20) + ' ' + _fmtPx(mFast) + ' · 距 ' + _pct(data.info && data.info.distFast) +
         (mMid != null ? ' · MA' + (o.mid || 60) + ' ' + _fmtPx(mMid) : ''),
+    });
+  }
+
+  // 2.5) v1.6.36：回踩 → 站稳 进度（用户需求：让小白直观看懂「距站稳还有多远」）
+  if (sp.ok) {
+    const spColor = (sp.stage === 'stand' || sp.stage === 'ready') ? '#2ecc71' : sp.stage === 'inband' ? '#ffd740' : sp.stage === 'range' ? '#f59e0b' : '#8899aa';
+    const pctTxt = Math.round((sp.progress || 0) * 100) + '% ' + _bar(sp.progress, 8);
+    // 震荡时没有「站稳」概念 → 改说「均线贴合度」（不追涨杀跌）
+    const head = sp.side === 'short' ? ('反抽→受阻 ' + pctTxt + '（等反抽受阻）')
+      : sp.side === 'long' ? ('回踩→站稳 ' + pctTxt + '（等回踩站稳）')
+        : ('均线贴合度 ' + pctTxt + '（震荡：不追涨杀跌）');
+    rows.push({
+      icon: sp.stage === 'stand' ? '✅' : '⏳', color: spColor,
+      label: head,
+      detail: sp.label + (sp.standBars > 0 && sp.stage !== 'stand' ? ' · 已连续 ' + sp.standBars + ' 根在正确侧' : ''),
     });
   }
 
@@ -471,6 +642,15 @@ export function maRelReadout(data, opts2) {
       icon: sq.squeezed ? '●' : '○', color: sq.squeezed ? '#ffd740' : 'rgba(160,175,190,.85)',
       label: sq.squeezed ? '均线密集（即将选方向，等收盘突破）' : '均线未密集（尚可顺势）',
       detail: '三线最大差 ' + _pct(sq.spreadPct) + ' · 密集阈值 ' + (o.squeezePct != null ? o.squeezePct : 1.2) + '%',
+    });
+  }
+
+  // 4.5) v1.6.36：密集突破预告（理论里的 L2 只报「打开后」，这是提前预警）
+  if (bo.ok && (bo.squeezed || bo.watching)) {
+    rows.push({
+      icon: bo.watching ? '⚡' : '○', color: bo.watching ? '#ffd740' : 'rgba(160,175,190,.85)',
+      label: bo.watching ? ('密集突破预告：关注向' + (bo.closer === 'up' ? '上' : '下') + '突破') : '密集区已形成，等收盘突破',
+      detail: bo.label + ' · 上沿 ' + _fmtPx(bo.refUp) + ' / 下沿 ' + _fmtPx(bo.refDown) + '（距上 ' + _pct(bo.upPct) + ' · 距下 ' + _pct(bo.downPct) + '）',
     });
   }
 
@@ -519,6 +699,27 @@ export function maRelReadout(data, opts2) {
     rows.push({ icon: '○', color: 'rgba(160,175,190,.85)', label: '暂无可执行信号', detail: '等价格给「收盘态度」：站上/跌破 MA' + (o.fast || 20) });
   }
 
+  // 7.5) v1.6.36：历史信号前瞻胜率（诚实展示：这套理论在本币本周期到底有没有优势）
+  if (st2 && st2.n > 0) {
+    const wrTxt = st2.winRate != null ? (st2.winRate * 100).toFixed(0) + '%' : '--';
+    const wrColor = st2.winRate == null ? '#8899aa' : st2.winRate >= 0.55 ? '#2ecc71' : st2.winRate <= 0.45 ? '#ff6b6b' : '#f59e0b';
+    const parts = Object.keys(st2.byType).sort().map(k => {
+      const t = st2.byType[k];
+      const rr = t.wins + t.losses;
+      return k + ' ' + (rr > 0 ? (t.wins / rr * 100).toFixed(0) + '%' : '--') + '(' + t.n + ')';
+    });
+    // 诚实口径：胜率≤45% 直说「无优势」，≥55% 标「有优势」，中间标「不明确」
+    const edgeTxt = st2.winRate == null ? '' : st2.winRate <= 0.45 ? '（本币历史无优势）' : st2.winRate >= 0.55 ? '（本币历史有优势）' : '（优势不明确）';
+    rows.push({
+      icon: '📊', color: wrColor,
+      label: '历史信号胜率 ' + wrTxt + '（2×ATR止盈 / 1.5×ATR止损 · 样本 ' + st2.n + '）' + edgeTxt,
+      detail: '盈 ' + st2.wins + ' · 亏 ' + st2.losses + ' · 未定 ' + st2.unresolved +
+        (st2.avgPnlPct != null ? ' · 均盈亏 ' + _pct(st2.avgPnlPct) : '') +
+        (parts.length ? ' · 分类型 ' + parts.join(' ') : '') +
+        ' · 仅历史统计不代表未来',
+    });
+  }
+
   // 8) 等待区 / 乖离
   const atrPct = (data.info && data.info.atrPct != null) ? data.info.atrPct : null;
   if (tone === 'bull') rows.push({ icon: '⏳', color: '#2ecc71', label: '等待区：等回踩 MA' + (o.fast || 20) + ' 站稳再做多', detail: mFast != null ? ('回踩带 ' + _fmtPx(mFast) + ' ± 0.2×ATR' + (atrPct != null ? '（≈' + _fmtPx(mFast * atrPct / 100 * 0.2) + '）' : '')) : '' });
@@ -547,5 +748,5 @@ export function maRelReadout(data, opts2) {
     invalid: s.invalidIdx != null,
   }));
 
-  return { tone, verdict, rows, signals: sigList };
+  return { tone, verdict, rows, signals: sigList, stand: sp, breakout: bo, stats: st2 };
 }

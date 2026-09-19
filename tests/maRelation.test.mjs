@@ -5,6 +5,7 @@
 import {
   MA_REL_DEFAULTS, maSeries, vwapSeries, maDistPct, alignClosedIdx,
   squeezeAt, maMarketState, buildMaRelation, maRelReadout,
+  standProgress, squeezeBreakout, signalForwardStats,
 } from '../src/engine/maRelation.js';
 
 let passed = 0, failed = 0;
@@ -440,6 +441,161 @@ console.log('\n[maRelation: maRelReadout 信号列表]');
   const none = maRelReadout(base);
   ok('无信号 → 空列表', none.signals.length === 0);
   ok('未启用时也返回 signals:[]', maRelReadout(null).signals.length === 0);
+}
+
+// ============================================================
+// v1.6.36：回踩→站稳进度 / 密集突破预告 / 历史信号胜率
+// ============================================================
+function mkSd({ closes, maFast, atr, state = 'BULL', px = null, squeeze = { spreadPct: 0.5, squeezed: true } }) {
+  return {
+    ma: { fast: maFast, mid: maFast.slice(), slow: maFast.slice() },
+    closes, atr: atr || new Array(closes.length).fill(1),
+    market: { state },
+    info: { px: px != null ? px : closes[closes.length - 1] },
+    squeeze, opts: { squeezePct: 1.2, fast: 20 },
+  };
+}
+console.log('\n[maRelation: v1.6.36 standProgress 回踩→站稳进度]');
+{
+  // 收盘已站上 MA20 → stand / 100%
+  const d1 = mkSd({ closes: [100, 101, 102, 103, 104], maFast: [100, 100, 100, 100, 100], state: 'BULL' });
+  const s1 = standProgress(d1);
+  ok('stand: 收盘站上 → stage=stand', s1.ok && s1.stage === 'stand');
+  ok('stand: progress=1', near(s1.progress, 1));
+  ok('stand: 连续根数=4', s1.standBars === 4);
+  ok('stand: side=long', s1.side === 'long');
+  ok('stand: label 含「已站稳」', s1.label.indexOf('已站稳') >= 0);
+
+  // 已回踩到带内但未站上 → inband（0.6~1）
+  const d2 = mkSd({ closes: [100, 100, 99.9, 99.9], maFast: [100, 100, 100, 100], state: 'BULL' });
+  const s2 = standProgress(d2);
+  ok('stand: 带内未站上 → stage=inband', s2.stage === 'inband');
+  ok('stand: 带内 progress 在 0.6~1', s2.progress > 0.6 && s2.progress < 1);
+  ok('stand: distStandPct > 0（还没站稳）', s2.distStandPct > 0);
+  ok('stand: label 含「距站稳还差」', s2.label.indexOf('距站稳还差') >= 0);
+
+  // 远低于 MA20 → far（progress≈0）
+  const d3 = mkSd({ closes: [100, 100, 100, 90], maFast: [100, 100, 100, 100], state: 'BULL' });
+  const s3 = standProgress(d3);
+  ok('stand: 远离 → stage=far', s3.stage === 'far');
+  ok('stand: 远离 progress=0', s3.progress === 0);
+
+  // BEAR 镜像
+  const d4 = mkSd({ closes: [100, 99, 98, 97], maFast: [100, 100, 100, 100], state: 'BEAR' });
+  const s4 = standProgress(d4);
+  ok('stand: BEAR → side=short / stage=stand', s4.side === 'short' && s4.stage === 'stand');
+  ok('stand: BEAR label 含「做空」', s4.label.indexOf('做空') >= 0);
+
+  // RANGE → 贴合度
+  const d5 = mkSd({ closes: [100, 100, 100, 101], maFast: [100, 100, 100, 100], state: 'RANGE' });
+  const s5 = standProgress(d5);
+  ok('stand: RANGE → stage=range / side=null', s5.stage === 'range' && s5.side === null);
+  ok('stand: RANGE progress = 1-|Δ|/2ATR', near(s5.progress, 0.5));
+
+  // 实时价覆盖（面板用）
+  const live = standProgress(d1, { livePrice: 90 });
+  ok('stand: livePrice 覆盖 px（进度降到 0）', live.progress === 0 && live.stage === 'far');
+  ok('stand: 非法 livePrice 不覆盖', standProgress(d1, { livePrice: NaN }).progress === 1);
+  ok('stand: 缺 opts 不抛', standProgress(d1).ok === true);
+
+  // 脏输入
+  ok('stand: null → ok=false', standProgress(null).ok === false);
+  ok('stand: 数据不足 → ok=false', standProgress(mkSd({ closes: [1], maFast: [1], state: 'BULL' })).ok === false);
+  ok('stand: 脏数组不抛', (() => { try { return standProgress({ ma: { fast: [1, 2, 3] }, closes: [1, 2, 3], market: { state: 'BULL' } }).ok === true; } catch (e) { return false; } })());
+}
+
+console.log('\n[maRelation: v1.6.36 squeezeBreakout 密集突破预告]');
+{
+  const mk = (px) => ({ ma: { fast: [100], mid: [101], slow: [99] }, closes: [px], atr: [1], info: { px }, squeeze: { spreadPct: 0.5, squeezed: true } });
+  const b1 = squeezeBreakout(mk(101));   // 在区内
+  ok('breakout: 在区内 → watching', b1.ok && b1.watching && b1.nearEdge);
+  ok('breakout: 上/下沿 = max/min 均线', b1.hi === 101 && b1.lo === 99);
+  ok('breakout: closer=up（离上沿更近）', b1.closer === 'up');
+  ok('breakout: refUp/refDown', b1.refUp === 101 && b1.refDown === 99);
+  ok('breakout: label 含「密集区收窄」', b1.label.indexOf('密集区收窄') >= 0);
+
+  const b2 = squeezeBreakout(mk(120));   // 远离
+  ok('breakout: 远离 → watching=false', b2.watching === false && b2.nearEdge === false);
+  ok('breakout: 远离（在上方）最近边缘=上沿 → closer=up', b2.closer === 'up' && b2.upPct < 0);
+
+  const b3 = squeezeBreakout({ ma: { fast: [100], mid: [101], slow: [99] }, closes: [101], atr: [1], info: { px: 101 }, squeeze: { spreadPct: 3, squeezed: false } });
+  ok('breakout: 未密集 → squeezed=false / watching=false', b3.squeezed === false && b3.watching === false);
+  ok('breakout: 未密集 label', b3.label.indexOf('未密集') >= 0);
+
+  const b4 = squeezeBreakout({ ma: { fast: [100], mid: [100] }, closes: [100], atr: [1], info: { px: 100 }, squeeze: { squeezed: true } });
+  ok('breakout: 只 2 条均线也可算', b4.ok === true && b4.hi === 100 && b4.lo === 100);
+  ok('breakout: null/脏输入不抛', squeezeBreakout(null).ok === false && squeezeBreakout({ ma: {} }).ok === false && squeezeBreakout({ ma: { fast: [null] } }).ok === false);
+}
+
+console.log('\n[maRelation: v1.6.36 signalForwardStats 历史信号胜率]');
+{
+  const closes = [100, 100, 105, 100, 100, 98, 100, 100, 100];
+  const atr = new Array(closes.length).fill(1);
+  const sigs = [
+    { i: 0, side: 'long', type: 'L1' },   // 105 >= 102 → win
+    { i: 3, side: 'long', type: 'L1' },   // 98 <= 98.5 → loss
+    { i: 6, side: 'long', type: 'L2' },   // 未触发 → unresolved
+  ];
+  const st = signalForwardStats(sigs, closes, atr);
+  ok('stats: n=3', st.n === 3);
+  ok('stats: 盈/亏/未定', st.wins === 1 && st.losses === 1 && st.unresolved === 1);
+  ok('stats: winRate=0.5', near(st.winRate, 0.5));
+  ok('stats: avgPnlPct=(5-2)/2=1.5', near(st.avgPnlPct, 1.5));
+  ok('stats: byType L1 有盈有亏', st.byType.L1.n === 2 && st.byType.L1.wins === 1 && st.byType.L1.losses === 1);
+  ok('stats: byType L2 全部未定', st.byType.L2.n === 1 && st.byType.L2.unresolved === 1 && st.byType.L2.winRate === null);
+  // 做空方向
+  const stS = signalForwardStats([{ i: 0, side: 'short', type: 'L1' }], [100, 100, 97], [1, 1, 1]);
+  ok('stats: 做空用 sell 方向 → win', stS.wins === 1 && stS.winRate === 1);
+  // 空 / 脏
+  ok('stats: 空列表 n=0 / winRate=null', signalForwardStats([], closes, atr).n === 0 && signalForwardStats([], closes, atr).winRate === null);
+  ok('stats: null 不抛', signalForwardStats(null, null, null).n === 0);
+  ok('stats: 缺 i/side 的记录被跳过', signalForwardStats([{ type: 'L1' }, null, { i: 0, side: 'long', type: 'L1' }], closes, atr).n === 1);
+  // 自定义参数（收紧止盈 / 放宽止损 → 原本的亏单变未定）
+  const st2 = signalForwardStats(sigs, closes, atr, { tpAtr: 0.5, slAtr: 5 });
+  ok('stats: 自定义 tpAtr/slAtr 生效（亏单不再触发）', st2.wins === 1 && st2.losses === 0 && st2.unresolved === 2);
+}
+
+console.log('\n[maRelation: v1.6.36 maRelReadout 新增行]');
+{
+  const mkRd = (extra) => Object.assign({
+    opts: { fast: 20, mid: 60, slow: 120, daily: [20], weekly: [], vwap: false, squeezePct: 1.2, devAtr: 1.5, showSlow: false },
+    ma: { fast: new Array(6).fill(100), mid: new Array(6).fill(100), slow: new Array(6).fill(100) },
+    closes: [100, 100, 100, 100, 100, 100], atr: new Array(6).fill(1),
+    daily: { 20: new Array(6).fill(100) }, weekly: {}, vwap: [],
+    squeeze: { spreadPct: 0.5, squeezed: true },
+    market: { state: 'BULL', close: 100, maFast: 100, maMid: 100, slopePct: 0.1, aboveMid: true },
+    info: { px: 100, atrPct: 1, distFast: 0, distDaily20: 0, distWeekly20: null, distWeekly200: null, devAtr: false, squeezed: true, lastSignal: null },
+    t: [1, 2, 3, 4, 5, 6], signals: [],
+  }, extra || {});
+  const r = maRelReadout(mkRd());
+  ok('readout: 含「回踩→站稳」行', r.rows.some(x => x.label.indexOf('回踩→站稳') === 0));
+  ok('readout: 站稳行带进度条字符', r.rows.some(x => x.label.indexOf('▰') >= 0 || x.label.indexOf('▱') >= 0));
+  ok('readout: 含「密集突破预告」行', r.rows.some(x => x.label.indexOf('密集突破预告') === 0));
+  ok('readout: 返回 stand/breakout/stats', !!r.stand && r.stand.ok && !!r.breakout && !!r.stats);
+  ok('readout: 无信号 → 无胜率行', !r.rows.some(x => x.label.indexOf('历史信号胜率') === 0));
+  // 带信号 → 有胜率行
+  const sigs = [{ i: 0, side: 'long', type: 'L1' }, { i: 3, side: 'long', type: 'L1' }];
+  const r2 = maRelReadout(mkRd({ signals: sigs }));
+  ok('readout: 有信号 → 含胜率行', r2.rows.some(x => x.label.indexOf('历史信号胜率') === 0));
+  ok('readout: 胜率行含「仅历史统计不代表未来」', r2.rows.some(x => x.detail.indexOf('不代表未来') >= 0));
+  ok('readout: stats.n=2', r2.stats && r2.stats.n === 2);
+  // livePrice 影响站稳行
+  const rLive = maRelReadout(mkRd(), { livePrice: 90 });
+  const rowA = r.rows.find(x => x.label.indexOf('回踩→站稳') === 0);
+  const rowB = rLive.rows.find(x => x.label.indexOf('回踩→站稳') === 0);
+  ok('readout: livePrice 改变站稳进度', rowA.label !== rowB.label);
+  // 未密集 → 无突破预告行
+  const rNoSq = maRelReadout(mkRd({ squeeze: { spreadPct: 3, squeezed: false }, info: { px: 100, atrPct: 1, distFast: 0, devAtr: false, squeezed: false } }));
+  ok('readout: 未密集 → 无突破预告行', !rNoSq.rows.some(x => x.label.indexOf('密集突破预告') === 0));
+  ok('readout: 未启用时 stand/breakout/stats=null', maRelReadout(null).stand === null && maRelReadout(null).breakout === null && maRelReadout(null).stats === null);
+  // RANGE → 措辞改为「均线贴合度」
+  const rRange = maRelReadout(mkRd({ market: { state: 'RANGE', close: 100, maFast: 100, slopePct: 0.1 } }));
+  ok('readout: RANGE → 「均线贴合度」措辞', rRange.rows.some(x => x.label.indexOf('均线贴合度') === 0));
+  // 胜率优势标注（诚实口径）
+  const rWin = maRelReadout(mkRd({ closes: [100, 103, 100, 103, 100, 103], signals: [{ i: 0, side: 'long', type: 'L1' }, { i: 2, side: 'long', type: 'L1' }, { i: 4, side: 'long', type: 'L1' }] }));
+  ok('readout: 高胜率 → 标「有优势」', rWin.rows.some(x => x.label.indexOf('有优势') >= 0));
+  const rLose = maRelReadout(mkRd({ closes: [100, 98, 100, 98, 100, 98], signals: [{ i: 0, side: 'long', type: 'L1' }, { i: 2, side: 'long', type: 'L1' }, { i: 4, side: 'long', type: 'L1' }] }));
+  ok('readout: 低胜率 → 标「无优势」', rLose.rows.some(x => x.label.indexOf('无优势') >= 0));
 }
 
 console.log(`\n=== maRelation.test: ${passed} passed, ${failed} failed ===`);

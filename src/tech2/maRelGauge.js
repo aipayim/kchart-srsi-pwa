@@ -14,9 +14,9 @@
 //
 // 术语（写死，避免文案漂移）：站稳 = 收盘价站上 MA20（影线不算）。
 // ============================================================
+import { standProgress } from '../engine/maRelation.js';
 
-const TONE_COLOR = { bull: '#2ecc71', bear: '#ff6b6b', range: '#f59e0b' };
-const HOLD_TXT = '站稳 = 收盘价站上 MA20（影线不算）';
+const TONE_COLOR = { bull: '#2ecc71', bear: '#ff6b6b', range: '#f59e0b' };const HOLD_TXT = '站稳 = 收盘价站上 MA20（影线不算）';
 const BAND_MULT = 0.2;   // 回踩带 = MA20 ± 0.2×ATR
 const AXIS_MULT = 2;     // 可视轴 = MA20 ± 2×ATR
 const ATR_FALLBACK = 0.01; // ATR 无效时的回退：ma20 的 1%（使回踩带恰为 MA20 ± 0.2%）
@@ -63,6 +63,7 @@ export function maRelGaugeModel(data, opts) {
     bandLo: null, bandHi: null, devPct: null, above: false, inBand: false, bandDistPct: null,
     bandSide: 'in', pos: null, bandPos: null, zeroPos: 0.5,
     squeezePct: null, squeezeThr: null, squeezed: false,
+    standPct: null, standStage: null, standBars: 0, standLabel: null,
     label: '数据不足', holdTxt: HOLD_TXT,
   };
   if (!data || typeof data !== 'object') return base;
@@ -105,6 +106,10 @@ export function maRelGaugeModel(data, opts) {
   const squeezeThr = finite(data.opts && data.opts.squeezePct) ? data.opts.squeezePct : 1.2;
   const squeezed = !!(data.squeeze && data.squeeze.squeezed);
 
+  // v1.6.36：回踩→站稳 进度（随实时价重算）
+  let stand = null;
+  try { stand = standProgress(data, { livePrice: livePx }); } catch (e) { stand = null; }
+
   return {
     ok: true, tone, price, ma20,
     priceLive: livePx != null,
@@ -115,6 +120,10 @@ export function maRelGaugeModel(data, opts) {
     bandPos: [mapAxis(bandLo), mapAxis(bandHi)],
     zeroPos: 0.5,
     squeezePct, squeezeThr, squeezed,
+    standPct: (stand && stand.ok && stand.progress != null) ? stand.progress : null,
+    standStage: stand ? stand.stage : null,
+    standBars: stand ? stand.standBars : 0,
+    standLabel: stand ? stand.label : null,
     label: gaugeLabel(tone, inBand, bandSide, bandDistPct, squeezed),
     holdTxt: HOLD_TXT,
   };
@@ -132,9 +141,12 @@ export function maRelGaugeLayout(w, h, opts = {}) {
   const axisY = H * 0.52;             // 轴线（约 52% 高）
   const bandH = 10;                   // 回踩带条高
   const bandY = axisY + 8;            // 回踩带条（轴下方）
+  const progY = H - 24;               // v1.6.36：回踩→站稳进度条
+  const progH = 5;
+  const progTextY = H - 27;           // 进度条说明文字基线
   const labelY = H - 6;               // 底部文字基线
   const tickStepPct = finite(o.tickStepPct) ? o.tickStepPct : 0.5;
-  return { axisY, x0, x1, bandY, bandH, labelY, tickStepPct };
+  return { axisY, x0, x1, bandY, bandH, labelY, tickStepPct, progY, progH, progTextY };
 }
 
 // ============================================================
@@ -240,6 +252,27 @@ export function drawMaRelGauge(ctx, m, w, h, opts = {}) {
   ctx.font = '9px system-ui';
   ctx.textAlign = 'right';
   ctx.fillText('密集 ' + (finite(model.squeezePct) ? model.squeezePct.toFixed(2) : '--') + '%', bx2 - 6, by2 + 5);
+
+  // 6.5) v1.6.36：回踩→站稳 进度条（把「距站稳还有多远」画成进度）
+  if (finite(model.standPct) && finite(lay.progY)) {
+    const pp = clamp01(model.standPct);
+    const w2 = lay.x1 - lay.x0;
+    ctx.fillStyle = 'rgba(255,255,255,.08)';
+    ctx.fillRect(lay.x0, lay.progY, w2, lay.progH);
+    ctx.fillStyle = tone;
+    ctx.fillRect(lay.x0, lay.progY, w2 * pp, lay.progH);
+    // 60% 刻度 = 「已进带」阈值（带外 0..0.6 / 带内 0.6..1）
+    ctx.strokeStyle = 'rgba(160,175,190,.55)';
+    ctx.beginPath();
+    ctx.moveTo(lay.x0 + w2 * 0.6, lay.progY - 2);
+    ctx.lineTo(lay.x0 + w2 * 0.6, lay.progY + lay.progH + 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(160,175,190,.9)';
+    ctx.font = '9px system-ui';
+    ctx.textAlign = 'right';
+    ctx.fillText('站稳进度 ' + Math.round(pp * 100) + '%', lay.x1, lay.progTextY);
+    ctx.textAlign = 'left';
+  }
 
   // 6. 底部一句话提示
   ctx.fillStyle = tone;

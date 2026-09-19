@@ -260,5 +260,42 @@ console.log('\n[drawMaRelGauge: stub ctx 冒烟]');
   ok('opts=null 不抛', (() => { try { drawMaRelGauge(stubCtx(), maRelGaugeModel(mkData()), 298, 118, null); return true; } catch (e) { return false; } })());
 }
 
+// ============================================================
+// v1.6.36：仪表盘上的「回踩→站稳」进度条
+// ============================================================
+function mkStand({ closes, ma20 = 100, state = 'BULL', atr = 1 }) {
+  const n = closes.length;
+  return {
+    ma: { fast: closes.map(() => ma20), mid: [], slow: [] },
+    closes, atr: closes.map(() => atr),
+    info: { px: closes[n - 1], atrPct: atr / ma20 * 100 },
+    market: { state, close: closes[n - 1] },
+    squeeze: { spreadPct: 0.5, squeezed: true },
+    opts: { squeezePct: 1.2 },
+  };
+}
+console.log('\n[maRelGauge: v1.6.36 standPct 进度条]');
+{
+  const m = maRelGaugeModel(mkStand({ closes: [100, 101, 102, 103], state: 'BULL' }));
+  ok('standPct 存在（收盘站上 → 1）', near(m.standPct, 1) && m.standStage === 'stand');
+  ok('standBars 透传', m.standBars >= 1);
+  ok('standLabel 非空', typeof m.standLabel === 'string' && m.standLabel.length > 0);
+  const mLive = maRelGaugeModel(mkStand({ closes: [100, 101, 102, 103], state: 'BULL' }), { livePrice: 90 });
+  ok('livePrice 改变 standPct', mLive.standPct === 0 && m.standPct === 1);
+  const mNo = maRelGaugeModel(mkData());
+  ok('缺 closes → standPct=null（不影响旧行为）', mNo.standPct === null);
+
+  const lay = maRelGaugeLayout(298, 118);
+  ok('layout 含进度条几何', near(lay.progY, 118 - 24) && lay.progH === 5 && near(lay.progTextY, 118 - 27));
+
+  const c = stubCtx();
+  drawMaRelGauge(c, m, 298, 118, { pos: 0.5 });
+  ok('绘制含「站稳进度」文字', c.calls.fillText.some(x => String(x.t).indexOf('站稳进度') >= 0));
+  ok('绘制含进度条矩形（track+fill ≥ 2）', c.calls.fillRect.length >= 3);
+  const c0 = stubCtx();
+  drawMaRelGauge(c0, mNo, 298, 118, {});
+  ok('无 standPct → 不画进度文字', !c0.calls.fillText.some(x => String(x.t).indexOf('站稳进度') >= 0));
+}
+
 console.log(`\n=== maRelGauge.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);

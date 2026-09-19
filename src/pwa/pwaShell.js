@@ -926,13 +926,13 @@ function renderMaRel() {
     if (foot) foot.textContent = '';
     return;
   }
-  let ro = null;
-  try { ro = buildMaRelReadout(data); } catch (e) { ro = null; }
-  if (!ro) return;
-  // v1.6.34：仪表盘模型（动画由共用 RAF 绘制）
-  // v1.6.35：传入**实时价**（window.S.prices[sym].last）——指针随行情秒级跳动，不再只跟 K 线收盘
+  // v1.6.35/36：实时价（ticker，每 5s）——仪表盘指针 + 回踩→站稳进度都用它，而非只跟 K 线收盘
   let livePx = null;
   try { const Sp = globalThis.S; const pp = Sp && Sp.prices && Sp.prices[cfg && cfg.symbol]; livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null; } catch (e) { livePx = null; }
+  let ro = null;
+  try { ro = buildMaRelReadout(data, { livePrice: livePx }); } catch (e) { ro = null; }
+  if (!ro) return;
+  // v1.6.34：仪表盘模型（动画由共用 RAF 绘制）
   try {
     const gm = maRelGaugeModel(data, { livePrice: livePx });
     _maRelGaugeModel = gm;
