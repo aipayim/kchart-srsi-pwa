@@ -6,6 +6,7 @@ import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset, _safeSetIt
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
+import { THRESH } from '../engine/thresholds.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
 import { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine } from './pwaShell.js';
 globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
@@ -485,6 +486,9 @@ function loadPwaPaper() {
       if (!Array.isArray(arr)) return;
       arr.forEach(p => { if (p && !p.src) p.src = 'srsiAuto'; });
     });
+    // v1.6.22：成交明细有界保留（与主系统/PaperEngine 同口径）——防止用户数据无界增长吃光配额
+    const _cmax = THRESH.CLOSED_MAX;
+    if (Array.isArray(globalThis.S.closed) && globalThis.S.closed.length > _cmax) globalThis.S.closed.splice(0, globalThis.S.closed.length - _cmax);
   } catch (e) {}
 }
 function savePwaPaper() {

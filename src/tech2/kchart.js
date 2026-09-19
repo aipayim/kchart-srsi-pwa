@@ -1272,7 +1272,7 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span class="mt-legend" title="主图信号标记说明：◆α多/◆α空=Alpha基石实盘调仓；◇=平仓；◆死钩/◆金钩=SRSI 钩信号（5.25）；▲/▼ SRSI=SRSI 自动开多/开空（v1.5.57 从主图右上角移来，不再遮挡K线）；●=15m SRSI 信号机会（金叉/死叉/破带，v1.6.19，非成交）"><i style="color:#22d3ee">◆</i>α多 <i style="color:#f59e0b">◆</i>α空 <i style="color:#8899aa">◇</i>平仓 <i style="color:#FF5252">◆</i>死钩 <i style="color:#00E676">◆</i>金钩 <i style="color:#2ecc71">▲</i><i style="color:#ff6b6b">▼</i>SRSI <i style="color:#2ecc71">●</i><i style="color:#ff6b6b">●</i>机会<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span class="mt-legend" title="主图信号标记说明：◆青=α开多/◆黄=α开空/◇=α平仓（Alpha 基石实盘调仓）；◆红=死钩/◆绿=金钩（SRSI 钩信号）；▲绿=SRSI 自动开多成交/▼红=SRSI 自动开空成交/●灰=SRSI 平仓（真实成交）；●绿=15m SRSI 看多机会（跌入超卖/金钩）、●红=看空机会（升入超买/死钩）——机会点非成交；鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义"><i style="color:#22d3ee">◆</i>α多 <i style="color:#f59e0b">◆</i>α空 <i style="color:#8899aa">◇</i>平仓 <i style="color:#FF5252">◆</i>死钩 <i style="color:#00E676">◆</i>金钩 <i style="color:#2ecc71">▲</i><i style="color:#ff6b6b">▼</i>SRSI <i style="color:#2ecc71">●</i><i style="color:#ff6b6b">●</i>机会<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
@@ -4031,27 +4031,16 @@ function drawMain(ctx, sym, tf, H) {
     // 数据源：15m K/D（与卫星同周期），时间→主图 bar 对齐；买侧绿点画在 bar 下方、卖侧红点画在上方。
     if (cfg.sigOverlay) {
       try {
-        const _d15s = getTFData(sym, '15m') || {};
-        const _c15s = _d15s.c || [], _t15s = _d15s.t || [];
-        if (_c15s.length > 60 && _t15s.length === _c15s.length) {
-          const _p15 = perTfSrsi('15m', cfg.srsiByTf, cfg.srsi);
-          const _kd15 = srsiKD(_c15s.map(Number), _p15);
-          const _eb15 = resolveEntryBands(cfg);
-          const _cross15 = srsiCrossings(_kd15.k, { overbought: _eb15.upper, oversold: _eb15.lower });
-          const _hook15 = srsiHooks(_kd15.k, _kd15.d, { overbought: _eb15.upper, oversold: _eb15.lower });
-          for (let i15 = 0; i15 < _t15s.length; i15++) {
-            const cv = _cross15[i15], hk = _hook15[i15];
-            if (!cv && !hk) continue;
-            const tt = _t15s[i15];
-            if (tt < t[0]) continue;
-            let ai = -1;
-            for (let m5 = t.length - 1; m5 >= start; m5--) { if (t[m5] <= tt) { ai = m5; break; } }
-            if (ai < start) continue;
-            const x = X(Math.min(ai, start + n - 1)), y = Y(c[Math.min(ai, c.length - 1)] || c[c.length - 1]);
-            const buy = (cv === 'buy' || hk === 'goldHook');
-            ctx.fillStyle = buy ? 'rgba(46,204,113,.9)' : 'rgba(255,107,107,.9)';
-            ctx.beginPath(); ctx.arc(x, y + (buy ? 12 : -12), 2.6, 0, Math.PI * 2); ctx.fill();
-          }
+        for (const op of mainOpportunityMarks(sym)) {
+          const tt = op.t;
+          if (tt < t[0]) continue;
+          let ai = -1;
+          for (let m5 = t.length - 1; m5 >= start; m5--) { if (t[m5] <= tt) { ai = m5; break; } }
+          if (ai < start) continue;
+          const x = X(Math.min(ai, start + n - 1)), y = Y(c[Math.min(ai, c.length - 1)] || c[c.length - 1]);
+          const buy = op.side === 'long';
+          ctx.fillStyle = buy ? 'rgba(46,204,113,.9)' : 'rgba(255,107,107,.9)';
+          ctx.beginPath(); ctx.arc(x, y + (buy ? 12 : -12), 2.6, 0, Math.PI * 2); ctx.fill();
         }
       } catch (e) {}
     }
@@ -4479,21 +4468,17 @@ function drawMainDetail(ctx, m, lx, ly, plotW, H) {
     `高 ${fmt(m.high)}  低 ${fmt(m.low)}`,
     `量 ${fmtVol(m.vol)}${chg}`
   ];
-  // GOAL28：hover 标记说明行——该 bar 时间窗内命中的实盘信号标记（与右上角图例互证，条件与 drawMain 绘制一致）
+  // GOAL28 / v1.6.22：hover 标记说明行——该 bar 时间窗内命中的标记（与图例/主图绘制互证）：
+  // ◆α调仓（基石实盘）、▲▼SRSI 成交（卫星自动）、●机会点（15m SRSI 穿越/钩，非成交）。
   try {
     if (typeof window !== 'undefined' && m.time != null && cfg.sigOverlay) {
       const t0 = m.time, t1 = m.time + tfMs(cfg.mainTF);
-      const hits = [];
-      if (window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive()) {
-        for (const mk of (window.__alphaLiveMarks || [])) {
-          if (mk && Number.isFinite(mk.t) && mk.t >= t0 && mk.t < t1) hits.push((mk.action === 'close' || mk.dir === 0) ? 'α平仓(基石)' : mk.dir > 0 ? 'α开多(基石实盘)' : 'α开空(基石实盘)');
-        }
-      }
-      if (cfg.srsiAutoOn) {
-        for (const tr of (window.__srsiLiveTrades || [])) {
-          if (tr && Number.isFinite(tr.t) && tr.t >= t0 && tr.t < t1) hits.push(tr.action === 'open' ? (tr.side === 'long' ? 'SRSI开多(自动)' : 'SRSI开空(自动)') : 'SRSI平仓(自动)');
-        }
-      }
+      const alphaLive = !!(window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
+      const hits = markHitsInWindow(t0, t1, {
+        alphaMarks: alphaLive ? (window.__alphaLiveMarks || []) : [],
+        srsiTrades: cfg.srsiAutoOn ? (window.__srsiLiveTrades || []) : [],
+        opportunities: mainOpportunityMarks(cfg.symbol)
+      });
       if (hits.length) lines.push('标记 ' + hits.slice(0, 3).join(' · ') + (hits.length > 3 ? ' …' : ''));
     }
   } catch (e) { /* 标记行失败不影响 OHLCV 详情 */ }
@@ -5463,6 +5448,65 @@ export function mainHoverAt(frac, sym, tf, bars) {
   };
 }
 
+// v1.6.22：主图「15m SRSI 机会」点（●，非成交）——由 15m K/D 的穿越/钩信号生成。
+// 主图绘制与 hover「标记」行共用同一数据源，保证「看到的点 = 悬停读到的说明」。
+// buy 侧：K 跌入超卖区（crossing='buy'）或金钩；sell 侧：K 升入超买区或死钩。
+export function srsiOpportunityMarks(c15, t15, bands, srsiParams) {
+  const out = [];
+  if (!Array.isArray(c15) || !Array.isArray(t15) || c15.length < 2 || t15.length !== c15.length) return out;
+  const ob = bands && bands.upper != null ? bands.upper : 80;
+  const os = bands && bands.lower != null ? bands.lower : 20;
+  const kd = srsiKD(c15.map(Number), srsiParams || {});
+  const cross = srsiCrossings(kd.k, { overbought: ob, oversold: os });
+  const hooks = srsiHooks(kd.k, kd.d, { overbought: ob, oversold: os });
+  for (let i = 0; i < t15.length; i++) {
+    const cv = cross[i], hk = hooks[i];
+    if (!cv && !hk) continue;
+    // 钩信号优先（同时命中时以钩为准），保证 side 与 label 方向永远一致
+    let side, label;
+    if (hk === 'goldHook') { side = 'long'; label = '●机会 金钩·看多'; }
+    else if (hk === 'deathHook') { side = 'short'; label = '●机会 死钩·看空'; }
+    else if (cv === 'buy') { side = 'long'; label = '●机会 跌入超卖·看多'; }
+    else { side = 'short'; label = '●机会 升入超买·看空'; }
+    out.push({ t: t15[i], side, label });
+  }
+  return out;
+}
+
+// 主图 hover「标记」行：某根 K 线时间窗 [t0,t1) 内命中的标记文本（α 调仓 / SRSI 成交 / SRSI 机会点）。
+// 与主图实际绘制条件一致：α 需基石实盘在跑、SRSI 成交需卫星自动开、机会点需勾选「实盘信号」。
+export function markHitsInWindow(t0, t1, { alphaMarks = [], srsiTrades = [], opportunities = [] } = {}) {
+  const hits = [];
+  const inWin = (t) => Number.isFinite(t) && t >= t0 && t < t1;
+  for (const mk of alphaMarks) {
+    if (!mk || !inWin(mk.t)) continue;
+    hits.push((mk.action === 'close' || mk.dir === 0) ? '◆α平仓(基石)' : mk.dir > 0 ? '◆α开多(基石)' : '◆α开空(基石)');
+  }
+  for (const tr of srsiTrades) {
+    if (!tr || !inWin(tr.t)) continue;
+    hits.push(tr.action === 'open' ? (tr.side === 'long' ? '▲SRSI开多(自动)' : '▼SRSI开空(自动)') : '●SRSI平仓(自动)');
+  }
+  for (const op of opportunities) {
+    if (!op || !inWin(op.t)) continue;
+    hits.push(op.label);
+  }
+  return hits;
+}
+
+let _oppCache = { key: '', list: [] };
+// 主图机会点访问器（带缓存：500 根 15m 的 srsiKD 不宜每帧重算；hover 与绘制共用 → 一致且便宜）
+export function mainOpportunityMarks(sym) {
+  const d = getTFData(sym, '15m') || {};
+  const c = d.c || [], t = d.t || [];
+  const p = perTfSrsi('15m', cfg.srsiByTf, cfg.srsi);
+  const bands = resolveEntryBands(cfg);
+  const key = sym + '|' + c.length + '|' + (t[t.length - 1] || 0) + '|' + bands.upper + ',' + bands.lower + '|'
+    + p.rsiPeriod + ',' + p.stochPeriod + ',' + p.smoothK + ',' + p.smoothD + ',' + p.overbought + ',' + p.oversold;
+  if (key === _oppCache.key) return _oppCache.list;
+  _oppCache = { key, list: srsiOpportunityMarks(c, t, bands, p) };
+  return _oppCache.list;
+}
+
 // 某个子图在 frac 处的读数 (纯数据)
 export function subHoverAt(frac, sym, tf, key, bars, opts) {
   const s = subTf(sym, tf);
@@ -5584,6 +5628,9 @@ export const kchartApi = {
   storageTop,
   saveSignalMarks,
   restoreSignalMarks,
+  mainOpportunityMarks,
+  markHitsInWindow,
+  srsiOpportunityMarks,
   getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,
   optimizeSrsiForTf,
@@ -6391,11 +6438,12 @@ function _autoState(sym) {
   return _srsiAuto[sym];
 }
 export function resetSrsiAuto(sym) {
+  const _reset = (s) => { s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.armed = false; s.pendingConfirm = null; };
   if (sym) {
     const s = _srsiAuto[sym];
-    if (s) { s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.pendingConfirm = null; }
+    if (s) _reset(s);
   } else {
-    Object.keys(_srsiAuto).forEach(k => { const s = _srsiAuto[k]; s.longCount = 0; s.shortCount = 0; s.band = 'neutral'; s.pendingConfirm = null; });
+    Object.keys(_srsiAuto).forEach(k => _reset(_srsiAuto[k]));
   }
 }
 // 规则监测（影子层）只读读取实盘带状态机状态（不推进；推进只发生在 srsiAutoBandState/runSrsiAutoTrade）
@@ -6418,7 +6466,7 @@ export function emaOpp2(side, emaTf) {
 // 实时危险信号：给定当前 SRSI 带态推断「本应开仓方向」，再判大周期 EMA120 背离
 export function computeDangerNow(sym) {
   const kd = { '4h': klineDirOf(sym, '4h'), '1h': klineDirOf(sym, '1h'), '30m': klineDirOf(sym, '30m') };
-  const bs = (typeof srsiAutoBandState === 'function') ? srsiAutoBandState(sym) : null;
+  const bs = (typeof srsiAutoBandState === 'function') ? srsiAutoBandState(sym, null, { readOnly: true }) : null;
   const side = bs && bs.edge === 'enterUpper' ? 'short' : (bs && bs.edge === 'enterLower' ? 'long' : null);
   if (!side) return false;
   return emaOpp2(side, kd);
@@ -6772,8 +6820,13 @@ export function resolveEntryBands(config) {
   return { upper, lower, auto: uAuto || lAuto };
 }
 
-// KD 带状态机：写入模块状态（实盘每秒调用）。row 可选注入用于单测
-export function srsiAutoBandState(sym, row) {
+// KD 带状态机：写入模块状态（实盘每秒调用）。row 可选注入用于单测。
+// v1.6.22：opts.readOnly=true 时**只计算不写状态**（供 UI 面板读“当前带态/将要触发的边沿”）。
+//   背景（真实 bug，v1.6.22 修复）：renderQuickTrade()（每秒）→ renderSrsiAutoPanel() → computeDangerNow()
+//   会调本函数推进状态机；而 runSrsiAutoTrade() 在同一 tick 里排在它**之后** → enterUpper/enterLower 边沿
+//   被面板先吃掉 → 卫星永不成交（A/B 实验：同 tick 直接执行 opened=1，面板插队后 opened=0）。
+//   推进（写 st.band/st.armed）**只允许**发生在 runSrsiAutoTrade 内。
+export function srsiAutoBandState(sym, row, opts = {}) {
   const st = _autoState(sym);
   const c = (getTFData(sym, '15m') || {}).c;
   const srsi15 = (cfg.srsiByTf && cfg.srsiByTf['15m']) || cfg.srsi;
@@ -6782,8 +6835,10 @@ export function srsiAutoBandState(sym, row) {
   const k = r && r.k, d = r && r.d;
   const _eb = resolveEntryBands(cfg);
   const be = bandEdge(st.band, k, d, { upper: _eb.upper, lower: _eb.lower }, st.armed);
-  st.band = be.band;
-  st.armed = be.armed;
+  if (!opts.readOnly) {
+    st.band = be.band;
+    st.armed = be.armed;
+  }
   return { band: be.band, edge: be.edge, k, d };
 }
 

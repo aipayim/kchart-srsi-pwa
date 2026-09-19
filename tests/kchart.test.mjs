@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3717,6 +3717,52 @@ console.log('\n[kchart: SRSI 领先模式 / 响应速度]');
   const raw2 = JSON.parse(_ls3['smartTrader_kchart_marks']);
   ok('saveSignalMarks 封顶 200', raw2.alpha.length === 200 && raw2.alpha[0].t === 50);
   delete window.__alphaLiveMarks; delete window.__srsiLiveTrades;
+}
+
+// ============================================================
+//  v1.6.22：主图「15m SRSI 机会」点 + hover 标记行（纯函数）
+// ============================================================
+console.log('\n[kchart: 机会点 srsiOpportunityMarks / 标记行 markHitsInWindow]');
+{
+  // 造一段震荡序列（K 在 0..100 大幅摆动），带压在中线 50/50 → 每根都有穿越信号
+  const n = 300;
+  const closes = Array.from({ length: n }, (_, i) => 100 + 10 * Math.sin(i / 3));
+  const t15 = Array.from({ length: n }, (_, i) => 1700000000000 + i * 900000);
+  const p = { rsiPeriod: 14, stochPeriod: 14, smoothK: 3, smoothD: 3, overbought: 80, oversold: 20 };
+  const marks = srsiOpportunityMarks(closes, t15, { upper: 50, lower: 50 }, p);
+  ok('机会点：非空', marks.length > 0);
+  ok('机会点：每项 t 来自 t15', marks.every(m => t15.includes(m.t)));
+  ok('机会点：side 仅 long/short', marks.every(m => m.side === 'long' || m.side === 'short'));
+  ok('机会点：label 含「机会」', marks.every(m => typeof m.label === 'string' && m.label.includes('●机会')));
+  ok('机会点：long 侧标注看多', marks.filter(m => m.side === 'long').every(m => m.label.includes('看多')));
+  ok('机会点：short 侧标注看空', marks.filter(m => m.side === 'short').every(m => m.label.includes('看空')));
+  ok('机会点：两侧都出现（震荡市应有买有卖）', marks.some(m => m.side === 'long') && marks.some(m => m.side === 'short'));
+  ok('机会点：side 与 label 方向永远一致', marks.every(m => m.label.includes('看多') === (m.side === 'long')));
+  ok('机会点：t 升序', marks.every((m, i) => i === 0 || m.t > marks[i - 1].t));
+  // 边界：数据不足 / 长度不齐 / 空
+  ok('机会点：空数组 → []', srsiOpportunityMarks([], [], { upper: 80, lower: 20 }, p).length === 0);
+  ok('机会点：长度不齐 → []', srsiOpportunityMarks([1, 2, 3], [1, 2], { upper: 80, lower: 20 }, p).length === 0);
+  ok('机会点：单点 → []', srsiOpportunityMarks([1], [1], { upper: 80, lower: 20 }, p).length === 0);
+  ok('机会点：非数组 → []', srsiOpportunityMarks(null, null, {}, p).length === 0);
+
+  // ---- markHitsInWindow ----
+  const T0 = 1000, T1 = 2000;
+  const r1 = markHitsInWindow(T0, T1, {
+    alphaMarks: [{ t: 1000, dir: 0.3 }, { t: 1999, action: 'close' }, { t: 2000, dir: -0.2 }, { t: 999, dir: 0.1 }],
+    srsiTrades: [{ t: 1500, side: 'long', action: 'open' }, { t: 1600, side: 'short', action: 'close' }],
+    opportunities: [{ t: 1700, side: 'long', label: '●机会 金钩·看多' }, { t: 2000, label: '●机会 死钩·看空' }]
+  });
+  ok('标记行：左闭右开（t0 计入 / t1 排除）', r1.length === 5);
+  ok('标记行：α开多(基石) 前缀 ◆', r1[0] === '◆α开多(基石)');
+  ok('标记行：α平仓', r1[1] === '◆α平仓(基石)');
+  ok('标记行：▲SRSI开多(自动)', r1[2] === '▲SRSI开多(自动)');
+  ok('标记行：●SRSI平仓(自动)', r1[3] === '●SRSI平仓(自动)');
+  ok('标记行：机会点原样透传', r1[4] === '●机会 金钩·看多');
+  ok('标记行：顺序 α → SRSI → 机会', r1[0].startsWith('◆') && r1[2].startsWith('▲') && r1[4].startsWith('●机会'));
+  ok('标记行：空输入 → []', markHitsInWindow(0, 1, {}).length === 0);
+  ok('标记行：undefined 列表 → []', markHitsInWindow(0, 1).length === 0);
+  ok('标记行：非有限 t 被忽略', markHitsInWindow(0, 10, { alphaMarks: [{ t: NaN, dir: 1 }, { t: Infinity, dir: 1 }] }).length === 0);
+  ok('标记行：dir=0 视为平仓', markHitsInWindow(0, 10, { alphaMarks: [{ t: 5, dir: 0 }] })[0] === '◆α平仓(基石)');
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
