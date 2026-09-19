@@ -166,6 +166,15 @@ body.pwa .kchart-maintools .chip{border-radius:999px}
 .pwa-fac.sc-carry .bar>i{background:linear-gradient(90deg,var(--accent),#7c4dff)}
 .pwa-fac.sc-momo .bar>i{background:linear-gradient(90deg,var(--green),#8bffb0)}
 .pwa-fac.sc-brk .bar>i{background:linear-gradient(90deg,var(--gold),#ffe08a)}
+/* v1.6.27：三因子行可点按展开说明（手机无 hover）；悬停 title 同时生效 */
+.pwa-facwrap{display:block}
+.pwa-facwrap .pwa-fac{cursor:pointer}
+.pwa-facwrap.open .pwa-fac{background:rgba(255,255,255,.05);border-radius:6px}
+.pwa-fac-detail{display:none;margin:4px 0 2px;padding:6px 8px;border-left:2px solid var(--border);
+  font-size:10px;line-height:1.5;color:var(--text2);background:rgba(255,255,255,.03);border-radius:0 6px 6px 0}
+.pwa-facwrap.open .pwa-fac-detail{display:block}
+.pwa-fac-detail b{color:var(--text)}
+.pwa-fac-detail .dim{color:var(--text2);opacity:.85}
 .pwa-cockpit-sub{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:center}
 #pwaRadar{height:150px;width:100%}
 #pwaRelVis{height:150px;width:100%}

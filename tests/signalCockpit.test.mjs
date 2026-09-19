@@ -15,7 +15,7 @@
 
 import { strictEqual, deepStrictEqual } from 'assert';
 import {
-  confidenceOf, confidenceBadge, alphaDirOf, bandDir, factorShares, relationOf,
+  confidenceOf, confidenceBadge, alphaDirOf, bandDir, factorShares, relationOf, FACTOR_META,
   fmtAge, wHistoryPoints, drawPosGauge, posGaugeLayout, drawWHistory, buildPillarModel,
   renderPillarSkeleton, renderPillarHtml, updatePillar,
   conclusionOf, buildReadoutModel, drawRadar, drawRelVis, renderReadoutHtml,
@@ -95,6 +95,14 @@ console.log('\n[signalCockpit: factorShares]');
   const z = factorShares({ carry: 0, momo: 0, brk: 0 });
   ok('全零 → 占比 0', z.every(x => x.sharePct === 0));
   ok('缺字段按 0', factorShares({ carry: 1 }).length === 3);
+  // v1.6.27：三因子说明（悬停/点按）
+  ok('每项带 meta（名称/权重/说明/算法）', f.every(x => x.meta && x.meta.name && x.meta.desc && x.meta.calc && x.meta.weight > 0));
+  ok('权重与固化参数一致 0.5/0.2/0.3', f[0].meta.weight === 0.5 && f[1].meta.weight === 0.2 && f[2].meta.weight === 0.3);
+  ok('FACTOR_META 三项且语义正确', Object.keys(FACTOR_META).join(',') === 'carry,momo,brk' && /资金费率/.test(FACTOR_META.carry.desc) && /10 日动量/.test(FACTOR_META.momo.name) && /20 日/.test(FACTOR_META.brk.name));
+  const ph = renderPillarHtml({ sym: 'BTCUSDT', lastW: 0.3, factors: { carry: 1.85, momo: 0.34, brk: 0.6 } }, Date.now(), 0.3);
+  ok('基石 HTML 含可点按因子行', (ph.match(/sc-facwrap/g) || []).length === 3 && ph.includes('data-fac="carry"'));
+  ok('基石 HTML 含悬停 title', ph.includes('title="carry · 资金费率（逆向）'));
+  ok('基石 HTML 含展开说明块', ph.includes('sc-fac-detail') && ph.includes('权重 0.5') && ph.includes('占比'));
 }
 
 console.log('\n[signalCockpit: relationOf]');

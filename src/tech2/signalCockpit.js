@@ -53,6 +53,25 @@ export function bandDir(band) {
   if (band === 'lower') return 'long';
   return null;
 }
+// 三因子说明（悬停/点按）：全称/含义/权重/当前贡献怎么算——v1.6.27 用户提问「carry/momo/brk 是什么」
+export const FACTOR_META = {
+  carry: {
+    name: 'carry · 资金费率（逆向）', weight: 0.5,
+    desc: '资金费率高 = 多头拥挤、多头付钱给空头 → 看空；费率为负 = 空头拥挤 → 看多。',
+    calc: '90 期滚动 z-score 标准化后取负：cW = clamp(-z, ±4.5)；权重 0.5（最高）。'
+  },
+  momo: {
+    name: 'momo · 10 日动量', weight: 0.2,
+    desc: '日线收盘相对 10 日前收盘的涨幅：涨→看多，跌→看空。',
+    calc: 'mW = clamp(涨幅×50, ±4.5)（≈±9% 涨幅打满）；权重 0.2。'
+  },
+  brk: {
+    name: 'brk · 20 日区间位置', weight: 0.3,
+    desc: '当前价在「过去 20 日最高~最低」区间中的位置：贴 20 日高点=+1 看多，贴低点=−1 看空。',
+    calc: 'brk ∈ [-1,+1] → bW = brk/2×4.5；权重 0.3。'
+  }
+};
+
 // 三因子加权贡献 → 占比（按 |贡献| 归一，供条形宽度）
 export function factorShares(factors) {
   if (!factors) return [];
@@ -60,7 +79,7 @@ export function factorShares(factors) {
   const absSum = items.reduce((s, it) => s + Math.abs(finite(it[2]) ? it[2] : 0), 0);
   return items.map(([key, label, v]) => {
     const val = finite(v) ? v : 0;
-    return { key, label, val, sharePct: absSum > 0 ? Math.abs(val) / absSum * 100 : 0, positive: val >= 0 };
+    return { key, label, val, sharePct: absSum > 0 ? Math.abs(val) / absSum * 100 : 0, positive: val >= 0, meta: FACTOR_META[key] || null };
   });
 }
 // 关系判定（P1 新增逻辑）：基石方向 vs 卫星带态方向 → 共振/冲突/中性；宏观带只标同向否
@@ -239,9 +258,18 @@ function pillarFacsHtml(m) {
   return m.factors.map((f) => {
     const cls = 'sc-fac sc-' + f.key + (f.positive ? '' : ' sc-neg');
     const vtxt = (f.val >= 0 ? '+' : '') + f.val.toFixed(2);
-    return `<div class="${cls}"><span class="nm">${f.label}</span>` +
+    const mt = f.meta || {};
+    const tip = (mt.name || f.label) + (mt.weight != null ? '（权重 ' + mt.weight + '）' : '') +
+      (mt.desc ? ' — ' + mt.desc : '') + (mt.calc ? ' [' + mt.calc + ']' : '');
+    const dirTxt = f.val > 0 ? '偏多' : f.val < 0 ? '偏空' : '中性';
+    return '<div class="sc-facwrap" data-fac="' + f.key + '">' +
+      `<div class="${cls}" title="${esc(tip)}"><span class="nm">${f.label}</span>` +
       `<span class="bar"><span class="fill" style="width:${clamp(f.sharePct, 0, 100).toFixed(1)}%"></span></span>` +
-      `<span class="amt">${vtxt}<span class="share">${Math.round(f.sharePct)}%</span></span></div>`;
+      `<span class="amt">${vtxt}<span class="share">${Math.round(f.sharePct)}%</span></span></div>` +
+      `<div class="sc-fac-detail"><b>${esc(mt.name || f.label)}</b>${mt.weight != null ? ' · 权重 ' + mt.weight : ''}<br>` +
+      `${esc(mt.desc || '')}${mt.calc ? '<br><span class="dim">' + esc(mt.calc) + '</span>' : ''}<br>` +
+      `<span class="dim">当前贡献 ${vtxt}（${Math.round(f.sharePct)}% 占比，${dirTxt}）· 条形宽度 = |贡献| ÷ 三因子|贡献|之和</span></div>` +
+      '</div>';
   }).join('');
 }
 function pillarMetaHtml(m) {
@@ -646,6 +674,15 @@ export function bindCockpit(box) {
   root.addEventListener('click', (ev) => {
     const t = ev.target;
     if (!t || !t.closest) return;
+    // v1.6.27：基石三因子（carry/momo/brk）点按展开说明（手机无 hover）
+    const fac = t.closest('.sc-facwrap');
+    if (fac && t.closest('.sc-fac')) {
+      const on = !fac.classList.contains('open');
+      const all = fac.parentElement ? fac.parentElement.querySelectorAll('.sc-facwrap.open') : [];
+      for (const o of all) o.classList.remove('open');
+      fac.classList.toggle('open', on);
+      return;
+    }
     const head = t.closest('.sc-acc-h');
     if (head && head.dataset && head.dataset.acc) {
       const o = loadOpen(); o[head.dataset.acc] = !o[head.dataset.acc]; saveOpen();

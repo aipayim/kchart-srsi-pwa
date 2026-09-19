@@ -227,11 +227,28 @@ function renderCockpit(snap, alphaSig, rd, now) {
       : '⛔ <b>' + (sym0 || '本币对') + '</b> 未启动 Alpha 信号计算 → 点上方「⚡ 启动信号引擎」（引擎开关<b>按币对独立</b>）';
     const html = facs.length ? facs.map(f => {
       const vtxt = (f.val >= 0 ? '+' : '') + f.val.toFixed(2);
-      return `<div class="pwa-fac sc-${f.key}"><span class="nm">${f.label}</span>` +
+      const mt = f.meta || {};
+      const tip = (mt.name || f.label) + (mt.weight != null ? '（权重 ' + mt.weight + '）' : '') +
+        (mt.desc ? ' — ' + mt.desc : '') + (mt.calc ? ' [' + mt.calc + ']' : '');
+      return `<div class="pwa-facwrap" data-fac="${f.key}">` +
+        `<div class="pwa-fac sc-${f.key}" title="${tip}"><span class="nm">${f.label}</span>` +
         `<span class="bar"><i style="width:${Math.max(0, Math.min(100, f.sharePct)).toFixed(1)}%"></i></span>` +
-        `<span class="vv">${vtxt} · ${Math.round(f.sharePct)}%</span></div>`;
+        `<span class="vv">${vtxt} · ${Math.round(f.sharePct)}%</span></div>` +
+        `<div class="pwa-fac-detail"><b>${mt.name || f.label}</b>${mt.weight != null ? ' · 权重 ' + mt.weight : ''}<br>` +
+        `${mt.desc || ''}${mt.calc ? '<br><span class="dim">' + mt.calc + '</span>' : ''}<br>` +
+        `<span class="dim">当前贡献 ${vtxt}（${Math.round(f.sharePct)}% 占比，${f.val > 0 ? '偏多' : f.val < 0 ? '偏空' : '中性'}）· 条形宽度 = |贡献| ÷ 三因子|贡献|之和</span></div></div>`;
     }).join('') : '<div class="pwa-dim" style="font-size:10.5px">' + emptyMsg + '</div>';
     if (fbox.__sig !== html) { fbox.__sig = html; fbox.innerHTML = html; }
+    if (!fbox.__facBound) {
+      fbox.__facBound = true;
+      fbox.addEventListener('click', (ev) => {
+        const w = ev.target && ev.target.closest ? ev.target.closest('.pwa-facwrap') : null;
+        if (!w || !(ev.target.closest('.pwa-fac'))) return;
+        const on = !w.classList.contains('open');
+        fbox.querySelectorAll('.pwa-facwrap.open').forEach(o => o.classList.remove('open'));
+        w.classList.toggle('open', on);
+      });
+    }
   }
   _targetW = Math.max(-1, Math.min(1, isFinite(rd.w) ? rd.w : 0));
   const wc = $('pwaWHist');

@@ -849,6 +849,15 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 #scPosGauge{display:block;width:100%;height:auto}
 #scWHist{display:block;width:100%;height:auto;margin-top:4px}
 .sc-facs{display:flex;flex-direction:column;gap:4px;margin-top:2px}
+/* v1.6.27：因子行可点按展开说明（手机无 hover）；.sc-fac 保持原 grid 布局，外层包一层 wrap */
+.sc-facwrap{display:block}
+.sc-facwrap .sc-fac{cursor:pointer}
+.sc-facwrap.open .sc-fac{background:rgba(255,255,255,.04);border-radius:4px}
+.sc-fac-detail{display:none;margin:2px 0 4px;padding:5px 7px;border-left:2px solid rgba(255,255,255,.18);
+  font-size:9px;line-height:1.5;color:var(--text2,#6B7688);background:rgba(255,255,255,.03);border-radius:0 4px 4px 0}
+.sc-facwrap.open .sc-fac-detail{display:block}
+.sc-fac-detail b{color:var(--text,#E8ECF0)}
+.sc-fac-detail .dim{color:var(--text2,#6B7688);opacity:.85}
 .sc-fac{display:grid;grid-template-columns:50px 1fr 52px;align-items:center;gap:6px;font-size:9px}
 .sc-fac .nm{color:var(--text2,#6B7688)}
 .sc-fac .bar{height:7px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
