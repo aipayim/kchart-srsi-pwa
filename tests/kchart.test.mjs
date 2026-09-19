@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, marksToSignalEvents, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3678,7 +3678,8 @@ console.log('\n[kchart: SRSI 领先模式 / 响应速度]');
   ok('配额一次→自愈后写入成功', okWrite === true && _ls2['smartTrader_kchart'] === '{"a":1}');
   ok('清理派生键: srsiOptHist 已删', !('srsiOptHist:v8:X' in _ls2));
   ok('清理派生键: 回测缓存已删', !('smartTrader_kchart_bt' in _ls2));
-  ok('清理派生键: 信号日志已删', !('pwa_signal_events' in _ls2));
+  // v1.6.35：pwa_signal_events 改为**用户可见历史**（有界 100 条），不再当派生键清掉——否则用户“刷新后只剩几条”
+  ok('信号历史保留（不再当派生键清）', _ls2['pwa_signal_events'] === 'z'.repeat(500));
   ok('清理派生键: 规则监测快照已删', !('smartTrader_ruleMonitor' in _ls2));
   ok('用户配置 pwa_srsi_opt 保留', _ls2['pwa_srsi_opt'] === '{"BTCUSDT":1}');
   const top = storageTop(3);
@@ -3821,6 +3822,22 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
     return l[0].kind === 'hookGold' && l[1].kind === 'hookDeath';
   })());
 
+  // ---- marksToSignalEvents（v1.6.35：「最近信号」面板与主图标记同源）----
+  {
+    const evs = marksToSignalEvents(ml, (ts) => ts * 2);
+    ok('marksToSignalEvents 条数=标记数', evs.length === ml.length);
+    ok('marksToSignalEvents 时间升序', evs.every((e, i) => i === 0 || evs[i - 1].ts <= e.ts));
+    ok('marksToSignalEvents 机会多→srsi-cross-buy/long', evs[0].kind === 'srsi-cross-buy' && evs[0].side === 'long');
+    ok('marksToSignalEvents 机会空→srsi-cross-sell/short', evs[1].kind === 'srsi-cross-sell' && evs[1].side === 'short');
+    ok('marksToSignalEvents 钩→hook-gold/hook-death', marksToSignalEvents([{ t: 1, kind: 'hookGold' }])[0].kind === 'srsi-hook-gold' && marksToSignalEvents([{ t: 1, kind: 'hookDeath' }])[0].kind === 'srsi-hook-death');
+    ok('marksToSignalEvents 成交→srsi-open/close', marksToSignalEvents([{ t: 1, kind: 'srsiLong' }])[0].kind === 'srsi-open' && marksToSignalEvents([{ t: 1, kind: 'srsiClose' }])[0].kind === 'srsi-close');
+    ok('marksToSignalEvents α→alpha-open/close（平=flat）', marksToSignalEvents([{ t: 1, kind: 'alphaLong' }])[0].kind === 'alpha-open' && marksToSignalEvents([{ t: 1, kind: 'alphaClose' }])[0].kind === 'alpha-close' && marksToSignalEvents([{ t: 1, kind: 'alphaClose' }])[0].side === 'flat');
+    ok('marksToSignalEvents 价格回填', marksToSignalEvents([{ t: 3, kind: 'oppBuy' }], (ts) => ts * 2)[0].price === 6);
+    ok('marksToSignalEvents 无 priceAt 则 price=null', marksToSignalEvents([{ t: 3, kind: 'oppBuy' }])[0].price === null);
+    ok('marksToSignalEvents 非法输入不抛', marksToSignalEvents(null).length === 0 && marksToSignalEvents([{ kind: 'oppBuy' }, { t: 1, kind: 'zzz' }]).length === 0);
+    ok('marksToSignalEvents 区分成交/非成交', marksToSignalEvents([{ t: 1, kind: 'srsiLong' }])[0].text.indexOf('实盘成交') === 0 && marksToSignalEvents([{ t: 1, kind: 'oppBuy' }])[0].text.indexOf('非成交') >= 0);
+  }
+
   // ---- markFxXY ----
   const geom = { lo: 90, hi: 110, start: 0, n: 10, xStep: 10, c: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109], t: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
   const P = markFxXY(geom, { t: 3, kind: 'oppBuy' });
@@ -3954,9 +3971,10 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('自检：top 列出最大键', c1.top.length >= 3 && c1.top[0].k.indexOf('srsiOptHist') === 0);
 
   const r1 = repairStorage();
-  ok('修复：清掉了派生键', r1.removed === 3);
+  ok('修复：清掉了派生键（2 个，信号历史保留）', r1.removed === 2);
   ok('修复：用户配置/账户仍在', !!_ls4['smartTrader_kchart'] && !!_ls4['pwa_srsi_opt'] && !!_ls4['pwa_paper_state']);
-  ok('修复：派生键已消失', !_ls4['srsiOptHist:v8:BTCUSDT|15m'] && !_ls4['smartTrader_kchart_bt'] && !_ls4['pwa_signal_events']);
+  ok('修复：派生键已消失', !_ls4['srsiOptHist:v8:BTCUSDT|15m'] && !_ls4['smartTrader_kchart_bt']);
+  ok('修复：信号历史保留（v1.6.35）', _ls4['pwa_signal_events'] === 'z'.repeat(5000));
   ok('修复：释放 >60KB', r1.freedKB > 60);
   ok('修复后仍不可写（因还在模拟写失败）', r1.after.writable === false);
 

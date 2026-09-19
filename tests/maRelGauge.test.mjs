@@ -81,6 +81,13 @@ console.log('\n[maRelGaugeModel: ok 分支]');
   ok('holdTxt 固定文案', m.holdTxt === '站稳 = 收盘价站上 MA20（影线不算）');
   ok('atr = atrPct/100*price', near(m.atr, 1));
   ok('zeroPos 恒 0.5', m.zeroPos === 0.5);
+  ok('priceLive=false（未传实时价）', m.priceLive === false);
+  // v1.6.35：传入实时价（opts.livePrice）——指针随行情秒级跳动
+  const mLive = maRelGaugeModel(mkData({ price: 100 }), { livePrice: 100.5 });
+  ok('livePrice 覆盖 info.px', mLive.price === 100.5 && mLive.priceLive === true);
+  ok('livePrice 驱动 devPct/pos（向带外移）', mLive.devPct > 0 && mLive.pos > m.pos);
+  ok('livePrice 无效则回退 info.px', maRelGaugeModel(mkData(), { livePrice: NaN }).price === 100 && maRelGaugeModel(mkData(), { livePrice: NaN }).priceLive === false);
+  ok('opts=null 不抛', maRelGaugeModel(mkData(), null).ok === true);
 }
 
 console.log('\n[maRelGaugeModel: tone / devPct / above]');

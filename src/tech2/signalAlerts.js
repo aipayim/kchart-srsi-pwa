@@ -165,12 +165,16 @@ export function signalLine(ev) {
   return (m.icon ? m.icon + ' ' : '') + (sym ? sym + ' ' : '') + parts.join(' ');
 }
 
-// 最近信号列表 HTML（空态明确说明「引擎是否在跑」，不再让用户猜）
+// 仅「事件类」实时信号（不在主图绘制，纯提醒）：面板会与主图标记合并展示
+// v1.6.35：主图标记由 kchartApi.chartSignalEvents() 同源生成；这里只保留不在主图上的提醒事件。
+export const LIVE_ONLY_SIGNAL_KINDS = ['srsi-edge-upper', 'srsi-edge-lower', 'srsi-preview', 'srsi-confirm'];
+
+// 信号列表 HTML（给定事件数组；调用方负责顺序）——空态明确说明「引擎是否在跑」，不再让用户猜
 // v1.6.26：每条 = 时间 → **主图标记符（与图例同形）** → 信号名（按类型着色） → 明细；整行左侧色条按类型着色。
-export function renderRecentSignalsHtml(n) {
-  const list = recentSignals(n == null ? 8 : n);
-  if (!list.length) return '<div class="sig-alert-empty">暂无信号记录。若引擎未启动，请点上方「⚡ 启动信号引擎」。</div>';
-  return list.map(ev => {
+export function renderSignalListHtml(list) {
+  const arr = Array.isArray(list) ? list : [];
+  if (!arr.length) return '<div class="sig-alert-empty">暂无信号记录。若引擎未启动，请点上方「⚡ 启动信号引擎」。</div>';
+  return arr.map(ev => {
     const m = kindMeta(ev.kind, sideOf(ev));
     const sev = m.severity === 'trade' ? 'sig-ev-trade' : m.severity === 'preview' ? 'sig-ev-preview' : 'sig-ev-signal';
     return '<div class="sig-ev ' + sev + '" style="border-left-color:' + m.color + '">' +
@@ -184,4 +188,9 @@ export function renderRecentSignalsHtml(n) {
         (ev.text ? ' ' + String(ev.text) : '') + '</span>' +
     '</div>';
   }).join('');
+}
+
+// 最近信号列表 HTML（从事件总线取最近 n 条）
+export function renderRecentSignalsHtml(n) {
+  return renderSignalListHtml(recentSignals(n == null ? 8 : n));
 }

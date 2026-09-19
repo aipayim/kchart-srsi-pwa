@@ -76,6 +76,28 @@ export function computeSeries(arr) {
 const EP_API = ['https://api.binance.com', 'https://api1.binance.com', 'https://api2.binance.com', 'https://data-api.binance.vision'];
 const EP_FAPI = ['https://fapi.binance.com']; // GOAL14：fapi.binance.vision 不存在（vision 只有 S3 历史仓库无 REST fundingRate），移除避免 ERR_CONNECTION_CLOSED 刷屏；fapi 不可达时 funding 静默降级为空（回测/实盘均兼容空 funding）
 const PROXY_KEY = 'pwa_binance_proxy';
+const EP_PREF_KEY = 'pwa_ep_pref';   // 上次成功的端点（按 group）——受限地区避免每次对不可达端点发请求
+
+// 记住/读取「上次成功」的端点。目的：用户所在网络固定封掉部分 Binance 域名时，
+// 不再每次都对被墙域名并发请求（控制台会刷 net::ERR_CONNECTION_CLOSED/RESET）。
+// 纯 localStorage 读写 + 防御，可单测；失败静默（仅缓存，不影响主流程）。
+export function readEndpointPref() {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const o = JSON.parse(localStorage.getItem(EP_PREF_KEY) || '{}');
+    return (o && typeof o === 'object') ? o : {};
+  } catch (e) { return {}; }
+}
+export function rememberEndpoint(group, base) {
+  if (!group || !base) return;
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const o = readEndpointPref();
+    if (o[group] === base) return;
+    o[group] = base;
+    localStorage.setItem(EP_PREF_KEY, JSON.stringify(o));
+  } catch (e) { /* 缓存写失败不影响数据拉取 */ }
+}
 
 function userProxy() {
   try { if (typeof localStorage !== 'undefined') { const v = localStorage.getItem(PROXY_KEY); if (v) return v; } } catch (e) {}
@@ -132,14 +154,25 @@ async function fetchJson(url, timeout = 10000) {
 async function fetchApiData(path, group = 'api', timeout = 8000) {
   const list = endpointList(group);
   if (!list.length) throw new Error('未配置数据端点');
+  // v1.6.35：先用「上次成功的端点」——用户网络固定封掉部分 Binance 域名时，
+  // 避免每次都对被墙域名并发请求（否则控制台刷 net::ERR_CONNECTION_CLOSED/RESET）。
+  // 记忆端点失效时自动落入下方并发竞速，不会卡死。
+  if (list.length > 1) {
+    const pref = readEndpointPref()[group];
+    if (pref && list.indexOf(pref) >= 0) {
+      try { return await fetchJson(buildProxyUrl(pref, path, group), timeout); }
+      catch (e) { /* 记忆端点失效 → 落入并发竞速 */ }
+    }
+  }
   if (list.length === 1) {
     try { return await fetchJson(buildProxyUrl(list[0], path, group), timeout); }
     catch (e) { const err = new Error('数据源不可达: ' + (e && e.message)); err.sourceUnreachable = true; throw err; }
   }
   // 并发竞速：被墙端点会静默挂起，串行会一直等到超时；并发则可用端点一旦返回即胜出。
-  const attempts = list.map((base, i) => fetchJson(buildProxyUrl(base, path, group), timeout).then(d => ({ i, d })));
+  const attempts = list.map((base, i) => fetchJson(buildProxyUrl(base, path, group), timeout).then(d => ({ i, d, base })));
   try {
     const first = await Promise.any(attempts);
+    rememberEndpoint(group, first.base);
     return first.d;
   } catch (agg) {
     const errs = (agg && agg.errors) ? agg.errors : [agg];
@@ -240,11 +273,11 @@ export async function fetchKlinesRange(sym, tf, startTime, endTime, onProgress, 
     const path = '/api/v3/klines?symbol=' + sym + '&interval=' + interval
       + '&endTime=' + end + '&limit=1000';
     let raw;
-    try { raw = await fetchApiData(path, 8000); }
+    try { raw = await fetchApiData(path, 'api', 8000); }
     catch (e) {
       // GOAL8 健性修复：第一页（尚无数据）失败时重试一次——首请求可能因 DNS/TLS 冷启动超过 8s 超时，
       // 直接 break 会把整段历史判为空（表现为『15m 数据不足』）；第二页起失败才放弃（已有一段数据）。
-      if (!all.length) { await new Promise(r => setTimeout(r, 600)); try { raw = await fetchApiData(path, 12000); } catch (e2) { break; } }
+      if (!all.length) { await new Promise(r => setTimeout(r, 600)); try { raw = await fetchApiData(path, 'api', 12000); } catch (e2) { break; } }
       else break;
     }
     if (!raw || !raw.length) break;

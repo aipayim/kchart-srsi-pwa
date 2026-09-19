@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { parseKlines, computeSeries } from '../src/pwa/data.js';
+import { parseKlines, computeSeries, readEndpointPref, rememberEndpoint } from '../src/pwa/data.js';
 import { buildSrsiOverview, defaultKConfig } from '../src/tech2/kchart.js';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
 import { KLINE_DOWNSAMPLE } from '../src/engine/timeframe.js';
@@ -77,4 +77,28 @@ count++;
   count++;
 }
 
-console.log(`✅ consistency: ${count} 项断言通过（迷你 PWA 解析 = 主系统解析，K线/SRSI 数据一致）`);
+// 4) v1.6.35：端点记忆（受限地区不再对被墙域名反复发请求 → 控制台不刷 ERR_CONNECTION_*）
+{
+  const _ls = {};
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls ? _ls[k] : null),
+    setItem: (k, v) => { _ls[k] = String(v); },
+    removeItem: (k) => { delete _ls[k]; },
+  };
+  assert.deepStrictEqual(readEndpointPref(), {}, '初始无记忆端点');
+  rememberEndpoint('api', 'https://data-api.binance.vision');
+  assert.strictEqual(readEndpointPref().api, 'https://data-api.binance.vision', '记住 api 组成功端点');
+  rememberEndpoint('fapi', 'https://fapi.binance.com');
+  assert.strictEqual(readEndpointPref().fapi, 'https://fapi.binance.com', 'api/fapi 分组独立记忆');
+  assert.strictEqual(readEndpointPref().api, 'https://data-api.binance.vision', '写 fapi 不影响 api');
+  rememberEndpoint('api', '');   // 非法值不覆盖
+  assert.strictEqual(readEndpointPref().api, 'https://data-api.binance.vision', '空 base 不覆盖');
+  _ls['pwa_ep_pref'] = '{bad json';
+  assert.deepStrictEqual(readEndpointPref(), {}, '损坏 JSON → 回退空对象');
+  delete globalThis.localStorage;
+  assert.deepStrictEqual(readEndpointPref(), {}, '无 localStorage → 空对象');
+  rememberEndpoint('api', 'x');   // 无 localStorage 不抛
+  count++;
+}
+
+console.log(`✅ consistency: ${count} 项断言通过`);

@@ -6,7 +6,7 @@ import {
   SIG_EVENTS_KEY, MAX_SIGNAL_EVENTS, SIGNAL_KINDS,
   signalEventKey, kindMeta, fmtSignalTime, sideText, sideOf,
   pushSignalEvent, loadSignalEvents, recentSignals, clearSignalEvents,
-  renderRecentSignalsHtml, signalLine, onSignalEvent, offSignalEvent
+  renderRecentSignalsHtml, renderSignalListHtml, LIVE_ONLY_SIGNAL_KINDS, signalLine, onSignalEvent, offSignalEvent
 } from '../src/tech2/signalAlerts.js';
 
 let passed = 0, failed = 0;
@@ -121,6 +121,23 @@ console.log('\n[signalAlerts: 事件流]');
     return !h.includes('[object Object]');
   })());
   ok('列表空数据不抛', renderRecentSignalsHtml(0) === '' || renderRecentSignalsHtml(0).length >= 0);
+
+  // v1.6.35：renderSignalListHtml（给定数组渲染）+ 仅事件类白名单
+  ok('renderSignalListHtml 空数组 → 空态', renderSignalListHtml([]).includes('启动信号引擎'));
+  ok('renderSignalListHtml 非数组不抛', renderSignalListHtml(null).includes('启动信号引擎'));
+  {
+    const arr = [
+      { ts: Date.now(), kind: 'srsi-cross-buy', side: 'long', price: 100 },
+      { ts: Date.now(), kind: 'alpha-close', side: 'flat', price: 101 },
+      { ts: Date.now(), kind: 'srsi-hook-death', side: 'short', price: 102 }
+    ];
+    const h = renderSignalListHtml(arr);
+    ok('renderSignalListHtml 条数=数组长度', (h.match(/sig-ev /g) || []).length === 3);
+    ok('renderSignalListHtml 含机会/钩/α平', h.includes('跌入超卖') && h.includes('金钩') === false && h.includes('死钩') && h.includes('基石·平仓'));
+    ok('renderSignalListHtml 不改原数组顺序', renderSignalListHtml(arr).indexOf('跌入超卖') < renderSignalListHtml(arr).indexOf('死钩'));
+  }
+  ok('LIVE_ONLY_SIGNAL_KINDS 含破带/预演/确认', ['srsi-edge-upper', 'srsi-edge-lower', 'srsi-preview', 'srsi-confirm'].every(k => LIVE_ONLY_SIGNAL_KINDS.indexOf(k) >= 0));
+  ok('LIVE_ONLY_SIGNAL_KINDS 不含主图标记类', ['srsi-open', 'srsi-close', 'srsi-cross-buy', 'srsi-hook-gold', 'alpha-open', 'alpha-close'].every(k => LIVE_ONLY_SIGNAL_KINDS.indexOf(k) < 0));
 
   // signalLine
   const line = signalLine({ sym: 'BTCUSDT', kind: 'alpha-rebal', w: -0.28, price: 77900 });

@@ -56,7 +56,8 @@ export function gaugeLabel(tone, inBand, bandSide, bandDistPct, squeezed) {
 // ============================================================
 // 纯函数：由 buildMaRelation(data) 的返回构造仪表盘模型
 // ============================================================
-export function maRelGaugeModel(data) {
+export function maRelGaugeModel(data, opts) {
+  const o = opts || {};
   const base = {
     ok: false, tone: 'range', price: null, ma20: null, atr: null, atrPct: null,
     bandLo: null, bandHi: null, devPct: null, above: false, inBand: false, bandDistPct: null,
@@ -67,9 +68,12 @@ export function maRelGaugeModel(data) {
   if (!data || typeof data !== 'object') return base;
 
   const ma20 = lastFinite(data.ma && data.ma.fast);
-  const price = finite(data.info && data.info.px) ? data.info.px
-    : finite(data.market && data.market.close) ? data.market.close
-      : null;
+  // v1.6.35：支持传入**实时价**（opts.livePrice）——仪表盘指针随行情秒级跳动，而非等到下一根 K 线收盘。
+  const livePx = finite(o.livePrice) ? o.livePrice : null;
+  const price = livePx != null ? livePx
+    : finite(data.info && data.info.px) ? data.info.px
+      : finite(data.market && data.market.close) ? data.market.close
+        : null;
   if (!finite(price) || !finite(ma20) || ma20 === 0) return base;
 
   const tone = toneOf(data.market && data.market.state);
@@ -103,6 +107,7 @@ export function maRelGaugeModel(data) {
 
   return {
     ok: true, tone, price, ma20,
+    priceLive: livePx != null,
     atr: finite(atrRaw) ? atrRaw : null,
     atrPct,
     bandLo, bandHi, devPct, above, inBand, bandDistPct, bandSide,

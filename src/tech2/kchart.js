@@ -903,7 +903,7 @@ function _readJson(key) { try { const raw = localStorage.getItem(key); return ra
 // v1.6.18：原实现只清 `srsiOptHist:*`；用户实测配额爆满时仍失败（真凶常是回测缓存/日志）
 //   → 扩展为清理所有派生/可重建键（回测结果/原始K线/资金费/信号日志/驾驶舱事件/规则监测快照）。
 //   绝不清理用户配置与账户数据（smartTrader_kchart / pwa_srsi_opt / pwa_srsi_auto / pwa_paper_state / smartTrader）。
-const _REGEN_KEYS = ['smartTrader_kchart_bt', 'smartTrader_kchart_bt_raw', 'smartTrader_kchart_bt_fund', 'pwa_signal_events', 'smartTrader_cockpitEvents', 'smartTrader_ruleMonitor'];
+const _REGEN_KEYS = ['smartTrader_kchart_bt', 'smartTrader_kchart_bt_raw', 'smartTrader_kchart_bt_fund', 'smartTrader_cockpitEvents', 'smartTrader_ruleMonitor'];
 function pruneOptHistory() {
   try {
     const toDel = [];
@@ -6107,6 +6107,67 @@ export function buildMarkList({ sigOverlay, srsiAutoOn, alphaLive, opportunities
   return out;
 }
 
+// ============================================================
+// v1.6.35：「最近信号」面板与主图标记**同源**（用户需求：主图画了什么，面板就列什么）
+// 背景：面板原只显示「页面打开期间实时检测到」的事件 → 刷新/首次进入时远少于主图标记，
+//       用户看到主图一堆 ▲▼◆● 而面板只有几条。现改为**由主图标记清单直接生成**（与 drawMain 同条件），
+//       并保留仅事件类实时流（破带/预演/确认）由面板合并展示。
+// ============================================================
+// 主图标记 kind → 信号事件 kind/side（与 signalAlerts.SIGNAL_KINDS 对应）
+const _MARK_TO_SIG = {
+  oppBuy:     { kind: 'srsi-cross-buy',  side: 'long' },
+  oppSell:    { kind: 'srsi-cross-sell', side: 'short' },
+  hookGold:   { kind: 'srsi-hook-gold',  side: 'long' },
+  hookDeath:  { kind: 'srsi-hook-death', side: 'short' },
+  srsiLong:   { kind: 'srsi-open',  side: 'long' },
+  srsiShort:  { kind: 'srsi-open',  side: 'short' },
+  srsiClose:  { kind: 'srsi-close', side: null },
+  alphaLong:  { kind: 'alpha-open',  side: 'long' },
+  alphaShort: { kind: 'alpha-open',  side: 'short' },
+  alphaClose: { kind: 'alpha-close', side: 'flat' }
+};
+// 标记 → 明细文本（告诉小白「这是真成交还是仅信号」）
+const _MARK_TEXT = {
+  oppBuy: '15m 收盘穿越（仅信号·非成交）', oppSell: '15m 收盘穿越（仅信号·非成交）',
+  hookGold: '15m 收盘钩（仅信号·非成交）', hookDeath: '15m 收盘钩（仅信号·非成交）',
+  srsiLong: '实盘成交 · 卫星自动', srsiShort: '实盘成交 · 卫星自动', srsiClose: '实盘成交 · 卫星自动',
+  alphaLong: '实盘调仓 · 基石组合', alphaShort: '实盘调仓 · 基石组合', alphaClose: '实盘调仓 · 基石组合'
+};
+// 纯函数（可单测）：主图标记清单 → 信号事件（按时间升序）。priceAt(ts) 可选，回传该时刻价格。
+export function marksToSignalEvents(marks, priceAt) {
+  const out = [];
+  for (const mk of (marks || [])) {
+    if (!mk || !Number.isFinite(mk.t)) continue;
+    const m = _MARK_TO_SIG[mk.kind];
+    if (!m) continue;
+    const p = (typeof priceAt === 'function') ? priceAt(mk.t) : null;
+    out.push({ ts: mk.t, kind: m.kind, side: m.side, price: (Number.isFinite(p) ? p : null), text: _MARK_TEXT[mk.kind] || '', src: 'chart' });
+  }
+  out.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+// 由**当前主图数据源**生成信号事件（与 drawMain 的标记条件一致），供「最近信号」面板同源展示。
+export function chartSignalEvents() {
+  if (typeof window === 'undefined') return [];
+  const sym = cfg.symbol;
+  const d15 = getTFData(sym, '15m') || {};
+  const c15 = d15.c || [], t15 = d15.t || [];
+  const priceAt = (ts) => { for (let i = t15.length - 1; i >= 0; i--) { if (t15[i] <= ts) { const v = Number(c15[i]); return Number.isFinite(v) ? v : null; } } return null; };
+  let opportunities = [];
+  try { opportunities = filterOpportunityDraws(mainOpportunityMarks(sym)); } catch (e) { opportunities = []; }
+  const alphaLive = !!(window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
+  const marks = buildMarkList({
+    sigOverlay: !!cfg.sigOverlay,
+    srsiAutoOn: !!(cfg.srsiAutoOn || cfg.srsiAutoApplyBt),
+    alphaLive,
+    opportunities,
+    srsiTrades: window.__srsiLiveTrades || [],
+    alphaMarks: window.__alphaLiveMarks || []
+  });
+  return marksToSignalEvents(marks, priceAt).map(e => Object.assign({ sym }, e));
+}
+
 // 标记 → 主图坐标（纯函数，可单测）：geom 为 drawMain 缓存的 { lo,hi,start,n,xStep,c,t }
 export function markFxXY(geom, mark) {
   if (!geom || !mark || !Number.isFinite(mark.t)) return null;
@@ -6334,6 +6395,8 @@ export const kchartApi = {
   __maRelData: () => maRelData(),
   mainMarkList,
   buildMarkList,
+  marksToSignalEvents,
+  chartSignalEvents,
   markFxXY,
   markAnchorY,
   __mainGeom: () => _mainGeom,

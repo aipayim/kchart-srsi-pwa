@@ -12,7 +12,7 @@ import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
-import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf } from '../tech2/signalAlerts.js';
+import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -930,8 +930,11 @@ function renderMaRel() {
   try { ro = buildMaRelReadout(data); } catch (e) { ro = null; }
   if (!ro) return;
   // v1.6.34：仪表盘模型（动画由共用 RAF 绘制）
+  // v1.6.35：传入**实时价**（window.S.prices[sym].last）——指针随行情秒级跳动，不再只跟 K 线收盘
+  let livePx = null;
+  try { const Sp = globalThis.S; const pp = Sp && Sp.prices && Sp.prices[cfg && cfg.symbol]; livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null; } catch (e) { livePx = null; }
   try {
-    const gm = maRelGaugeModel(data);
+    const gm = maRelGaugeModel(data, { livePrice: livePx });
     _maRelGaugeModel = gm;
     _targetMaPos = (gm && gm.ok && gm.pos != null) ? gm.pos : null;
     if (_targetMaPos == null) { const gcv = $('pwaMaRelGauge'); if (gcv) { const p = prep(gcv); if (p) p.ctx.clearRect(0, 0, p.w, p.h); } }
@@ -976,9 +979,16 @@ function renderMaRel() {
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
-  if (c) { c.textContent = recentSignals(999).length + ' 条'; }
+  const api = globalThis.kchartApi;
+  // v1.6.35：面板 = 主图标记（与主图同源、随图表实时重建）+ 仅事件类实时流（破带/预演/确认）。
+  // 这样「刷新/首次进入」也不会只剩几条——主图上的 ▲▼◆● 全部可回溯。
+  let chart = [];
+  try { chart = (api && api.chartSignalEvents) ? api.chartSignalEvents() : []; } catch (e) { chart = []; }
+  const liveOnly = recentSignals(999).filter(ev => ev && LIVE_ONLY_SIGNAL_KINDS.indexOf(ev.kind) >= 0);
+  const merged = chart.concat(liveOnly).sort((a, b) => b.ts - a.ts).slice(0, 40);
+  if (c) { c.textContent = merged.length + ' 条'; }
   if (!box) return;
-  const html = renderRecentSignalsHtml(30);   // v1.6.25：上限 100 条 → 面板多展示（容器可滚动）
+  const html = renderSignalListHtml(merged);
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
 }
 

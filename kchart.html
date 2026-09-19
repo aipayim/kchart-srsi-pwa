@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#070b14">
+  <link rel="icon" type="image/png" href="./favicon.png">
   <title>智能交易驾驶舱 · SRSI</title>
   <style>
     /* 关键首屏兜底（完整样式见 src/pwa/pwa.css，由模块注入） */
@@ -185,9 +186,11 @@
               <div class="pwa-card" data-acc="recent">
                 <div class="pwa-card-h pwa-acc-h"><span class="ttl">最近信号</span><span class="pwa-spacer"></span>
                   <span class="pwa-pill" id="pwaSigCount">0</span>
-                  <button class="pwa-mini" id="pwaSigClear" title="清空信号记录（仅清历史列表，不影响引擎）">清空</button>
+                  <button class="pwa-mini" id="pwaSigClear" title="清空实时提醒记录（主图标记始终显示）">清空</button>
                   <span class="pwa-caret">▾</span></div>
-                <div class="pwa-card-b"><div class="sig-alerts" id="pwaRecentSig"></div></div>
+                <div class="pwa-card-b">
+                  <div class="pwa-dim" style="font-size:9.5px;padding:0 2px 5px;line-height:1.5">与主图标记同源：▲▼ 卫星成交 · ◆ 基石调仓 · ● 机会点 · ◆ 金钩/死钩</div>
+                  <div class="sig-alerts" id="pwaRecentSig"></div></div>
               </div>
               <div class="pwa-card" data-acc="readout">
                 <div class="pwa-card-h pwa-acc-h"><span class="ttl">解读卡</span><span class="pwa-spacer"></span>
