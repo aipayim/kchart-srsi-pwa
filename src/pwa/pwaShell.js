@@ -10,6 +10,7 @@ import {
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
+import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -188,6 +189,7 @@ function renderKpis(pillar, rd, alphaSig) {
 
 // ---------- 信号驾驶舱（内联） ----------
 let _gaugeRaf = 0, _animW = 0, _targetW = 0;
+let _animMaPos = null, _targetMaPos = null;   // v1.6.34：均线关系仪表盘的缓动位置（复用同一 RAF）
 
 function gaugeFrame() {
   _gaugeRaf = 0;
@@ -197,6 +199,14 @@ function gaugeFrame() {
     _animW += (_targetW - _animW) * 0.06;
     const p = prep(cv);
     if (p) { try { drawPosGauge(p.ctx, p.w, p.h, _animW, { hint: '调仓阈值 |Δw|>0.05 · 60s 检查' }); } catch (e) {} }
+  }
+  // v1.6.34：均线关系仪表盘（同一 RAF，避免多循环）
+  const gcv = $('pwaMaRelGauge');
+  if (gcv && gcv.clientWidth && _targetMaPos != null) {
+    if (_animMaPos == null) _animMaPos = _targetMaPos;
+    _animMaPos += (_targetMaPos - _animMaPos) * 0.08;
+    const p2 = prep(gcv);
+    if (p2 && _maRelGaugeModel) { try { drawMaRelGauge(p2.ctx, _maRelGaugeModel, p2.w, p2.h, { pos: _animMaPos, phase: (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now() }); } catch (e) {} }
   }
   _gaugeRaf = requestAnimationFrame(gaugeFrame);
 }
@@ -895,6 +905,7 @@ export function installSignalAlertSink() {
     renderRecentSignals();
   });
 }
+let _maRelGaugeModel = null;
 function renderMaRel() {
   const card = $('pwaMaRelCard');
   if (!card) return;
@@ -918,6 +929,14 @@ function renderMaRel() {
   let ro = null;
   try { ro = buildMaRelReadout(data); } catch (e) { ro = null; }
   if (!ro) return;
+  // v1.6.34：仪表盘模型（动画由共用 RAF 绘制）
+  try {
+    const gm = maRelGaugeModel(data);
+    _maRelGaugeModel = gm;
+    _targetMaPos = (gm && gm.ok && gm.pos != null) ? gm.pos : null;
+    if (_targetMaPos == null) { const gcv = $('pwaMaRelGauge'); if (gcv) { const p = prep(gcv); if (p) p.ctx.clearRect(0, 0, p.w, p.h); } }
+  } catch (e) { _maRelGaugeModel = null; _targetMaPos = null; }
+  if (typeof startGauge === 'function') startGauge();
   const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
   if (pill) { pill.textContent = (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : ro.tone === 'range' ? '震荡' : '未启用'); pill.style.color = toneCol; }
   // 行样式复用「最近信号」(.sig-ev) 的表达方式：图标 + 彩色标签 + 说明

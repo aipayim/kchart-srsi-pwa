@@ -309,15 +309,25 @@ console.log('\n[maRelation: 数据不足与脏输入]');
 
 console.log('\n[maRelation: 对齐与 info 汇总]');
 {
-  // 用原始日线 + 时间戳走 alignClosedIdx：日线时间 [0, 100, 200]，主图时间 [0, 50, 100, 250]
+  // 用足够长的原始日线（≥25 根）才能算出日线 MA20
+  const c1d = Array.from({ length: 25 }, (_, i) => 100 + i);
+  const t1d = c1d.map((_, i) => i * 50);   // 日线每 50 单位一根，保证主图末根能对齐到第 20 根之后
+  const mainT = L1_CLOSES.map((_, i) => i * 50);
   const res = buildMaRelation({
     closes: L1_CLOSES, highs: L1_HIGHS, lows: L1_LOWS, atr: L1_ATR,
-    closes1d: [10, 20, 30], t1d: [0, 100, 200],
-    t: L1_CLOSES.map((_, i) => i * 50),
+    closes1d: c1d, t1d,
+    t: mainT,
     opts: L1_OPTS,
   });
   ok('原始日线按时间对齐不抛', !!res);
   ok('对齐后 daily 有值', res.daily[20].some(v => v !== null));
+  // v1.6.34 回归（重要）：日线均线必须**先在日线自身算完、再对齐到主图**；
+  // 旧实现「先前向填充再算均线」→ 同一根日线收盘被重复填充 → 均线恒等于该收盘价（假值）
+  const maD = maSeries(c1d, 20, 'sma');
+  const j = alignClosedIdx(t1d, [mainT[mainT.length - 1]])[0];
+  const lastD = res.daily[20][res.daily[20].length - 1];
+  ok('日线 MA20 = 日线均线再对齐（非“收盘价重复填充”）', Math.abs(lastD - maD[j]) < 1e-9);
+  ok('日线 MA20 ≠ 日线收盘价（旧 bug 指纹）', lastD !== c1d[c1d.length - 1]);
   // 已对齐周线直接传入
   const aligned = buildMaRelation({
     closes: L1_CLOSES, highs: L1_HIGHS, lows: L1_LOWS, atr: L1_ATR,

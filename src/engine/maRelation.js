@@ -274,13 +274,13 @@ export function buildMaRelation(input) {
   const vwap = o.vwap ? vwapSeries(highs, lows, closes, inp.vols) : nullArr(n);
 
   // 更高周期对齐（防前视）
-  const aligned1d = alignToMain(inp.closes1d, inp.t1d, mainT, n);
-  const aligned4h = alignToMain(inp.closes4h, inp.t4h, mainT, n);
-  const aligned1w = alignToMain(inp.closes1w, inp.t1w, mainT, n);
-
-  const daily = {}; for (const p of dPer) daily[p] = maSeries(aligned1d, p, o.type);
-  const weekly = {}; for (const p of wPer) weekly[p] = maSeries(aligned1w, p, o.type);
-  const ma4h = maSeries(aligned4h, o.fast, o.type);
+  // ⚠ v1.6.34 修复：必须**先在更高周期自身算均线，再对齐到主图**。
+  // 原实现「先对齐（前向填充）再算均线」→ 同一根高周期收盘被重复填充 N 次（N=主图在该高周期内的根数）
+  //   → 均线恒等于该高周期收盘价（假值！表现为「日MA20 = 日线收盘 · 距 +0.00%」）。
+  const dRaw = arr(inp.closes1d), d4Raw = arr(inp.closes4h), wRaw = arr(inp.closes1w);
+  const daily = {}; for (const p of dPer) daily[p] = alignToMain(maSeries(dRaw, p, o.type), inp.t1d, mainT, n);
+  const weekly = {}; for (const p of wPer) weekly[p] = alignToMain(maSeries(wRaw, p, o.type), inp.t1w, mainT, n);
+  const ma4h = alignToMain(maSeries(d4Raw, o.fast, o.type), inp.t4h, mainT, n);
 
   const market = maMarketState(inp.closes1d, {});
 
