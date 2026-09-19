@@ -875,15 +875,32 @@ function renderMaRel() {
   const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
   if (pill) { pill.textContent = (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : ro.tone === 'range' ? '震荡' : '未启用'); pill.style.color = toneCol; }
   // 行样式复用「最近信号」(.sig-ev) 的表达方式：图标 + 彩色标签 + 说明
-  const sig = JSON.stringify([ro.tone, ro.verdict, ro.rows.map(r => [r.icon, r.label, r.detail])]);
+  const sigRows = ro.rows.map(r =>
+    '<div class="sig-ev sig-ev-signal" style="border-left-color:' + r.color + '">' +
+      '<span class="sig-ev-i" style="color:' + r.color + '">' + r.icon + '</span>' +
+      '<span class="sig-ev-k" style="color:' + r.color + '">' + r.label + '</span>' +
+      '<span class="sig-ev-d">' + (r.detail || '') + '</span>' +
+    '</div>').join('');
+  // v1.6.32：最近 N 笔信号列表（带时间，与主图箭头一一对应）
+  const list = ro.signals || [];
+  const sigListHtml = list.length ? ('<div class="mar-sep">── 最近 ' + list.length + ' 笔信号 ──</div>' + list.map(s => {
+    const up = s.side === 'long';
+    const col = s.invalid ? '#8899aa' : (up ? '#2ecc71' : '#ff6b6b');
+    const typeTxt = s.type === 'L2' ? '密集后打开' : s.type === 'L3' ? '4H MA20 突破' : (up ? '回踩站稳' : '反弹受阻');
+    const rTxt = (s.r != null && isFinite(s.r)) ? (Math.abs(s.r) >= 1000 ? s.r.toFixed(0) : s.r.toFixed(3)) : '--';
+    const tp2 = (s.r != null && isFinite(s.r)) ? (Math.abs(s.entry + (up ? 1 : -1) * s.r * 2) >= 1000 ? (s.entry + (up ? 1 : -1) * s.r * 2).toFixed(0) : (s.entry + (up ? 1 : -1) * s.r * 2).toFixed(3)) : '--';
+    const eTxt = (v) => (v == null || !isFinite(v)) ? '--' : (Math.abs(v) >= 10000 ? v.toFixed(0) : Math.abs(v) >= 100 ? v.toFixed(2) : v.toFixed(3));
+    return '<div class="sig-ev sig-ev-signal" style="border-left-color:' + col + '">' +
+      '<span class="sig-ev-t">' + (s.ts != null ? fmtSignalTime(s.ts) : '--') + '</span>' +
+      '<span class="sig-ev-i" style="color:' + col + '">' + (up ? '▲' : '▼') + '</span>' +
+      '<span class="sig-ev-k" style="color:' + col + '">' + s.type + ' ' + typeTxt + ' · ' + (up ? '做多' : '做空') + (s.invalid ? '（已失效）' : '（有效）') + '</span>' +
+      '<span class="sig-ev-d">入场 ' + eTxt(s.entry) + ' · 防守 ' + eTxt(s.stop) + ' · 1R ' + rTxt + ' · 2R目标 ' + tp2 + '</span>' +
+    '</div>';
+  }).join('')) : '';
+  const sig = JSON.stringify([ro.tone, ro.verdict, ro.rows.map(r => [r.icon, r.label, r.detail]), list.map(s => [s.ts, s.type, s.side, s.invalid])]);
   if (box.__sig !== sig) {
     box.__sig = sig;
-    box.innerHTML = ro.rows.map(r =>
-      '<div class="sig-ev sig-ev-signal" style="border-left-color:' + r.color + '">' +
-        '<span class="sig-ev-i" style="color:' + r.color + '">' + r.icon + '</span>' +
-        '<span class="sig-ev-k" style="color:' + r.color + '">' + r.label + '</span>' +
-        '<span class="sig-ev-d">' + (r.detail || '') + '</span>' +
-      '</div>').join('');
+    box.innerHTML = sigRows + sigListHtml;
   }
   if (foot) {
     const t = '→ ' + ro.verdict;

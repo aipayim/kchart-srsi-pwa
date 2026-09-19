@@ -400,5 +400,37 @@ console.log('\n[maRelation: maRelReadout 解读行]');
   ok('每行都有 icon/label', bull.rows.every(r => r.icon && r.label));
 }
 
+
+// v1.6.32：maRelReadout 的最近信号列表（带时间，最新在前）
+console.log('\n[maRelation: maRelReadout 信号列表]');
+{
+  const base = {
+    opts: Object.assign({}, MA_REL_DEFAULTS, { daily: [], weekly: [], vwap: false }),
+    ma: { fast: [null, 100], mid: [null, 90], slow: [null, 80] },
+    vwap: [], daily: {}, weekly: {}, squeeze: { spreadPct: 2, squeezed: false },
+    market: { state: 'BULL', close: 100, maFast: 99, maMid: 95, slopePct: 0.1, aboveFast: true, aboveMid: true },
+    t: [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000],
+    signals: [],
+    info: { distFast: 0.5, distDaily20: null, distWeekly20: null, distWeekly200: null, devAtr: false, squeezed: false, lastSignal: null, px: 100, atrPct: 2 },
+  };
+  const many = [];
+  for (let k = 1; k <= 14; k++) many.push({ i: k, side: k % 2 ? 'long' : 'short', type: ['L1', 'L2', 'L3'][k % 3], entry: 100 + k, stop: 98 + k, r: 2, invalidIdx: k % 5 === 0 ? k + 1 : null });
+  const r = maRelReadout(Object.assign({}, base, { signals: many }));
+  ok('信号列表默认最多 10 笔', r.signals.length === 10);
+  ok('最新在前（i 递减）', r.signals[0].i === 14 && r.signals[1].i === 13 && r.signals[9].i === 5);
+  ok('带时间戳（来自 data.t）', r.signals[0].ts === 15000 && r.signals[9].ts === 6000);
+  ok('失效标记透传', r.signals.find(x => x.i === 10).invalid === true && r.signals.find(x => x.i === 9).invalid === false);
+  ok('字段齐全（side/type/entry/stop/r）', r.signals.every(x => x.side && x.type && x.entry != null && x.stop != null && x.r != null));
+  const r3 = maRelReadout(Object.assign({}, base, { signals: many }), { sigLimit: 3 });
+  ok('sigLimit 可调（3 笔）', r3.signals.length === 3 && r3.signals[0].i === 14);
+  const r0 = maRelReadout(Object.assign({}, base, { signals: many }), { sigLimit: 0 });
+  ok('sigLimit=0 → 空列表', r0.signals.length === 0);
+  const noT = maRelReadout(Object.assign({}, base, { t: undefined, signals: many }));
+  ok('缺 t → ts 为 null 不抛', noT.signals.every(x => x.ts === null));
+  const none = maRelReadout(base);
+  ok('无信号 → 空列表', none.signals.length === 0);
+  ok('未启用时也返回 signals:[]', maRelReadout(null).signals.length === 0);
+}
+
 console.log(`\n=== maRelation.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);

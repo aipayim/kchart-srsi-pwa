@@ -367,6 +367,7 @@ export function buildMaRelation(input) {
 
   return {
     opts: o, ma, vwap, daily, weekly,
+    t: mainT,                 // v1.6.32：主图 bar 时间戳（解读面板的信号列表要显示时间）
     squeeze: { spreadPct: sqLast.spreadPct, squeezed: sqLast.squeezed },
     market, signals,
     info: {
@@ -403,9 +404,13 @@ function _pct(v) {
 }
 function _lastNum(arr) { if (!Array.isArray(arr) || !arr.length) return null; const v = arr[arr.length - 1]; return (v != null && isFinite(v)) ? v : null; }
 
-// 返回 { tone:'bull'|'bear'|'range'|'none', verdict:'一句话结论', rows:[{icon,color,label,detail}] }
-export function maRelReadout(data) {
-  const empty = { tone: 'none', verdict: '未启用均线关系（在主图工具面板点「📐 均线关系」开启）', rows: [] };
+// 返回 { tone, verdict, rows, signals }
+//   rows      = 状态解读行（每维度一行）
+//   signals   = v1.6.32：最近 N 笔信号（默认 10，最新在前，带时间），供面板逐笔列出与主图箭头对位
+export function maRelReadout(data, opts2) {
+  const o2 = opts2 || {};
+  const sigLimit = (o2.sigLimit != null && isFinite(o2.sigLimit)) ? Math.max(0, Math.floor(o2.sigLimit)) : 10;
+  const empty = { tone: 'none', verdict: '未启用均线关系（在主图工具面板点「📐 均线关系」开启）', rows: [], signals: [] };
   if (!data || !data.opts) return empty;
   const o = data.opts;
   const closes = (data.ma && data.ma.fast) || [];
@@ -531,5 +536,16 @@ export function maRelReadout(data) {
   else verdict = '震荡观望：不猜方向，等均线密集后收盘带量跳出密集区再动手';
   if (sig && sig.invalidIdx != null) verdict += '（最近信号已失效，按防守位认错）';
 
-  return { tone, verdict, rows };
+  // 最近 N 笔信号（最新在前；带时间戳，供面板逐笔列出）
+  const times = Array.isArray(data.t) ? data.t : [];
+  const sigList = (sigLimit <= 0) ? [] : (Array.isArray(data.signals) ? data.signals : []).slice(-sigLimit).reverse().map(s => ({
+    i: s.i,
+    ts: (times[s.i] != null && isFinite(times[s.i])) ? times[s.i] : null,
+    side: s.side,
+    type: s.type || 'L1',
+    entry: s.entry, stop: s.stop, r: s.r,
+    invalid: s.invalidIdx != null,
+  }));
+
+  return { tone, verdict, rows, signals: sigList };
 }

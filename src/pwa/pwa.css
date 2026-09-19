@@ -607,6 +607,11 @@ body.pwa .kchart-maintools .mt-legend{display:none}
 .pwa-engine .pe-why{margin-top:5px;color:var(--text2);font-size:9.5px;line-height:1.6}
 .pwa-engine .pe-btn.tiny{margin-left:0;font-size:9.5px;padding:1px 6px;font-weight:400}
 .sig-alerts{max-height:230px;overflow:auto}
+/* v1.6.32：均线关系解读面板内的信号列表分隔标题 */
+.mar-sep{margin:8px 0 2px;padding-top:6px;border-top:1px dashed rgba(255,255,255,.14);
+  font-size:9px;color:var(--text2);text-align:center;letter-spacing:1px}
+/* 该面板行数较多（10 行解读 + 10 笔信号）→ 给它更高的可视高度，减少内部滚动 */
+.pwa-card[data-acc="marel"] .sig-alerts{max-height:min(52vh,460px)}
 .sig-alert-empty{color:var(--text2);font-size:10px;padding:6px 2px;line-height:1.6}
 .sig-ev{display:flex;gap:6px;align-items:baseline;padding:4px 6px;border-bottom:1px dashed rgba(255,255,255,.06);font-size:10px;line-height:1.5;border-left:3px solid transparent}
 .sig-ev:last-child{border-bottom:none}
