@@ -503,6 +503,52 @@ function setMotion(on) {
   if (sel) sel.value = on ? '1' : '0';
 }
 
+function renderStorageCard() {
+  const box = $('pwaStorageInfo');
+  if (!box) return;
+  const api = globalThis.kchartApi;
+  let c = null;
+  try { c = api.storageSelfCheck ? api.storageSelfCheck() : null; } catch (e) { c = null; }
+  if (!c) { box.textContent = '无法读取 localStorage（浏览器限制）。'; return; }
+  const okCol = c.writable ? '#2ecc71' : '#ff5252';
+  const top = (c.top || []).slice(0, 5).map(x => x.k + ' ' + x.kb + 'KB').join(' · ');
+  const full = !c.writable || !c.headroom;
+  box.innerHTML =
+    '<div>可写：<b style="color:' + okCol + '">' + (c.writable ? '正常 ✓' : '失败 ✗') + '</b>' +
+    ' · 余量：<b style="color:' + (c.headroom ? '#2ecc71' : '#ff5252') + '">' + (c.headroom ? '充足 ✓' : '不足 ✗') + '</b>' +
+    ' · 已用 <b>' + c.usedKB + 'KB</b> / ' + c.keyCount + ' 个键' +
+    (c.probeErr ? ' · 探针错误 <b>' + c.probeErr + '</b>' : '') + '</div>' +
+    '<div style="margin-top:2px">最大键：' + (top || '—') + '</div>' +
+    (full
+      ? '<div style="margin-top:3px;color:#ff8a8a">⚠ 存储写入失败/余量不足 = 设置无法保存、且会反复自动刷新（版本号写不进）。点下方「清理可重建数据」即可修复。</div>'
+      : (c.usedKB > 3500 ? '<div style="margin-top:3px;color:#f59e0b">⚠ 占用偏高（接近上限），建议清理一次可重建数据。</div>' : ''));
+}
+
+function bindStorageCard() {
+  const rep = $('pwaStorageRepair');
+  if (rep && !rep.__bound) {
+    rep.__bound = true;
+    rep.addEventListener('click', () => {
+      const api = globalThis.kchartApi;
+      let r = null; try { r = api.repairStorage ? api.repairStorage() : null; } catch (e) { r = null; }
+      const m = $('pwaStorageMsg');
+      if (m && r) { m.style.color = (r.after.writable && r.after.headroom) ? '#2ecc71' : '#ff5252'; m.textContent = '已清理 ' + r.removed + ' 个派生键，释放约 ' + r.freedKB + 'KB；可写 = ' + (r.after.writable ? '正常 ✓' : '仍失败 ✗') + ' · 余量 = ' + (r.after.headroom ? '充足 ✓' : '不足 ✗'); }
+      renderStorageCard();
+    });
+  }
+  const ck = $('pwaStorageCheck');
+  if (ck && !ck.__bound) { ck.__bound = true; ck.addEventListener('click', () => { const m = $('pwaStorageMsg'); if (m) m.textContent = ''; renderStorageCard(); }); }
+  const rs = $('pwaStorageReset');
+  if (rs && !rs.__bound) {
+    rs.__bound = true;
+    rs.addEventListener('click', () => {
+      if (typeof confirm === 'function' && !confirm('清空本机全部本地数据并重建？（配置/账户/交易记录都会清除，不可恢复）')) return;
+      try { globalThis.pwaClearAll && globalThis.pwaClearAll(); } catch (e) {}
+    });
+  }
+  renderStorageCard();
+}
+
 function initSettings() {
   // 三张设置卡默认展开（首次）；用户手动收起后尊重（pwa_set_<id>）
   ['pwaSettings', 'pwaSrcCard', 'kchartSrsiCardWrap'].forEach(id => {
@@ -1082,6 +1128,7 @@ export function initPwaShell() {
   bindCollapseToggles();
   applyCollapseUI();
   initSettings();
+  bindStorageCard();
   bindCockpitAcc();
   bindEngine();
   applyPhoneDefaults();

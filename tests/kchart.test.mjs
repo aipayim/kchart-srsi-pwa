@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3922,6 +3922,65 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   const LH = renderLegendHtml();
   ok('renderLegendHtml 含全部 label 与 title', L.every(x => LH.includes(x.label) && LH.includes(x.title)));
   ok('renderLegendHtml 输出 <i> 标签', (LH.match(/<i /g) || []).length === 10);
+}
+
+
+// ===== v1.6.33: 本地存储自检 / 修复（安卓「设置不保存 + 反复刷新」根因） =====
+{
+  console.log('\n[kchart: v1.6.33 本地存储自检 storageSelfCheck/repairStorage]');
+  const _ls4 = {};
+  let _failWrites = false;
+  globalThis.localStorage = {
+    getItem: (k) => (k in _ls4 ? _ls4[k] : null),
+    setItem: (k, v) => { if (_failWrites) { const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e; } _ls4[k] = String(v); },
+    removeItem: (k) => { delete _ls4[k]; },
+    key: (i) => Object.keys(_ls4)[i] || null,
+    get length() { return Object.keys(_ls4).length; },
+  };
+  // 造出「写满」场景：用户数据 + 巨型遗留派生键
+  _ls4['smartTrader_kchart'] = '{"user":1}';
+  _ls4['pwa_srsi_opt'] = '{"BTCUSDT":1}';
+  _ls4['pwa_paper_state'] = '{"pos":[]}';
+  _ls4['srsiOptHist:v8:BTCUSDT|15m'] = 'x'.repeat(50000);
+  _ls4['smartTrader_kchart_bt'] = 'y'.repeat(20000);
+  _ls4['pwa_signal_events'] = 'z'.repeat(5000);
+  _failWrites = true;   // 模拟配额爆满：读正常、写全失败
+
+  const c1 = storageSelfCheck();
+  ok('自检：可用=true / 可写=false（写满）', c1.available === true && c1.writable === false);
+  ok('自检：余量探针 headroom=false', c1.headroom === false);
+  ok('自检：探针错误为 QuotaExceededError', c1.probeErr === 'QuotaExceededError');
+  ok('自检：统计已用 KB 与键数', c1.usedKB > 70 && c1.keyCount === 6);
+  ok('自检：top 列出最大键', c1.top.length >= 3 && c1.top[0].k.indexOf('srsiOptHist') === 0);
+
+  const r1 = repairStorage();
+  ok('修复：清掉了派生键', r1.removed === 3);
+  ok('修复：用户配置/账户仍在', !!_ls4['smartTrader_kchart'] && !!_ls4['pwa_srsi_opt'] && !!_ls4['pwa_paper_state']);
+  ok('修复：派生键已消失', !_ls4['srsiOptHist:v8:BTCUSDT|15m'] && !_ls4['smartTrader_kchart_bt'] && !_ls4['pwa_signal_events']);
+  ok('修复：释放 >60KB', r1.freedKB > 60);
+  ok('修复后仍不可写（因还在模拟写失败）', r1.after.writable === false);
+
+  _failWrites = false;   // 腾出空间后写恢复正常
+  const c2 = storageSelfCheck();
+  ok('空间释放后：可写=true 且有余量', c2.writable === true && c2.headroom === true);
+  ok('自检探针不留残留键', !('__st_probe__' in _ls4));
+
+  // 启动自检：正常时不触发修复
+  const b1 = storageBootCheck();
+  ok('启动自检：正常时 repaired=null', b1.repaired === null && b1.wasBroken === false);
+  // 启动自检：写满时自动修复
+  _ls4['srsiOptHist:v8:X'] = 'q'.repeat(30000);
+  _failWrites = true;
+  const b2 = storageBootCheck();
+  ok('启动自检：不可写时自动修复并清理', b2.wasBroken === true && b2.repaired && b2.repaired.removed >= 1);
+  ok('启动自检：余量不足也算 wasBroken', (() => { _failWrites = false; _ls4['srsiOptHist:v8:Z'] = 'z'.repeat(1000); const bb = storageBootCheck(); return bb.repaired === null; })());
+  ok('启动自检：修复后用户配置保留', !!_ls4['smartTrader_kchart'] && !!_ls4['pwa_srsi_opt']);
+  _failWrites = false;
+  // 占用过高（>3500KB）也触发修复
+  _ls4['srsiOptHist:v8:BIG'] = 'w'.repeat(4000 * 1024);
+  const b3 = storageBootCheck();
+  ok('启动自检：占用 >3500KB 也触发清理', b3.repaired !== null && !('srsiOptHist:v8:BIG' in _ls4));
+  delete globalThis.localStorage;
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);

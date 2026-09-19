@@ -282,6 +282,18 @@
             <div class="kchart-ovhead" onclick="document.getElementById('kchartSrsiCardWrap').classList.toggle('closed')">⚙ SRSI 各币对各周期参数（本地持久化）<span class="kchart-ovarrow">▾</span></div>
             <div id="kchartSrsiCard" class="kchart-settings-body"></div>
           </div>
+          <div class="kchart-settings" id="pwaStorageCard">
+            <div class="kchart-ovhead" onclick="document.getElementById('pwaStorageCard').classList.toggle('closed')">🧰 本地存储自检 / 修复（安卓不保存设置时看这里）<span class="kchart-ovarrow">▾</span></div>
+            <div id="pwaStorageBody" class="kchart-settings-body">
+              <div id="pwaStorageInfo" style="font-size:10px;color:var(--text2);line-height:1.6">检测中…</div>
+              <div class="setting-row" style="margin-top:6px;flex-wrap:wrap;gap:6px">
+                <button id="pwaStorageRepair">清理可重建数据（不动配置/账户）</button>
+                <button id="pwaStorageCheck">重新自检</button>
+                <button id="pwaStorageReset" style="border-color:#ff5252;color:#ff8a8a">清空全部并重建</button>
+              </div>
+              <div id="pwaStorageMsg" style="font-size:10px;margin-top:4px"></div>
+            </div>
+          </div>
           <div class="kchart-settings" id="pwaAppearCard">
             <div class="kchart-ovhead" onclick="document.getElementById('pwaAppearCard').classList.toggle('closed')">🎨 通知与外观<span class="kchart-ovarrow">▾</span></div>
             <div id="pwaAppearBody" class="kchart-settings-body"></div>

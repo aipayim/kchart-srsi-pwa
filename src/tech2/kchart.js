@@ -929,6 +929,64 @@ export function storageTop(n) {
   return arr.slice(0, n || 8);
 }
 function _isQuotaErr(e) { return !!e && (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014); }
+
+// ============================================================
+// v1.6.33：本地存储自检 + 修复
+// 安卓端「每次自动刷新 + 设置全丢」的根因：**localStorage 被写满时读正常、写全失败** →
+//   ① 版本门（applyVersionGate）记不住新版本 → 每次启动都重定向一次（用户感知「自动刷新」）
+//   ② 所有设置写入静默失败 → 用户感知「每次都要重新设置」
+// 自检：可用性 / **可写性（探针）** / 已用 KB / 最大键；修复：清全部可重建派生键（绝不动用户配置/账户）
+// ============================================================
+export function storageSelfCheck() {
+  const out = { available: false, writable: false, headroom: false, usedKB: 0, keyCount: 0, top: [], probeErr: null, err: null };
+  try {
+    if (typeof localStorage === 'undefined' || !localStorage) { out.err = 'localStorage 不可用'; return out; }
+    out.available = true;
+    let used = 0, n = 0;
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i); if (!k) continue;
+      const v = localStorage.getItem(k) || ''; used += k.length + v.length; n++;
+    }
+    out.usedKB = Math.round(used / 1024); out.keyCount = n; out.top = storageTop(8);
+    // **两级探针**：配额快满时 1 字节写入仍会成功（会误判“可写”），故再写 32KB 看真实余量
+    const pk = '__st_probe__';
+    try { localStorage.setItem(pk, '1'); out.writable = localStorage.getItem(pk) === '1'; } catch (e) { out.writable = false; out.probeErr = (e && e.name) || String(e); }
+    try { localStorage.setItem(pk, 'b'.repeat(32 * 1024)); out.headroom = true; } catch (e) { out.headroom = false; if (!out.probeErr) out.probeErr = (e && e.name) || String(e); }
+    try { localStorage.removeItem(pk); } catch (e) {}
+  } catch (e) { out.err = (e && e.name) || String(e); }
+  return out;
+}
+
+// 清理**全部可重建派生/缓存键**（用户配置、账户、SRSI 参数、成交明细一律不动），然后重新探针
+export function repairStorage() {
+  const before = storageSelfCheck();
+  const del = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i); if (!k) continue;
+      if (k.indexOf('srsiOptHist:') === 0 || k.indexOf('smartTrader_kchart_bt') === 0 || _REGEN_KEYS.indexOf(k) >= 0) del.push(k);
+    }
+  } catch (e) {}
+  del.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
+  const after = storageSelfCheck();
+  try { console.log('[STORAGE] 修复完成：清理', del.length, '个派生键，释放约', Math.max(0, before.usedKB - after.usedKB), 'KB；可写 =', after.writable); } catch (e) {}
+  return { before, after, removed: del.length, freedKB: Math.max(0, before.usedKB - after.usedKB) };
+}
+
+// 启动自检：不可写 或 占用偏高（>3.5MB/估算 5MB）→ 自动修复一次并日志留痕
+const STORAGE_HIGH_KB = 3500;
+export function storageBootCheck() {
+  const c = storageSelfCheck();
+  try {
+    console.log('[STORAGE] 可用=' + c.available + ' 可写=' + c.writable + ' 余量=' + c.headroom + ' 已用=' + c.usedKB + 'KB 键数=' + c.keyCount +
+      (c.probeErr ? ' 探针错误=' + c.probeErr : '') + ' 最大键=' + JSON.stringify(c.top.slice(0, 3)));
+  } catch (e) {}
+  if (!c.writable || !c.headroom || c.usedKB > STORAGE_HIGH_KB) {
+    const r = repairStorage();
+    return { check: c, repaired: r, wasBroken: !c.writable || !c.headroom };
+  }
+  return { check: c, repaired: null, wasBroken: false };
+}
 export function _safeSetItem(key, str) {
   try { localStorage.setItem(key, str); return true; }
   catch (e) {
@@ -6262,6 +6320,9 @@ export const kchartApi = {
   blockReasonText,
   blockGuideText,
   storageTop,
+  storageSelfCheck,
+  repairStorage,
+  storageBootCheck,
   saveSignalMarks,
   restoreSignalMarks,
   mainOpportunityMarks,

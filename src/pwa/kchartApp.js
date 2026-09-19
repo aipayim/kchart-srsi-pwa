@@ -2,7 +2,7 @@
 // 不依赖 legacy.js / main.js，仅复用共享的 kchart.js（与主系统同一份 K线分析代码）
 import '../styles.css'; // 共享样式（与主系统同一份）：Vite 会哈希化并注入 kchart.html 的 <head>
 import './pwa.css';     // PWA 重构外壳样式（规则全部限定 body.pwa，主系统零影响；须在 styles.css 之后以覆盖）
-import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset, _safeSetItem } from '../tech2/kchart.js';
+import { kchartApi, loadTsevWeights, refreshLocalTsev, ktStackOffset, _safeSetItem, storageBootCheck } from '../tech2/kchart.js';
 import { refreshKlines, refreshPrice, DEFAULT_TECH } from './data.js';
 import { PaperEngine } from '../exchange/PaperEngine.js';
 import { positionPnlPct } from '../engine/indicators.js';
@@ -208,8 +208,10 @@ async function applyVersionGate() {
       await forceClearCaches();
     }
     const seen = localStorage.getItem(VER_KEY);
-    localStorage.setItem(VER_KEY, APP_VER); // 先记录当前版本，避免重定向后死循环
-    if (seen && seen !== APP_VER && !window.location.search.includes('_swclear')) {
+    // v1.6.33：用 _safeSetItem（满配额时先清派生键自愈）；**只有写入成功才允许重定向**，
+    // 否则（存储写满）版本永远记不住 → 每次启动都重定向一次 = 用户感知的「自动刷新」
+    const wrote = _safeSetItem(VER_KEY, APP_VER);
+    if (wrote && seen && seen !== APP_VER && !window.location.search.includes('_swclear')) {
       // 新版本已部署：先清掉旧 SW/缓存，再带 _swclear 重定向强制拉取最新 HTML+JS
       await forceClearCaches();
       const url = new URL(window.location.href);
@@ -217,6 +219,7 @@ async function applyVersionGate() {
       window.location.replace(url.pathname + url.search);
       return; // 让新页面接管，下面不再执行
     }
+    if (!wrote) { try { console.warn('[STORAGE] 版本号写入失败（存储已满）→ 跳过自动刷新；请在设置页「🧰 本地存储自检/修复」清理'); } catch (e) {} }
   } catch (e) { /* 忽略 */ }
 }
 
@@ -399,6 +402,8 @@ async function tickKlines() {
 async function init() {
   // 先执行版本门控：若部署了新版本，自动清掉旧 SW/缓存，确保下面渲染的是最新资源
   await applyVersionGate().catch(() => {});
+  // v1.6.33：启动本地存储自检（不可写/占用过高 → 自动清可重建数据）。安卓「设置不保存」排查入口
+  try { const _st = storageBootCheck(); if (_st && _st.wasBroken) console.warn('[STORAGE] 启动自检发现存储不可写，已自动修复；若仍异常请在设置页手动清理'); } catch (e) {}
   api.init();                         // 绑定 canvas + 事件
   api.setPwaMode(true);              // 启用 PWA 私有持久化键（srsiByTf/optSource/optPreview/srsiAuto* 按币对独立于共享 smartTrader_kchart）
   let lastSym = null;
