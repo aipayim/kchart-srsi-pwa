@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, clampBoxPos } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3763,6 +3763,85 @@ console.log('\n[kchart: 机会点 srsiOpportunityMarks / 标记行 markHitsInWin
   ok('标记行：undefined 列表 → []', markHitsInWindow(0, 1).length === 0);
   ok('标记行：非有限 t 被忽略', markHitsInWindow(0, 10, { alphaMarks: [{ t: NaN, dir: 1 }, { t: Infinity, dir: 1 }] }).length === 0);
   ok('标记行：dir=0 视为平仓', markHitsInWindow(0, 10, { alphaMarks: [{ t: 5, dir: 0 }] })[0] === '◆α平仓(基石)');
+}
+
+// ============================================================
+//  v1.6.23：标记微光晕/微闪 + 行动卡 DOM 浮层（纯函数）
+// ============================================================
+console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / actionCardView / clampBoxPos]');
+{
+  // ---- pulseAlpha ----
+  ok('pulseAlpha t=0 → 下限', Math.abs(pulseAlpha(0) - 0.24) < 1e-9);
+  ok('pulseAlpha 半周期 → 上限', Math.abs(pulseAlpha(800) - 0.8) < 1e-9);
+  ok('pulseAlpha 全周期回到下限', Math.abs(pulseAlpha(1600) - 0.24) < 1e-9);
+  ok('pulseAlpha 恒在 [min,max]', [0, 123, 799, 1599, 5000].every(t => { const a = pulseAlpha(t); return a >= 0.24 - 1e-9 && a <= 0.8 + 1e-9; }));
+  ok('pulseAlpha 自定义区间', Math.abs(pulseAlpha(0, 1000, 0.1, 0.2) - 0.1) < 1e-9);
+  ok('pulseAlpha 非法周期回落默认', Math.abs(pulseAlpha(0, 0) - 0.24) < 1e-9 && Math.abs(pulseAlpha(0, NaN) - 0.24) < 1e-9);
+  ok('pulseAlpha 非数字 t 不抛', Number.isFinite(pulseAlpha(undefined)) && Number.isFinite(pulseAlpha(NaN)));
+
+  // ---- withAlpha ----
+  ok('withAlpha #rrggbb', withAlpha('#2ecc71', 0.5) === 'rgba(46,204,113,0.5)');
+  ok('withAlpha #rgb 展开', withAlpha('#0af', 1) === 'rgba(0,170,255,1)');
+  ok('withAlpha rgba 替换 alpha', withAlpha('rgba(46,204,113,.9)', 0.25) === 'rgba(46,204,113,0.25)');
+  ok('withAlpha rgb 加 alpha', withAlpha('rgb(1,2,3)', 0.5) === 'rgba(1,2,3,0.5)');
+  ok('withAlpha alpha 钳制', withAlpha('#fff', 5) === 'rgba(255,255,255,1)' && withAlpha('#fff', -1) === 'rgba(255,255,255,0)');
+  ok('withAlpha 非法颜色回落', withAlpha(null, 0.5) === 'rgba(255,255,255,0.5)' && withAlpha('nope', 0.5) === 'rgba(255,255,255,0.5)');
+
+  // ---- buildMarkList ----
+  ok('buildMarkList sigOverlay 关 → 空', buildMarkList({ sigOverlay: false, opportunities: [{ t: 1, side: 'long' }] }).length === 0);
+  const ml = buildMarkList({
+    sigOverlay: true, srsiAutoOn: true, alphaLive: true,
+    opportunities: [{ t: 10, side: 'long' }, { t: 11, side: 'short' }],
+    srsiTrades: [{ t: 20, action: 'open', side: 'long' }, { t: 21, action: 'open', side: 'short' }, { t: 22, action: 'close' }],
+    alphaMarks: [{ t: 30, dir: 0.3 }, { t: 31, dir: -0.3 }, { t: 32, action: 'close' }, { t: 33, dir: 0 }]
+  });
+  ok('buildMarkList 条数', ml.length === 9);
+  ok('buildMarkList 机会点→oppBuy/oppSell', ml[0].kind === 'oppBuy' && ml[1].kind === 'oppSell');
+  ok('buildMarkList SRSI 成交→srsiLong/Short/Close', ml[2].kind === 'srsiLong' && ml[3].kind === 'srsiShort' && ml[4].kind === 'srsiClose');
+  ok('buildMarkList α→alphaLong/Short/Close（dir=0 也算平仓）', ml[5].kind === 'alphaLong' && ml[6].kind === 'alphaShort' && ml[7].kind === 'alphaClose' && ml[8].kind === 'alphaClose');
+  ok('buildMarkList 关卫星则不收成交', buildMarkList({ sigOverlay: true, srsiAutoOn: false, srsiTrades: [{ t: 1, action: 'open', side: 'long' }] }).length === 0);
+  ok('buildMarkList 关基石实盘则不收 α', buildMarkList({ sigOverlay: true, alphaLive: false, alphaMarks: [{ t: 1, dir: 1 }] }).length === 0);
+  ok('buildMarkList 非有限 t 被过滤', buildMarkList({ sigOverlay: true, opportunities: [{ t: NaN }, { t: 5, side: 'long' }] }).length === 1);
+
+  // ---- markFxXY ----
+  const geom = { lo: 90, hi: 110, start: 0, n: 10, xStep: 10, c: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109], t: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
+  const P = markFxXY(geom, { t: 3, kind: 'oppBuy' });
+  ok('markFxXY x = PAD_L+idx*xStep+xStep/2', Math.abs(P.x - (64 + 3 * 10 + 5)) < 1e-9);
+  ok('markFxXY oppBuy y = 基准+12', P.y > P.base && Math.abs(P.y - P.base - 12) < 1e-9);
+  ok('markFxXY oppSell y = 基准-12', Math.abs(markFxXY(geom, { t: 3, kind: 'oppSell' }).y - (P.base - 12)) < 1e-9);
+  ok('markFxXY srsiShort y = 基准-26', Math.abs(markFxXY(geom, { t: 3, kind: 'srsiShort' }).y - (P.base - 26)) < 1e-9);
+  ok('markFxXY α y = 基准-36', Math.abs(markFxXY(geom, { t: 3, kind: 'alphaLong' }).y - (P.base - 36)) < 1e-9);
+  ok('markFxXY 颜色/形状随 kind', P.color === '#2ecc71' && P.shape === 'dot' && markFxXY(geom, { t: 3, kind: 'alphaShort' }).color === '#f59e0b');
+  ok('markFxXY 未知 kind 回落灰点', markFxXY(geom, { t: 3, kind: 'zzz' }).color === '#8899aa');
+  ok('markFxXY t < t[0] → null', markFxXY(geom, { t: -1, kind: 'oppBuy' }) === null);
+  ok('markFxXY 非法 geom/mark → null', markFxXY(null, { t: 1 }) === null && markFxXY(geom, null) === null && markFxXY(geom, { kind: 'oppBuy' }) === null);
+  ok('markFxXY 超出右侧取最后一根', markFxXY(geom, { t: 99, kind: 'oppBuy' }).x === markFxXY(geom, { t: 9, kind: 'oppBuy' }).x);
+
+  // ---- clampBoxPos ----
+  ok('clampBoxPos 正常不越界', deepEq(clampBoxPos(50, 60, 100, 50, 400, 300), { x: 50, y: 60 }));
+  ok('clampBoxPos 右下钳到边距', deepEq(clampBoxPos(999, 999, 100, 50, 400, 300), { x: 296, y: 246 }));
+  ok('clampBoxPos 负值钳到 4', deepEq(clampBoxPos(-50, -50, 100, 50, 400, 300), { x: 4, y: 4 }));
+  ok('clampBoxPos 容器小于卡片→贴 4', deepEq(clampBoxPos(50, 50, 500, 500, 100, 100), { x: 4, y: 4 }));
+  ok('clampBoxPos 非数字回退', deepEq(clampBoxPos(NaN, 1, 2, 3, 4, 5), { x: 4, y: 4 }) && deepEq(clampBoxPos(1, undefined, 2, 3, 4, 5), { x: 4, y: 4 }));
+
+  // ---- actionCardView ----
+  const base = { verdict: 'enter', side: 'long', alphaDir: 'long', alphaW: 0.3, inBand: 'lower', lower: 20, upper: 80, price: 100, stop: 98, target: 104, cross: 'upExit', alphaDataT: Date.UTC(2026, 8, 17) };
+  const v1 = actionCardView('BTCUSDT', base);
+  ok('actionCardView enter 多 → 文案/绿色', v1.big === '可入场 做多' && v1.color === '#2ecc71');
+  ok('actionCardView 标题/基石行', v1.title === 'BTCUSDT · 15m 带规则' && v1.sub.includes('基石 α多 30%') && v1.sub.includes('日线09-17收盘') && v1.sub.includes('K,D均在下带(< 20)'));
+  ok('actionCardView 入场行含止损/目标', v1.entry.includes('入场 100.0') && v1.entry.includes('止损 98.0') && v1.entryStrong === true);
+  ok('actionCardView 无冲突无警告行', v1.warn === '');
+  const v2 = actionCardView('ETHUSDT', { ...base, verdict: 'idle', alphaDir: 'short', alphaW: -0.2, inBand: 'mid', stop: null, target: null });
+  ok('actionCardView idle → 黄色等待', v2.big === '等待 15m 带交叉' && v2.color === '#f59e0b');
+  ok('actionCardView idle 规则行给带值', v2.rule.includes('升破 20') && v2.rule.includes('跌破 80'));
+  ok('actionCardView 无止损→未确认文案 + entryStrong=false', v2.entry.includes('待带交叉后给出') && v2.entryStrong === false);
+  ok('actionCardView 中带→K,D中带无交叉', v2.sub.includes('K,D中带无交叉'));
+  const v3 = actionCardView('SOLUSDT', { ...base, verdict: 'reverse', trendConflict: true, intradayDir: 'long', intradayTf: '1h' });
+  ok('actionCardView reverse → 勿动灰字', v3.big === '勿动·与基石反向' && v3.color === '#8899aa');
+  ok('actionCardView 逆势警告行', v3.warn === '⚠ 逆日内趋势（1h ↑）');
+  ok('actionCardView reverse 规则行', v3.rule.includes('反向信号仅提示'));
+  ok('actionCardView noBase 观望', actionCardView('X', { ...base, verdict: 'noBase' }).big === '观望·基石中性');
+  ok('actionCardView ac=null → null', actionCardView('X', null) === null);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);

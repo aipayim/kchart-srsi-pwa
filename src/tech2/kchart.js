@@ -3463,6 +3463,222 @@ function syncCanvasSize() {
   _ctx.setTransform(bw / W, 0, 0, bh / H, 0, 0);
 }
 
+// ============================================================
+// v1.6.23：主图标记光晕/微闪覆盖层 + 行动卡 DOM 浮层
+// 两者都挂在 .kchart-box（position:relative）内；覆盖层 pointer-events:none，不参与 canvas 坐标命中。
+// ============================================================
+let _mainGeom = null;                 // drawMain 缓存的主图几何（供 markFxXY 对齐）
+let _fx = null;                       // { cv, ctx, raf, last }  标记光晕层
+let _acEl = null;                     // 行动卡 DOM 浮层
+let _acDragging = false;              // 拖动中：禁止每秒重定位（否则会把手拖到一半的位置拉回去）
+
+// 标记清单（实时聚合；与 buildMarkList 的纯逻辑同源）
+export function mainMarkList(sym) {
+  const alphaLive = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
+  return buildMarkList({
+    sigOverlay: !!cfg.sigOverlay,
+    srsiAutoOn: !!cfg.srsiAutoOn,
+    alphaLive,
+    opportunities: mainOpportunityMarks(sym || cfg.symbol),
+    srsiTrades: (typeof window !== 'undefined' ? window.__srsiLiveTrades : null),
+    alphaMarks: (typeof window !== 'undefined' ? window.__alphaLiveMarks : null),
+  });
+}
+
+function _drawMarkShape(ctx, p) {
+  const { x, y, r } = p;
+  ctx.beginPath();
+  if (p.shape === 'triUp') { ctx.moveTo(x, y - r); ctx.lineTo(x - r, y + r); ctx.lineTo(x + r, y + r); ctx.closePath(); ctx.fill(); }
+  else if (p.shape === 'triDown') { ctx.moveTo(x, y + r); ctx.lineTo(x - r, y - r); ctx.lineTo(x + r, y - r); ctx.closePath(); ctx.fill(); }
+  else if (p.shape === 'diamond') { ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y); ctx.closePath(); ctx.fill(); }
+  else { ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+}
+
+function _fxReducedMotion() {
+  try { return !!(typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { return false; }
+}
+
+// 标记光晕层：只画光晕 + 形状微闪（不重画整张图）
+function drawMarkFx(nowMs) {
+  if (!_fx || !_fx.ctx || !_cv) return;
+  const ctx = _fx.ctx;
+  const Hlog = _cv.__logicalH || BASE_H;
+  ctx.clearRect(0, 0, W, Hlog);
+  if (!cfg.sigOverlay) return;
+  const g = _mainGeom;
+  if (!g || g.sym !== cfg.symbol) return;
+  const marks = mainMarkList(cfg.symbol);
+  if (!marks.length) return;
+  const a = _fxReducedMotion() ? 0.45 : pulseAlpha(nowMs);
+  for (const mk of marks) {
+    const p = markFxXY(g, mk);
+    if (!p) continue;
+    // 微光晕：径向渐变（越靠中心越亮）
+    const R = 11;
+    const grd = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, R);
+    grd.addColorStop(0, withAlpha(p.color, 0.55 * a));
+    grd.addColorStop(0.55, withAlpha(p.color, 0.2 * a));
+    grd.addColorStop(1, withAlpha(p.color, 0));
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, Math.PI * 2); ctx.fill();
+    // 形状微闪（叠在主 canvas 同位置之上）
+    ctx.globalAlpha = a;
+    ctx.fillStyle = p.color;
+    _drawMarkShape(ctx, p);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// 与主 canvas 像素级对齐的覆盖层（尺寸/位置/transform 全部跟随 _cv）
+function ensureMarkFx() {
+  if (typeof document === 'undefined' || !_cv) return null;
+  const box = _cv.parentElement;
+  if (!box || typeof box.appendChild !== 'function') return null;
+  if (!_fx || !_fx.cv || !_fx.cv.isConnected) {
+    let cv = document.getElementById('kchartMarkFx');
+    if (!cv) {
+      cv = document.createElement('canvas');
+      cv.id = 'kchartMarkFx';
+      box.appendChild(cv);
+    }
+    cv.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:4';
+    _fx = { cv, ctx: cv.getContext('2d'), raf: null, last: 0 };
+  }
+  const cv = _fx.cv;
+  cv.style.left = (_cv.offsetLeft || 0) + 'px';
+  cv.style.top = (_cv.offsetTop || 0) + 'px';
+  cv.style.width = (_cv.offsetWidth || 0) + 'px';
+  cv.style.height = (_cv.offsetHeight || 0) + 'px';
+  if (cv.width !== _cv.width || cv.height !== _cv.height) {
+    cv.width = _cv.width; cv.height = _cv.height;
+    _fx.ctx = cv.getContext('2d');
+    const Hlog = _cv.__logicalH || BASE_H;
+    _fx.ctx.setTransform(_cv.width / W, 0, 0, _cv.height / Hlog, 0, 0);
+  }
+  return _fx;
+}
+
+function _fxStep(ts) {
+  if (!_fx) return;
+  _fx.raf = null;
+  try {
+    if (typeof document === 'undefined' || !document.hidden) {
+      if (ts - (_fx.last || 0) >= 50) { _fx.last = ts; drawMarkFx(ts); }   // ~20fps 足够“微闪”，且极轻
+    }
+  } catch (e) { /* 光晕非关键路径 */ }
+  if (_fx && typeof requestAnimationFrame === 'function') _fx.raf = requestAnimationFrame(_fxStep);
+}
+
+function startMarkFx() {
+  if (!_fx || _fx.raf != null || typeof requestAnimationFrame !== 'function') return;
+  _fx.raf = requestAnimationFrame(_fxStep);
+}
+
+function stopMarkFx() {
+  if (_fx && _fx.raf != null && typeof cancelAnimationFrame === 'function') { try { cancelAnimationFrame(_fx.raf); } catch (e) {} }
+  if (_fx) { _fx.raf = null; if (_fx.ctx && _cv) _fx.ctx.clearRect(0, 0, W, _cv.__logicalH || BASE_H); }
+}
+
+// 每帧渲染末尾调用：有标记→建层+启动 RAF；无标记→停并清空
+function syncMarkFx() {
+  let has = false;
+  try { has = !!cfg.sigOverlay && mainMarkList(cfg.symbol).length > 0; } catch (e) { has = false; }
+  if (!has) { stopMarkFx(); return; }
+  if (!ensureMarkFx()) return;
+  startMarkFx();
+  try { drawMarkFx(_fxReducedMotion() ? 0 : (globalThis.performance && performance.now ? performance.now() : Date.now())); } catch (e) {}
+}
+
+// ---------- 行动卡 DOM 浮层（可拖动；默认位置=原 canvas 位置）----------
+function _actionCardDefaultPos(box) {
+  const Hlog = (_cv && _cv.__logicalH) || BASE_H;
+  const sx = (_cv && _cv.offsetWidth ? _cv.offsetWidth / W : 1);
+  const sy = (_cv && _cv.offsetHeight ? _cv.offsetHeight / Hlog : 1);
+  return { x: (_cv ? _cv.offsetLeft : 0) + (PAD_L + 6) * sx, y: (_cv ? _cv.offsetTop : 0) + ((PAD_T + MAIN_H) / 2 - 40) * sy };
+}
+
+function _placeActionCard(el, box) {
+  if (!el || !box) return;
+  if (_acDragging) return;
+  const bw = box.clientWidth, bh = box.clientHeight;
+  // 布局未就绪（首帧/隐藏 tab）时容器宽度会远小于卡片 → 此时不定位，等下次渲染（每秒 tick 会重试）
+  if (!bw || !bh || bw < el.offsetWidth + 8 || bh < el.offsetHeight + 8) return;
+  const def = _actionCardDefaultPos(box);
+  const pos = cfg.actionCardPos && typeof cfg.actionCardPos.x === 'number' && typeof cfg.actionCardPos.y === 'number'
+    ? { x: cfg.actionCardPos.x, y: cfg.actionCardPos.y } : def;
+  const p = clampBoxPos(pos.x, pos.y, el.offsetWidth, el.offsetHeight, bw, bh);
+  el.style.left = p.x + 'px';
+  el.style.top = p.y + 'px';
+}
+
+function bindActionCardDrag(el, box) {
+  let drag = null;
+  el.addEventListener('pointerdown', (e) => {
+    drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+    _acDragging = true;
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    el.classList.add('dragging');
+    try { e.preventDefault(); } catch (err) {}
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const p = clampBoxPos(e.clientX - drag.dx, e.clientY - drag.dy, el.offsetWidth, el.offsetHeight, box.clientWidth, box.clientHeight);
+    el.style.left = p.x + 'px';
+    el.style.top = p.y + 'px';
+  });
+  const end = (e) => {
+    if (!drag) return;
+    drag = null;
+    _acDragging = false;
+    el.classList.remove('dragging');
+    try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+    cfg.actionCardPos = { x: el.offsetLeft, y: el.offsetTop };
+    try { persist(); } catch (err) {}
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  // 双击复位到默认位置（改回 canvas 原位）
+  el.addEventListener('dblclick', () => { cfg.actionCardPos = null; try { persist(); } catch (err) {} _placeActionCard(el, box); });
+}
+
+// 行动卡 DOM 渲染（签名守卫；内容与 canvas 回退共用 actionCardView）
+function renderActionCardDom() {
+  if (typeof document === 'undefined' || !_cv) return;
+  const box = _cv.parentElement;
+  if (!box || typeof box.appendChild !== 'function') return;
+  const ac = (typeof window !== 'undefined') ? window.__actionCard : null;
+  if (!cfg.sigOverlay || !ac) { if (_acEl) _acEl.style.display = 'none'; return; }
+  if (!_acEl || !_acEl.isConnected) {
+    let el = document.getElementById('kchartActionCard');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kchartActionCard';
+      el.className = 'kchart-acard';
+      el.title = '拖动可移动 · 双击复位（数据与主图行动卡一致）';
+      box.appendChild(el);
+      bindActionCardDrag(el, box);
+    } else if (!el.classList || !el.classList.contains('kchart-acard')) {
+      el.className = 'kchart-acard';
+    }
+    _acEl = el;
+  }
+  const el = _acEl;
+  const v = actionCardView(cfg.symbol, ac);
+  const sig = JSON.stringify(v);
+  if (el.__sig !== sig) {
+    el.__sig = sig;
+    el.style.borderColor = v.color;
+    el.innerHTML = '<div class="kac-title">' + v.title + '</div>'
+      + '<div class="kac-big" style="color:' + v.color + '">' + v.big + '</div>'
+      + '<div class="kac-sub">' + v.sub + '</div>'
+      + (v.warn ? '<div class="kac-warn">' + v.warn + '</div>' : '')
+      + '<div class="kac-rule">' + v.rule + '</div>'
+      + '<div class="kac-entry" style="opacity:' + (v.entryStrong ? 0.95 : 0.8) + '">' + v.entry + '</div>';
+  }
+  el.style.display = '';
+  _placeActionCard(el, box);
+}
+
 export function renderKChart() {
   syncCanvasSize();
   renderQuickTrade();
@@ -3527,11 +3743,14 @@ export function renderKChart() {
   updateRuleMonitorTick(); // 规则监测：影子计算 + 信号簿边沿检测（内2s节流）+ 面板渲染（签名守卫）
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 悬浮卡（动力卡 + 规则监测）
   renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（受签名守卫保护，无变化不重建）
+  try { syncMarkFx(); } catch (e) {} // v1.6.23：标记微光晕/微闪覆盖层（有标记才启动 RAF；无标记自动停）
 }
 
 // 轻量面板实时刷新：仅重算「方向基准死区 + 速览 + 纪律分析」DOM，不重绘画布。
 // 供主系统 / PWA 的周期 tick 调用（renderKChart 每帧都重绘画布较贵，此处只刷面板）。
 export function refreshPanels() {
+  // v1.6.23：行动卡浮层每秒重定位（首帧布局未就绪时会跳过，靠这里收敛；也随窗口尺寸变化自动修正）
+  try { if (_acEl && _acEl.isConnected && _cv && _cv.parentElement) _placeActionCard(_acEl, _cv.parentElement); } catch (e) {}
   const box = document.getElementById('kchartDisc');
   const ov = document.getElementById('kchartOverview');
   if (!box && !ov) return;
@@ -3718,6 +3937,8 @@ function drawMain(ctx, sym, tf, H) {
   lo -= pad; hi += pad;
   const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
   const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
+  // v1.6.23：缓存主图几何 → 供标记光晕覆盖层（markFxXY）像素级对齐
+  _mainGeom = { sym, tf, lo, hi, start, n, xStep, c, t };
 
   // 网格
   drawGrid(ctx, PAD_L, PAD_T, plotW, MAIN_H, 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
@@ -3912,34 +4133,14 @@ function drawMain(ctx, sym, tf, H) {
       window.__manualSigErr = null;
     } catch (e) { window.__manualSigErr = String(e && e.message || e).slice(0, 80); if (!window.__manualSigWarned) { window.__manualSigWarned = 1; console.log('[SIG-CARD] 计算失败:', window.__manualSigErr); } }
   }
-  // GOAL28：主图行动卡（大字「现在该做什么」）——基石方向(α权重%) + 用户规则状态(15m带边沿交叉) + 方向券。
-  // GOAL16-B 实锤：反向信号免成本皆负 → 反向仅灰提示勿动。纯显示层，与交易决策无耦合。
-  if (cfg.sigOverlay && window.__actionCard) {
+  // v1.6.23：行动卡改为 DOM 浮层（可拖动、双击复位）——先在 canvas 回退绘制前建层，建层成功则不重复画 canvas 版。
+  // 理由（v1.5.58 教训）：悬浮控件必须在 DOM 顶层，不得参与 canvas 坐标命中（真机 tap 不可靠）。
+  try { renderActionCardDom(); } catch (e) {}
+  if (cfg.sigOverlay && window.__actionCard && !(_acEl && _acEl.isConnected)) {
     const ac = window.__actionCard;
+    const _v = actionCardView((typeof sym !== 'undefined' ? sym : cfg.sym), ac);
+    const bigTxt = _v.big, col = _v.color, l0 = _v.title, l3 = _v.sub, warnLine = _v.warn, ruleTxt = _v.rule, entryTxt = _v.entry;
     ctx.save();
-    const bigTxt = ac.verdict === 'enter' ? ('可入场 ' + (ac.side === 'long' ? '做多' : '做空'))
-      : ac.verdict === 'reverse' ? '勿动·与基石反向'
-      : ac.verdict === 'noBase' ? '观望·基石中性'
-      : '等待 15m 带交叉';
-    const col = ac.verdict === 'enter' ? '#2ecc71' : ac.verdict === 'idle' ? '#f59e0b' : '#8899aa';
-    const dirTxt = ac.alphaDir === 'long' ? '多' : ac.alphaDir === 'short' ? '空' : '中性';
-    const bandTxt = ac.inBand === 'lower' ? 'K,D均在下带(< ' + ac.lower.toFixed(0) + ')'
-      : ac.inBand === 'upper' ? 'K,D均在上带(> ' + ac.upper.toFixed(0) + ')'
-      : ac.inBand === 'mid' ? 'K,D中带无交叉' : '读数不足';
-    const ruleTxt = ac.verdict === 'idle' ? '升破 ' + ac.lower.toFixed(0) + ' →多 / 跌破 ' + ac.upper.toFixed(0) + ' →空 · α同向才入场'
-      : ac.verdict === 'reverse' ? '反向信号仅提示·勿动（免成本皆负）'
-      : ac.verdict === 'noBase' ? '带交叉已现·基石无方向·观望'
-      : (ac.cross === 'upExit' ? '升破下带' : '跌破上带') + '·与基石同向·顺势入场';
-    const fmtP = (v) => (v != null && Number.isFinite(v)) ? (v >= 100 ? v.toFixed(1) : v.toFixed(3)) : '--';
-    const entryTxt = ac.stop != null && ac.target != null
-      ? '入场 ' + fmtP(ac.price) + ' / 止损 ' + fmtP(ac.stop) + ' / 目标 ' + fmtP(ac.target) + ' · 仓 卫星 10-15%×5-7x'
-      : '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x';
-    const l0 = (typeof sym !== 'undefined' ? sym : cfg.sym) + ' · 15m 带规则';
-    // v1.6.18：基石方向标注「已收盘日线数据日」，避免把日线方向误读为实时方向
-    const _d1Txt = ac.alphaDataT ? ('日线' + new Date(ac.alphaDataT).toISOString().slice(5, 10) + '收盘') : '';
-    const l3 = '基石 α' + dirTxt + ' ' + Math.abs(ac.alphaW * 100).toFixed(0) + '%' + (_d1Txt ? '(' + _d1Txt + ')' : '') + ' · ' + bandTxt;
-    // v1.6.18：基石方向与日内趋势（1h/15m EMA）相反 → 逆势警告
-    const warnLine = ac.trendConflict ? ('⚠ 逆日内趋势（' + (ac.intradayTf || '1h') + ' ' + (ac.intradayDir === 'long' ? '↑' : '↓') + '）') : '';
     ctx.textAlign = 'left';
     ctx.font = '9px sans-serif';
     let w28 = Math.max(Math.max(ctx.measureText(l0).width, ctx.measureText(l3).width), Math.max(ctx.measureText(ruleTxt).width, ctx.measureText(entryTxt).width));
@@ -3963,7 +4164,7 @@ function drawMain(ctx, sym, tf, H) {
     if (warnLine) { ctx.fillStyle = '#f59e0b'; ctx.fillText(warnLine, PAD_L + 13, _yy28); _yy28 += 13; }
     ctx.fillStyle = 'rgba(200,212,224,.85)';
     ctx.fillText(ruleTxt, PAD_L + 13, _yy28); _yy28 += 13;
-    ctx.fillStyle = ac.stop != null ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
+    ctx.fillStyle = _v.entryStrong ? 'rgba(230,238,245,.95)' : 'rgba(160,175,190,.8)';
     ctx.fillText(entryTxt, PAD_L + 13, _yy28);
     ctx.restore();
   }
@@ -5507,6 +5708,122 @@ export function mainOpportunityMarks(sym) {
   return _oppCache.list;
 }
 
+// ============================================================
+// v1.6.23：主图标记「微光晕 + 呼吸式微闪」+ 行动卡 DOM 可拖动
+// ============================================================
+// 呼吸式微闪透明度（纯函数，可单测）：平滑正弦 0..1 → 映射到 [minA,maxA]。
+// periodMs 默认 1600ms（“微闪”而非闪烁），非法输入回落默认值。
+export function pulseAlpha(tMs, periodMs = 1600, minA = 0.24, maxA = 0.8) {
+  const p = (typeof periodMs === 'number' && isFinite(periodMs) && periodMs > 0) ? periodMs : 1600;
+  const lo = (typeof minA === 'number' && isFinite(minA)) ? minA : 0.24;
+  const hi = (typeof maxA === 'number' && isFinite(maxA)) ? maxA : 0.8;
+  const tt = (typeof tMs === 'number' && isFinite(tMs)) ? tMs : 0;
+  const ph = ((tt % p) + p) % p / p;
+  const s = 0.5 - 0.5 * Math.cos(ph * Math.PI * 2);
+  return lo + (hi - lo) * s;
+}
+
+// 颜色 → rgba(...,a)（纯函数，可单测）：支持 #rgb / #rrggbb / rgb()/rgba() / 其它（原样加 globalAlpha 不可行时回落 rgba(255,255,255,a)）
+export function withAlpha(color, a) {
+  const al = (typeof a === 'number' && isFinite(a)) ? Math.max(0, Math.min(1, a)) : 1;
+  if (typeof color !== 'string') return 'rgba(255,255,255,' + al + ')';
+  const s = color.trim();
+  let m = /^#([0-9a-f]{3})$/i.exec(s);
+  if (m) { const h = m[1]; return 'rgba(' + parseInt(h[0] + h[0], 16) + ',' + parseInt(h[1] + h[1], 16) + ',' + parseInt(h[2] + h[2], 16) + ',' + al + ')'; }
+  m = /^#([0-9a-f]{6})$/i.exec(s);
+  if (m) { const h = m[1]; return 'rgba(' + parseInt(h.slice(0, 2), 16) + ',' + parseInt(h.slice(2, 4), 16) + ',' + parseInt(h.slice(4, 6), 16) + ',' + al + ')'; }
+  m = /^rgba?\(([^)]+)\)$/i.exec(s);
+  if (m) { const p = m[1].split(',').map(x => x.trim()); if (p.length >= 3) return 'rgba(' + p[0] + ',' + p[1] + ',' + p[2] + ',' + al + ')'; }
+  return 'rgba(255,255,255,' + al + ')';
+}
+
+// 主图标记样式表（kind → 相对基准价的 y 偏移 / 颜色 / 形状 / 半径）
+// 偏移与 drawMain 的绘制完全一致（三角 y±22~31、α 菱形 y-36、机会点 y±12）
+const MARK_FX = {
+  oppBuy:     { off: 12,  color: '#2ecc71', shape: 'dot',     r: 2.6 },
+  oppSell:    { off: -12, color: '#ff6b6b', shape: 'dot',     r: 2.6 },
+  srsiLong:   { off: 26,  color: '#2ecc71', shape: 'triUp',   r: 5 },
+  srsiShort:  { off: -26, color: '#ff6b6b', shape: 'triDown', r: 5 },
+  srsiClose:  { off: 0,   color: '#8899aa', shape: 'dot',     r: 3 },
+  alphaLong:  { off: -36, color: '#22d3ee', shape: 'diamond', r: 6 },
+  alphaShort: { off: -36, color: '#f59e0b', shape: 'diamond', r: 6 },
+  alphaClose: { off: -36, color: '#8899aa', shape: 'diamond', r: 6 },
+};
+
+// 标记清单（纯函数，可单测）：与 drawMain 的绘制条件一致
+// opts: { sigOverlay, srsiAutoOn, alphaLive, opportunities, srsiTrades, alphaMarks }
+export function buildMarkList({ sigOverlay, srsiAutoOn, alphaLive, opportunities, srsiTrades, alphaMarks } = {}) {
+  const out = [];
+  if (!sigOverlay) return out;
+  for (const op of (opportunities || [])) if (op && Number.isFinite(op.t)) out.push({ t: op.t, kind: op.side === 'long' ? 'oppBuy' : 'oppSell' });
+  if (srsiAutoOn) for (const tr of (srsiTrades || [])) {
+    if (!tr || !Number.isFinite(tr.t)) continue;
+    out.push({ t: tr.t, kind: tr.action === 'open' ? (tr.side === 'long' ? 'srsiLong' : 'srsiShort') : 'srsiClose' });
+  }
+  if (alphaLive) for (const mk of (alphaMarks || [])) {
+    if (!mk || !Number.isFinite(mk.t)) continue;
+    out.push({ t: mk.t, kind: (mk.action === 'close' || mk.dir === 0) ? 'alphaClose' : mk.dir > 0 ? 'alphaLong' : 'alphaShort' });
+  }
+  return out;
+}
+
+// 标记 → 主图坐标（纯函数，可单测）：geom 为 drawMain 缓存的 { lo,hi,start,n,xStep,c,t }
+export function markFxXY(geom, mark) {
+  if (!geom || !mark || !Number.isFinite(mark.t)) return null;
+  const { lo, hi, start, n, xStep, c, t } = geom;
+  if (!Array.isArray(c) || !Array.isArray(t) || !n || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+  if (!t.length || mark.t < t[0]) return null;
+  let idx = -1;
+  for (let i = t.length - 1; i >= start; i--) { if (t[i] <= mark.t) { idx = i; break; } }
+  if (idx < start) idx = start;
+  const ci = Math.min(idx, c.length - 1);
+  const cv = c[ci];
+  if (cv == null || !Number.isFinite(cv)) return null;
+  const x = PAD_L + (Math.min(idx, start + n - 1) - start) * xStep + xStep / 2;
+  const base = PAD_T + (hi - cv) / (hi - lo) * MAIN_H;
+  const st = MARK_FX[mark.kind] || MARK_FX.srsiClose;
+  return { x, base, y: base + st.off, kind: mark.kind, color: st.color, shape: st.shape, r: st.r };
+}
+
+// 行动卡视图模型（纯函数，可单测）：canvas 回退与 DOM 浮层共用同一套文案/颜色（避免两处漂移）
+export function actionCardView(sym, ac) {
+  if (!ac) return null;
+  const big = ac.verdict === 'enter' ? ('可入场 ' + (ac.side === 'long' ? '做多' : '做空'))
+    : ac.verdict === 'reverse' ? '勿动·与基石反向'
+    : ac.verdict === 'noBase' ? '观望·基石中性'
+    : '等待 15m 带交叉';
+  const color = ac.verdict === 'enter' ? '#2ecc71' : ac.verdict === 'idle' ? '#f59e0b' : '#8899aa';
+  const dirTxt = ac.alphaDir === 'long' ? '多' : ac.alphaDir === 'short' ? '空' : '中性';
+  const bandTxt = ac.inBand === 'lower' ? 'K,D均在下带(< ' + ac.lower.toFixed(0) + ')'
+    : ac.inBand === 'upper' ? 'K,D均在上带(> ' + ac.upper.toFixed(0) + ')'
+    : ac.inBand === 'mid' ? 'K,D中带无交叉' : '读数不足';
+  const rule = ac.verdict === 'idle' ? '升破 ' + ac.lower.toFixed(0) + ' →多 / 跌破 ' + ac.upper.toFixed(0) + ' →空 · α同向才入场'
+    : ac.verdict === 'reverse' ? '反向信号仅提示·勿动（免成本皆负）'
+    : ac.verdict === 'noBase' ? '带交叉已现·基石无方向·观望'
+    : (ac.cross === 'upExit' ? '升破下带' : '跌破上带') + '·与基石同向·顺势入场';
+  const fmtP = (v) => (v != null && Number.isFinite(v)) ? (v >= 100 ? v.toFixed(1) : v.toFixed(3)) : '--';
+  const entry = ac.stop != null && ac.target != null
+    ? '入场 ' + fmtP(ac.price) + ' / 止损 ' + fmtP(ac.stop) + ' / 目标 ' + fmtP(ac.target) + ' · 仓 卫星 10-15%×5-7x'
+    : '入场/止损/目标：待带交叉后给出 · 仓 卫星 10-15%×5-7x';
+  const d1 = ac.alphaDataT ? ('日线' + new Date(ac.alphaDataT).toISOString().slice(5, 10) + '收盘') : '';
+  return {
+    color, big,
+    title: (sym || cfg.sym) + ' · 15m 带规则',
+    sub: '基石 α' + dirTxt + ' ' + Math.abs((ac.alphaW || 0) * 100).toFixed(0) + '%' + (d1 ? '(' + d1 + ')' : '') + ' · ' + bandTxt,
+    warn: ac.trendConflict ? ('⚠ 逆日内趋势（' + (ac.intradayTf || '1h') + ' ' + (ac.intradayDir === 'long' ? '↑' : '↓') + '）') : '',
+    rule, entry,
+    entryStrong: ac.stop != null && ac.target != null,
+  };
+}
+
+// 浮层位置钳制（纯函数，可单测）：留 4px 边距，容器小于卡片时贴左上
+// （与 ruleMonitor 的 hudClampPos 同语义；不直接复用以免 kchart↔ruleMonitor 静态循环依赖）
+export function clampBoxPos(x, y, w, h, bw, bh) {
+  if (![x, y, w, h, bw, bh].every(v => typeof v === 'number' && isFinite(v))) return { x: 4, y: 4 };
+  const cx = bw - w - 4, cy = bh - h - 4;
+  return { x: Math.max(4, Math.min(cx < 4 ? 4 : cx, x)), y: Math.max(4, Math.min(cy < 4 ? 4 : cy, y)) };
+}
+
 // 某个子图在 frac 处的读数 (纯数据)
 export function subHoverAt(frac, sym, tf, key, bars, opts) {
   const s = subTf(sym, tf);
@@ -5631,6 +5948,13 @@ export const kchartApi = {
   mainOpportunityMarks,
   markHitsInWindow,
   srsiOpportunityMarks,
+  mainMarkList,
+  buildMarkList,
+  markFxXY,
+  pulseAlpha,
+  withAlpha,
+  actionCardView,
+  clampBoxPos,
   getTradeEngine: () => _tradeEngine,
   toggleOvQuickTf,
   optimizeSrsiForTf,

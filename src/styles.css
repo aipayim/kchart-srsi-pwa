@@ -546,6 +546,22 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-hint{font-size:8px;color:var(--text2);margin-bottom:6px}
 .kchart-fresh{font-size:9px;color:var(--text2);margin-left:auto}
 .kchart-box{position:relative;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:6px}
+/* v1.6.23：主图行动卡 DOM 浮层（可拖动；双击复位。canvas 版仅作回退） */
+.kchart-acard{position:absolute;z-index:6;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none;
+  background:rgba(16,22,30,.82);border:1px solid rgba(136,153,170,.65);border-radius:6px;padding:6px 8px;
+  font:9px/1.4 sans-serif;color:rgba(200,212,224,.9);max-width:min(320px,74%);backdrop-filter:blur(2px)}
+.kchart-acard.dragging{cursor:grabbing;opacity:.9}
+.kchart-acard .kac-title{color:rgba(160,175,190,.9)}
+.kchart-acard .kac-big{font-weight:700;font-size:15px;line-height:1.25;margin:2px 0}
+.kchart-acard .kac-sub{color:rgba(230,238,245,.9)}
+.kchart-acard .kac-warn{color:#f59e0b;margin-top:1px}
+.kchart-acard .kac-rule{color:rgba(200,212,224,.85);margin-top:1px}
+.kchart-acard .kac-entry{margin-top:1px}
+/* 窄屏紧凑化：减少对 K 线的遮挡（仍可拖动/双击复位） */
+@media (max-width:900px){
+  .kchart-acard{font-size:8.5px;padding:5px 7px;max-width:min(260px,68%)}
+  .kchart-acard .kac-big{font-size:13px}
+}
 #kchartCanvas{display:block;border-radius:4px;cursor:crosshair;width:100%;height:auto;touch-action:none}
 .kchart-subtog{display:flex;align-items:center;gap:4px}
 .kchart-tog{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 6px;border:1px solid var(--border);border-radius:4px}
