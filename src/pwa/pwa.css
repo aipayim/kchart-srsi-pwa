@@ -158,6 +158,20 @@ body.pwa .kchart-maintools .chip{border-radius:999px}
 #pwaPosGauge{height:150px;width:100%}
 #pwaWHist{height:70px;width:100%;margin-top:6px}
 .pwa-factors{display:flex;flex-direction:column;gap:8px}
+/* ===== v1.6.28：KPI 栏 / 主图工具栏 可收缩（手机默认收起，桌面默认展开） ===== */
+.pwa-kpiwrap{position:relative}
+.pwa-togbtn{position:absolute;top:2px;right:2px;z-index:4;min-width:20px;height:16px;line-height:14px;
+  padding:0 4px;border:1px solid var(--border);background:var(--card2);color:var(--text2);
+  border-radius:5px;font-size:10px;cursor:pointer;font-family:inherit}
+.pwa-togbtn:hover{color:var(--accent);border-color:var(--accent)}
+/* 收起态：一行极简摘要 */
+.pwa-kpis.collapsed{display:block;padding:4px 30px 4px 10px}
+.pwa-kpi-sum{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:10px;color:var(--text2);line-height:1.4}
+.pwa-kpi-sum b{color:var(--text);font-weight:700}
+/* 主图工具栏：收起只留信号摘要条 */
+#pwaToolbar{padding-right:26px}
+#pwaToolbar.collapsed .pwa-tfbar,
+#pwaToolbar.collapsed #pwaToolMorePanel{display:none !important}
 .pwa-fac{display:grid;grid-template-columns:52px 1fr 62px;gap:8px;align-items:center;font-size:10.5px}
 .pwa-fac .nm{color:var(--text2);font-family:var(--mono);text-transform:uppercase}
 .pwa-fac .vv{text-align:right;font-family:var(--mono);font-weight:700}

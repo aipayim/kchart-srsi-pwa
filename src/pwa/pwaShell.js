@@ -147,6 +147,18 @@ function renderKpis(pillar, rd, alphaSig) {
   const wPct = Math.round(w * 100);
   const volPct = Math.round((rd.volNorm || 0) * 100);
   const confPct = rd.confirmNeed > 0 ? rd.confirmN / rd.confirmNeed : 0;
+  // v1.6.28：收起态 → 一行极简摘要（趋势 · 基石仓位 · 卫星确认 · 波动分位 · 距上次调仓）
+  if (kpiCollapsed()) {
+    const sum = '<div class="pwa-kpi-sum">' +
+      '<span>趋势 <b style="color:#22d3ee">' + (rd.trendLabel || '—') + '</b></span>' +
+      '<span>基石 <b style="color:' + (w >= 0 ? '#00e676' : '#ff5252') + '">' + (wPct >= 0 ? '+' : '') + wPct + '%</b></span>' +
+      '<span>卫星 <b>' + (rd.band === 'upper' ? '上带' : rd.band === 'lower' ? '下带' : '中性') + ' ' + rd.confirmN + '/' + rd.confirmNeed + '</b></span>' +
+      '<span>波动 <b style="color:#ffd740">' + (rd.volBand || '中') + ' ' + volPct + '%</b></span>' +
+      '<span>调仓 <b>' + (pillar.ageTxt || '--') + '</b></span>' +
+      '</div>';
+    if (box.__sig !== sum) { box.__sig = sum; box.innerHTML = sum; }
+    return;
+  }
   const kpis = [
     { k: '基石目标仓位', v: (wPct >= 0 ? '+' : '') + wPct, u: '%', c: w >= 0 ? '#00e676' : '#ff5252', ring: Math.abs(w) },
     { k: '趋势方向 · 强度', v: rd.trendLabel, u: '', c: '#22d3ee', ring: rd.trendNorm || 0 },
@@ -558,9 +570,40 @@ function syncZoomInfo() {
 }
 
 // ---------- 手机：KPI + 币对条 滚动自动隐藏（仅窄屏 CSS 生效） ----------
+// v1.6.28：若用户手动收起了 KPI（.pwa-kpis.collapsed），不再叠加滚动自动隐藏（避免“摘要行也被藏掉”）
+const KPI_COL_KEY = 'pwa_kpi_collapsed';
+const TOOL_COL_KEY = 'pwa_tool_collapsed';
+function _narrow() { try { return !!(window.matchMedia && window.matchMedia('(max-width:900px)').matches); } catch (e) { return false; } }
+function _readCol(key) { try { const v = localStorage.getItem(key); return v == null ? null : v === '1'; } catch (e) { return null; } }
+function _writeCol(key, on) { try { localStorage.setItem(key, on ? '1' : '0'); } catch (e) {} }
+// 默认：手机收起 / 桌面展开
+export function kpiCollapsed() { const v = _readCol(KPI_COL_KEY); return v == null ? _narrow() : v; }
+export function toolCollapsed() { const v = _readCol(TOOL_COL_KEY); return v == null ? _narrow() : v; }
+export function setKpiCollapsed(on) { _writeCol(KPI_COL_KEY, !!on); applyCollapseUI(); }
+export function setToolCollapsed(on) { _writeCol(TOOL_COL_KEY, !!on); applyCollapseUI(); }
+// 把两个收起状态同步到 DOM（类 + 按钮字形）
+export function applyCollapseUI() {
+  if (typeof document === 'undefined') return;
+  const kc = kpiCollapsed(), tc = toolCollapsed();
+  const kb = $('pwaKpis'), kt = $('pwaKpiToggle'), tt = $('pwaToolToggle'), tb = $('pwaToolbar');
+  if (kb) kb.classList.toggle('collapsed', kc);
+  if (kt) { kt.textContent = kc ? '⌄' : '⌃'; kt.title = kc ? '展开指标栏' : '收起指标栏'; }
+  if (tb) tb.classList.toggle('collapsed', tc);
+  if (tt) { tt.textContent = tc ? '⌄' : '⌃'; tt.title = tc ? '展开主图工具面板' : '收起主图工具面板（收起后只留信号摘要条）'; }
+  if (kc && !tc) setTopCollapsed(false);   // 手动收起 KPI 时不同时叠滚动隐藏
+  if (kb) kb.__sig = null;                 // 强制下次 renderKpis 重建（展开/收起切换形态）
+}
+function bindCollapseToggles() {
+  const kt = $('pwaKpiToggle');
+  if (kt && !kt.__bound) { kt.__bound = true; kt.addEventListener('click', () => { setKpiCollapsed(!kpiCollapsed()); try { refreshShell(); } catch (e) {} }); }
+  const tt = $('pwaToolToggle');
+  if (tt && !tt.__bound) { tt.__bound = true; tt.addEventListener('click', () => { setToolCollapsed(!toolCollapsed()); try { refreshShell(); } catch (e) {} }); }
+}
+
 function setTopCollapsed(on) {
   const app = $('pwaApp');
   if (!app) return;
+  if (on && kpiCollapsed()) return;        // 手动收起时不叠滚动自动隐藏
   app.classList.toggle('pwa-top-collapsed', !!on);
 }
 function bindTopAutoHide() {
@@ -975,6 +1018,8 @@ export function initPwaShell() {
   bindTopAutoHide();
   bindToolbar();
   bindTfCycle();
+  bindCollapseToggles();
+  applyCollapseUI();
   initSettings();
   bindCockpitAcc();
   bindEngine();

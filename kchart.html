@@ -77,8 +77,11 @@
       <button class="pwa-icobtn" id="pwaClearBtn" onclick="pwaClearAll()" title="清空本地设置并重建">🗑</button>
     </header>
 
-    <!-- ===== KPI 条 ===== -->
-    <div class="pwa-kpis" id="pwaKpis"></div>
+    <!-- ===== KPI 条（可收缩：收起=一行极简摘要） ===== -->
+    <div class="pwa-kpiwrap">
+      <div class="pwa-kpis" id="pwaKpis"></div>
+      <button class="pwa-togbtn" id="pwaKpiToggle" type="button" title="收起/展开指标栏">⌃</button>
+    </div>
 
     <!-- ===== 交易对条 ===== -->
     <div class="pwa-symbar" id="pwaSymbar">
@@ -99,6 +102,7 @@
           <div class="pwa-grid-k">
             <div class="pwa-col">
               <div class="pwa-card pwa-toolbar pwa-sticky" id="pwaToolbar">
+                <button class="pwa-togbtn pwa-tool-tog" id="pwaToolToggle" type="button" title="收起/展开主图工具面板（收起后只留信号摘要条）">⌃</button>
                 <div class="pwa-tfbar">
                   <span class="kchart-tfs" id="kchartTFRow"></span>
                 </div>
