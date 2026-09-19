@@ -1,6 +1,6 @@
 {
   "name": "smart-trader",
-  "version": "1.6.29",
+  "version": "1.6.30",
   "description": "智能交易系统 v1.0 - 纸面交易引擎（双所行情 + 事件溯源持久化 + 可验证一致性）",
   "type": "module",
   "scripts": {

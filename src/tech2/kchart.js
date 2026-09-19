@@ -11,6 +11,7 @@ export { fetchKlinesRange, fetchFundingRate };
 import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/timeframe.js';
 import { THRESH } from '../engine/thresholds.js';
 import { pushSignalEvent } from './signalAlerts.js';
+import { buildMaRelation, MA_REL_DEFAULTS } from '../engine/maRelation.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
@@ -649,6 +650,20 @@ export function defaultKConfig() {
     overviewOpen: true,
     discOpen: true,
     discEvidenceOpen: false,   // 纪律面板「证据」折叠区：首次默认收起，点亮后记住
+    // v1.6.30：价格-均线关系盯盘辅助层（默认关；纯显示层，不接任何自动交易）
+    maRelOn: false,            // 总开关（主图工具面板药丸）
+    maRelType: 'sma',          // 'sma' | 'ema'
+    maRelShowSlow: false,      // 是否画本周期 MA120
+    maRelShowDaily: true,      // 日线 MA20/50/200
+    maRelShowWeekly: true,     // 周线 MA20/200
+    maRelVwap: true,           // 本周期累积 VWAP
+    maRelSqueezePct: 1.2,      // 均线密集阈值 %
+    maRelDevAtr: 1.5,          // 乖离阈值（×ATR）
+    maRelSwing: 15,            // 结构回看根数
+    maRelCool: 8,              // 同向信号冷却根数
+    maRelAllowShort: true,     // 是否允许做空信号
+    maRelL3: true,             // L3：4H MA20 突破
+    maRelShowInfo: true,       // 右上角状态/距离信息表
     srsi,
     srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
     srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
@@ -1294,7 +1309,16 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span id="maRelChip" title="价格-均线关系盯盘辅助层（默认关，纯显示不接自动交易）：本周期 MA20/60(+MA120) · 日线 MA20/50/200 · 周线 MA20/200 · VWAP；右上角 BULL/BEAR/RANGE 状态 + 均线密集/乖离提示；回踩站上(L1)/密集突破(L2)/4H MA20 突破(L3) 信号 + 结构防守位 + 1R/2R 参考线 + 失效叉" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.maRelOn ? '#f59e0b' : 'var(--border)'};background:${cfg.maRelOn ? 'rgba(245,158,11,.15)' : 'var(--card2)'};color:${cfg.maRelOn ? '#f59e0b' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📐 均线关系${cfg.maRelOn ? ' ✓' : ''}</span>${cfg.maRelOn ? `<span id="maRelOpts" class="mt-marel">` +
+    `<button data-mr="type" title="均线类型（SMA/EMA）">${cfg.maRelType.toUpperCase()}</button>` +
+    `<button data-mr="slow" class="${cfg.maRelShowSlow ? 'on' : ''}" title="本周期 MA120">MA120</button>` +
+    `<button data-mr="daily" class="${cfg.maRelShowDaily ? 'on' : ''}" title="日线 MA20/50/200">日线</button>` +
+    `<button data-mr="weekly" class="${cfg.maRelShowWeekly ? 'on' : ''}" title="周线 MA20/200">周线</button>` +
+    `<button data-mr="vwap" class="${cfg.maRelVwap ? 'on' : ''}" title="本周期累积 VWAP">VWAP</button>` +
+    `<button data-mr="short" class="${cfg.maRelAllowShort ? 'on' : ''}" title="是否允许做空信号">做空</button>` +
+    `<button data-mr="l3" class="${cfg.maRelL3 ? 'on' : ''}" title="L3：收盘上/下穿 4H MA20">L3</button>` +
+    `<button data-mr="info" class="${cfg.maRelShowInfo ? 'on' : ''}" title="右上角状态/距离信息表">信息表</button>` +
+    `</span>` : ''}<span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
@@ -1304,6 +1328,29 @@ function renderMainTools() {
   if (sc) sc.addEventListener('click', () => setSigOverlay(!cfg.sigOverlay));
   const rc = el.querySelector('#rmChip');
   if (rc) rc.addEventListener('click', () => kToggleRuleMonitor());
+  // v1.6.30：价格-均线关系盯盘辅助层开关 + 参数行
+  const mc = el.querySelector('#maRelChip');
+  if (mc) mc.addEventListener('click', () => setMaRel(!cfg.maRelOn));
+  const mo = el.querySelector('#maRelOpts');
+  if (mo) {
+    mo.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('button[data-mr]') : null;
+      if (!b) return;
+      const k = b.getAttribute('data-mr');
+      if (k === 'type') cfg.maRelType = cfg.maRelType === 'sma' ? 'ema' : 'sma';
+      else if (k === 'slow') cfg.maRelShowSlow = !cfg.maRelShowSlow;
+      else if (k === 'daily') cfg.maRelShowDaily = !cfg.maRelShowDaily;
+      else if (k === 'weekly') cfg.maRelShowWeekly = !cfg.maRelShowWeekly;
+      else if (k === 'vwap') cfg.maRelVwap = !cfg.maRelVwap;
+      else if (k === 'short') cfg.maRelAllowShort = !cfg.maRelAllowShort;
+      else if (k === 'l3') cfg.maRelL3 = !cfg.maRelL3;
+      else if (k === 'info') cfg.maRelShowInfo = !cfg.maRelShowInfo;
+      _maRelCache = { key: '', data: null };
+      try { persist(); } catch (e2) {}
+      _mtSig = '';   // 强制重建药丸行（参数态变化）
+      renderMainTools(); renderKChart();
+    });
+  }
 }
 
 // ---- 多周期 SRSI 速览表渲染（DOM，与 canvas 无关）----
@@ -3522,6 +3569,180 @@ function renderPwaLegend() {
   if (el.__html !== html) { el.__html = html; el.innerHTML = html; }
 }
 
+// ============================================================
+// v1.6.30：价格-均线关系盯盘辅助层（默认关，纯显示，不接自动交易）
+// 理论：本周期 MA20 主战场 + 日线 MA20/50/200 定向 + 周线 MA20/200 大级别；
+//      收盘确认（影线不算）/ 结构防守位 / 同向冷却 / 不追乖离。计算全在 engine/maRelation.js（纯函数）。
+// ============================================================
+let _maRelCache = { key: '', data: null };
+const MA_LINE = {
+  fast: { c: '#22d3ee', w: 1.6, dash: null },      // 本周期 MA20（最醒目）
+  mid: { c: '#7c4dff', w: 1.0, dash: null },       // 本周期 MA60
+  slow: { c: '#f59e0b', w: 1.0, dash: [5, 3] },    // 本周期 MA120（可选）
+  d20: { c: '#2ecc71', w: 1.0, dash: [6, 4] },     // 日线 MA20
+  d50: { c: '#8899aa', w: 0.9, dash: [6, 4] },     // 日线 MA50
+  d200: { c: '#ff6b6b', w: 0.9, dash: [6, 4] },    // 日线 MA200
+  w20: { c: '#00E676', w: 2.0, dash: null },       // 周线 MA20（最粗）
+  w200: { c: '#ff5252', w: 2.0, dash: null },      // 周线 MA200
+  vwap: { c: '#ffd740', w: 1.0, dash: [2, 3] },    // 本周期 VWAP
+};
+
+// 日线 → 周线（每 7 根取一根，防前视由 maRelation 内部对齐保证）
+function _weeklyFromDaily(c1d, t1d) {
+  const c = [], t = [];
+  for (let i = 6; i < c1d.length; i += 7) { c.push(c1d[i]); t.push(t1d[i]); }
+  return { c, t };
+}
+
+// 按需构建（带缓存：仅当 symbol/周期/根数/末根时间/关键参数变化才重算）
+function maRelData() {
+  if (!cfg.maRelOn) return null;
+  const sym = cfg.symbol, tf = cfg.mainTF;
+  const d = getTFData(sym, tf);
+  const c = (d.c || []).map(Number);
+  if (c.length < 30) return null;
+  const key = [sym, tf, c.length, d.t && d.t.length ? d.t[d.t.length - 1] : 0,
+    cfg.maRelType, cfg.maRelShowSlow ? 1 : 0, cfg.maRelShowDaily ? 1 : 0, cfg.maRelShowWeekly ? 1 : 0,
+    cfg.maRelVwap ? 1 : 0, cfg.maRelSqueezePct, cfg.maRelDevAtr, cfg.maRelSwing, cfg.maRelCool,
+    cfg.maRelAllowShort ? 1 : 0, cfg.maRelL3 ? 1 : 0].join('|');
+  if (_maRelCache.key === key && _maRelCache.data) return _maRelCache.data;
+  const d1 = getTFData(sym, '1d'), d4 = getTFData(sym, '4h');
+  const wk = _weeklyFromDaily(d1.c || [], d1.t || []);
+  const atr = atrClose(c, 14);
+  let data = null;
+  try {
+    data = buildMaRelation({
+      closes: c, highs: (d.h || []).map(Number), lows: (d.l || []).map(Number),
+      opens: (d.o || []).map(Number), vols: (d.v || []).map(Number), atr, t: d.t || [],
+      closes1d: (d1.c || []).map(Number), t1d: d1.t || [],
+      closes4h: (d4.c || []).map(Number), t4h: d4.t || [],
+      closes1w: wk.c, t1w: wk.t,
+      opts: {
+        type: cfg.maRelType, daily: cfg.maRelShowDaily ? MA_REL_DEFAULTS.daily : [],
+        weekly: cfg.maRelShowWeekly ? MA_REL_DEFAULTS.weekly : [],
+        squeezePct: cfg.maRelSqueezePct, devAtr: cfg.maRelDevAtr, swing: cfg.maRelSwing,
+        cool: cfg.maRelCool, allowShort: cfg.maRelAllowShort, l3: cfg.maRelL3, vwap: cfg.maRelVwap,
+      },
+    });
+  } catch (e) { data = null; }
+  _maRelCache = { key, data };
+  return data;
+}
+export function maRelInfo() { try { const d = maRelData(); return d ? d.info : null; } catch (e) { return null; } }
+
+// 画在主图上（蜡烛之上、标记之下）：均线/VWAP/信号/防守线/信息表
+function drawMaRelation(ctx) {
+  const g = _mainGeom;
+  const m = maRelData();
+  if (!g || !m) return;
+  const { lo, hi, start, n, xStep, c, t } = g;
+  const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
+  const inWin = (i) => i >= start && i < c.length;
+  const line = (arr, st) => {
+    if (!Array.isArray(arr)) return;
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, MAIN_H); ctx.clip();
+    ctx.strokeStyle = st.c; ctx.lineWidth = st.w; ctx.setLineDash(st.dash || []);
+    ctx.beginPath();
+    let started = false;
+    for (let i = Math.max(0, start); i < c.length; i++) {
+      const v = arr[i];
+      if (v == null || !Number.isFinite(v)) { started = false; continue; }
+      const x = X(i), y = Y(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.setLineDash([]); ctx.restore();
+  };
+  // 均线与 VWAP
+  line(m.ma.fast, MA_LINE.fast);
+  line(m.ma.mid, MA_LINE.mid);
+  if (cfg.maRelShowSlow) line(m.ma.slow, MA_LINE.slow);
+  if (cfg.maRelShowDaily) { line(m.daily[20], MA_LINE.d20); line(m.daily[50], MA_LINE.d50); line(m.daily[200], MA_LINE.d200); }
+  if (cfg.maRelShowWeekly) { line(m.weekly[20], MA_LINE.w20); line(m.weekly[200], MA_LINE.w200); }
+  if (cfg.maRelVwap) line(m.vwap, MA_LINE.vwap);
+
+  // 信号：箭头 + 失效叉 + 防守线 + 1R/2R
+  // 信号：箭头 + 失效叉 + 防守线 + 1R/2R（只画窗口内、最多最近 24 个——理论要求「信号要克制」，避免箭头过密）
+  const sigs = (m.signals || []).filter(s => inWin(s.i)).slice(-24);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, MAIN_H); ctx.clip();
+  for (const s of sigs) {
+    const x = X(s.i), yb = Y(c[s.i]);
+    const up = s.side === 'long';
+    const col = s.invalidIdx != null ? '#8899aa' : (up ? '#2ecc71' : '#ff6b6b');
+    const dir = up ? 1 : -1;
+    // 箭头（距 K 线外侧 12px）
+    const ay = yb + dir * 14;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(x, ay + dir * 6); ctx.lineTo(x - 5, ay - dir * 4); ctx.lineTo(x + 5, ay - dir * 4);
+    ctx.closePath(); ctx.fill();
+    ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(s.type, x, ay + dir * 16);
+    // 防守线（从信号根到失效/最后一根）
+    const iEnd = s.invalidIdx != null ? s.invalidIdx : c.length - 1;
+    if (inWin(iEnd)) {
+      ctx.strokeStyle = col; ctx.globalAlpha = .55; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(x, Y(s.stop)); ctx.lineTo(X(Math.min(iEnd, c.length - 1)), Y(s.stop)); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    // 失效叉
+    if (s.invalidIdx != null && inWin(s.invalidIdx)) {
+      const xi = X(s.invalidIdx), yi = Y(c[s.invalidIdx]);
+      ctx.strokeStyle = '#8899aa'; ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.moveTo(xi - 4, yi - 4); ctx.lineTo(xi + 4, yi + 4); ctx.moveTo(xi + 4, yi - 4); ctx.lineTo(xi - 4, yi + 4); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+  }
+  // 最近一个信号的 1R / 2R 参考线
+  const last = sigs.length ? sigs[sigs.length - 1] : null;
+  if (last && last.r > 0) {
+    const iEnd = Math.min(last.invalidIdx != null ? last.invalidIdx : c.length - 1, c.length - 1);
+    if (inWin(iEnd)) {
+      const dir = last.side === 'long' ? 1 : -1;
+      const x1 = X(last.i), x2 = X(iEnd);
+      for (const k of [1, 2]) {
+        const y = Y(last.entry + dir * last.r * k);
+        ctx.strokeStyle = 'rgba(34,211,238,.5)'; ctx.setLineDash([2, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(x1, y); ctx.lineTo(x2, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(34,211,238,.8)';
+        ctx.fillText(k + 'R', x2 + 3, y + 3);
+      }
+    }
+  }
+  ctx.restore();
+
+  // 右上角信息表（状态 / 密集 / 乖离 / 距离%）
+  if (cfg.maRelShowInfo) {
+    const st = m.market || {};
+    const stateCol = st.state === 'BULL' ? '#2ecc71' : st.state === 'BEAR' ? '#ff6b6b' : '#f59e0b';
+    const f = (v) => (v == null || !Number.isFinite(v)) ? '--' : (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+    const rows = [
+      { t: (st.state || 'RANGE') + ' · 日线 MA20 ' + (st.slopePct >= 0 ? '↑' : '↓') + Math.abs(st.slopePct || 0).toFixed(2) + '%', c: stateCol, b: true },
+      { t: '距 本图MA20 ' + f(m.info.distFast) + ' · 日MA20 ' + f(m.info.distDaily20), c: '#c8d4e0' },
+      { t: '距 周MA20 ' + f(m.info.distWeekly20) + ' · 周MA200 ' + f(m.info.distWeekly200), c: '#c8d4e0' },
+      { t: (m.info.squeezed ? '● 均线密集（等突破）' : '○ 均线未密集') + (m.info.devAtr ? ' · ⚠ 远离均线勿追' : ''), c: m.info.squeezed ? '#ffd740' : 'rgba(160,175,190,.85)' },
+    ];
+    ctx.save();
+    ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    let wMax = 0; for (const r of rows) wMax = Math.max(wMax, ctx.measureText(r.t).width);
+    const bw = wMax + 14, bh = rows.length * 12 + 8;
+    const bx = W - PAD_R - bw - 2, by = PAD_T + 2;
+    ctx.fillStyle = 'rgba(16,22,30,.78)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.strokeRect(bx, by, bw, bh);
+    rows.forEach((r, k) => {
+      ctx.font = (r.b ? 'bold ' : '') + '9px sans-serif';
+      ctx.fillStyle = r.c;
+      ctx.fillText(r.t, bx + 7, by + 15 + k * 12);
+    });
+    ctx.restore();
+  }
+}
+
 // 标记清单（实时聚合；与 buildMarkList 的纯逻辑同源）
 export function mainMarkList(sym) {
   const alphaLive = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
@@ -3744,6 +3965,8 @@ export function renderKChart() {
   const tf = cfg.mainTF;
   const mainOk = drawMain(ctx, sym, tf, H);
   if (!mainOk) { drawEmpty(ctx, H, '等待 K 线数据（' + tf + '）...'); return; }
+  // v1.6.30：价格-均线关系盯盘辅助层（画在蜡烛之上、标记之下）
+  try { if (cfg.maRelOn) drawMaRelation(ctx); } catch (e) {}
 
   // 子图
   const subList = buildSubList();
@@ -6044,6 +6267,9 @@ export const kchartApi = {
   filterOpportunityDraws,
   markHitsInWindow,
   srsiOpportunityMarks,
+  maRelInfo,
+  setMaRel,
+  __maRelData: () => maRelData(),
   mainMarkList,
   buildMarkList,
   markFxXY,
@@ -7142,6 +7368,16 @@ export function blockGuideText(reason, sym) {
 }
 // 切换 SRSI 自动交易本位模式（follow/usdt/coin）—— 库存为 0 时的一键引导入口，不静默改语义
 // fix(1.6.16)：新增 window 钩子 kchartSetSrsiAutoMode（供面板内联 onclick 调用）
+// v1.6.30：价格-均线关系盯盘辅助层开关（纯显示，不接自动交易）
+export function setMaRel(on) {
+  cfg.maRelOn = !!on;
+  _maRelCache = { key: '', data: null };
+  try { persist(); } catch (e) {}
+  _mtSig = '';
+  renderMainTools();
+  renderKChart();
+}
+
 export function setSrsiAutoMode(mode) {
   if (['follow', 'usdt', 'coin'].indexOf(mode) < 0) return;
   cfg.srsiAutoMode = mode;

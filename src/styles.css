@@ -335,6 +335,12 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-maintools .mt-label{font:10px monospace;color:var(--text2,#8b95a5);margin-right:4px;white-space:nowrap}
 .kchart-maintools .mt-legend{font:9px monospace;color:rgba(200,212,224,.85);margin-left:8px;white-space:nowrap;letter-spacing:1px;user-select:none;opacity:.9}
 .kchart-maintools .mt-legend i{font-style:normal}
+/* v1.6.30：价格-均线关系参数行（药丸内小按钮） */
+.mt-marel{display:inline-flex;gap:3px;margin-left:6px;flex-wrap:wrap;align-items:center}
+.mt-marel button{font:10px/1 inherit;padding:2px 6px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card2);color:var(--text2)}
+.mt-marel button.on{border-color:#f59e0b;background:rgba(245,158,11,.16);color:#f59e0b}
+.mt-marel button:hover{color:#f59e0b;border-color:#f59e0b}
 .kchart-ovwrap{margin-bottom:6px}
 .kchart-ovhead{font-size:9px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 4px;border-bottom:1px solid var(--border);display:inline-flex;align-items:center;gap:4px}
 .kchart-ovhead:hover{color:var(--accent)}

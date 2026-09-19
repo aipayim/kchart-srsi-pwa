@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3902,6 +3902,15 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   const h2 = actionCardHtml(v3);
   ok('actionCardHtml 逆势时含 warn 段', h2.includes('kac-warn') && h2.includes('逆日内趋势'));
   ok('actionCardHtml 空视图 → 空串', actionCardHtml(null) === '');
+
+  // ---- v1.6.30：价格-均线关系盯盘辅助层（默认关） ----
+  {
+    const d = __defaultKConfig();
+    ok('默认关（maRelOn=false）', d.maRelOn === false);
+    ok('默认参数齐全', d.maRelType === 'sma' && d.maRelSqueezePct === 1.2 && d.maRelDevAtr === 1.5 && d.maRelSwing === 15 && d.maRelCool === 8);
+    ok('默认显示项（日线/周线/VWAP/L3/信息表）', d.maRelShowDaily === true && d.maRelShowWeekly === true && d.maRelVwap === true && d.maRelL3 === true && d.maRelShowInfo === true && d.maRelShowSlow === false);
+    ok('关闭时 maRelInfo 为 null（零回归）', maRelInfo() === null);
+  }
 
   // ---- v1.6.25：图例单一数据源 ----
   const L = legendItems();
