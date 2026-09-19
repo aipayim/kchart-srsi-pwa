@@ -3983,8 +3983,8 @@ function drawMain(ctx, sym, tf, H) {
   lo -= pad; hi += pad;
   const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
   const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
-  // v1.6.23：缓存主图几何 → 供标记光晕覆盖层（markFxXY）像素级对齐
-  _mainGeom = { sym, tf, lo, hi, start, n, xStep, c, t };
+  // v1.6.29：缓存主图几何 → 供标记光晕覆盖层（markFxXY）像素级对齐；含 h/l 供标记按高低点锚定
+  _mainGeom = { sym, tf, lo, hi, start, n, xStep, c, h, l, t };
 
   // 网格
   drawGrid(ctx, PAD_L, PAD_T, plotW, MAIN_H, 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
@@ -4221,46 +4221,32 @@ function drawMain(ctx, sym, tf, H) {
     ctx.save();
     const LT = (_showSrsi || cfg.srsiAutoApplyBt) ? (window.__srsiLiveTrades || []) : [];
     let lp = 0;
-    const tEnd = t[t.length - 1] || 0;
     for (const tr of LT) {
       if (!tr || !Number.isFinite(tr.t) || tr.t < t[0] - 3600e3 * 48) continue;
-      // 实时标记：总是画在最新 bar 右侧时间轴附近（时间→索引，超过窗口画在右缘）
-      let idx = t.length - 1;
-      for (let m2 = t.length - 1; m2 >= start; m2--) { if (t[m2] <= tr.t) { idx = m2; break; } }
-      if (idx < start) idx = start;
-      const x = X(Math.min(idx, start + n - 1)), y = Y(c[Math.min(idx, c.length - 1)] || c[c.length - 1]);
-      if (tr.action === 'open') {
-        // ▲绿开多 / ▼红开空（实心三角）
-        ctx.fillStyle = tr.side === 'long' ? '#2ecc71' : '#ff6b6b';
-        ctx.beginPath();
-        if (tr.side === 'long') { ctx.moveTo(x, y + 22); ctx.lineTo(x - 5, y + 31); ctx.lineTo(x + 5, y + 31); }
-        else { ctx.moveTo(x, y - 22); ctx.lineTo(x - 5, y - 31); ctx.lineTo(x + 5, y - 31); }
-        ctx.closePath(); ctx.fill();
-      } else {
-        ctx.fillStyle = '#8899aa';
-        ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fill();
-      }
+      const _kind = tr.action === 'open' ? (tr.side === 'long' ? 'srsiLong' : 'srsiShort') : 'srsiClose';
+      const p = markFxXY(_mainGeom, { t: tr.t, kind: _kind });
+      if (!p) continue;
+      ctx.fillStyle = p.color;
+      _drawMarkShape(ctx, p);
       lp++;
     }
     const AM = _showAlpha ? (window.__alphaLiveMarks || []) : [];
     let ap = 0, _lastAM = null;
     for (const m3 of AM) {
       if (!m3 || !Number.isFinite(m3.t) || m3.t < t[0]) continue;
-      let ai = t.length - 1;
-      for (let m4 = t.length - 1; m4 >= start; m4--) { if (t[m4] <= m3.t) { ai = m4; break; } }
-      if (ai < start) ai = start;
-      const x = X(Math.min(ai, start + n - 1)), y = Y(c[Math.min(ai, c.length - 1)] || c[c.length - 1]);
-      const dy = y - 36, dx = 6;
-      if (m3.action === 'close' || m3.dir === 0) {
-        ctx.strokeStyle = '#8899aa'; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.moveTo(x, dy - dx); ctx.lineTo(x + dx, dy); ctx.lineTo(x, dy + dx); ctx.lineTo(x - dx, dy); ctx.closePath(); ctx.stroke();
+      const _kind = (m3.action === 'close' || m3.dir === 0) ? 'alphaClose' : (m3.dir > 0 ? 'alphaLong' : 'alphaShort');
+      const p = markFxXY(_mainGeom, { t: m3.t, kind: _kind });
+      if (!p) continue;
+      if (_kind === 'alphaClose') {
+        ctx.strokeStyle = p.color; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y - 6); ctx.lineTo(p.x + 6, p.y); ctx.lineTo(p.x, p.y + 6); ctx.lineTo(p.x - 6, p.y); ctx.closePath(); ctx.stroke();
         ctx.lineWidth = 1;
       } else {
-        ctx.fillStyle = m3.dir > 0 ? '#22d3ee' : '#f59e0b';
-        ctx.beginPath(); ctx.moveTo(x, dy - dx); ctx.lineTo(x + dx, dy); ctx.lineTo(x, dy + dx); ctx.lineTo(x - dx, dy); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = p.color;
+        _drawMarkShape(ctx, p);
       }
       ap++;
-      _lastAM = { x, dy, dir: m3.dir, t: m3.t };
+      _lastAM = { x: p.x, y: p.y, side: p.side, dir: m3.dir, t: m3.t };
     }
     // v1.6.19：最新 α 标记旁注「方向 + 基石数据日」——与行动卡同口径（避免把日线方向误读为实时）
     if (_lastAM && _lastAM.dir !== 0 && typeof window !== 'undefined') {
@@ -4270,35 +4256,22 @@ function drawMain(ctx, sym, tf, H) {
         const _txt = 'α' + (_lastAM.dir > 0 ? '多' : '空') + (_d1 ? '(' + _d1 + ')' : '');
         ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
         ctx.fillStyle = _lastAM.dir > 0 ? '#22d3ee' : '#f59e0b';
-        ctx.fillText(_txt, _lastAM.x, _lastAM.dy - 9);
+        // v1.6.29：旁注画在标记外侧（多/金钩在下 → 标在菱形下方；空/死钩在上 → 标在上方）
+        ctx.fillText(_txt, _lastAM.x, _lastAM.side === 'down' ? _lastAM.y + 16 : _lastAM.y - 9);
         ctx.textAlign = 'left';
       } catch (e) {}
     }
-    // v1.6.19：主图「15m SRSI 信号机会」（金叉/死叉/破带，非成交）——让 K 线上升时也能看到标记。
-    // 数据源：15m K/D（与卫星同周期），时间→主图 bar 对齐；买侧绿点画在 bar 下方、卖侧红点画在上方。
+    // v1.6.19：主图「15m SRSI 信号机会」（金叉/死叉/破带/钩，非成交）
+    // v1.6.29：形状/位置改由 markFxXY 统一（钩=菱形、穿越=圆点；买侧在 K 线下、卖侧在上）
     if (cfg.sigOverlay) {
       try {
-        const _opps = filterOpportunityDraws(mainOpportunityMarks(sym));
-        for (const op of _opps) {
-          const tt = op.t;
-          if (tt < t[0]) continue;
-          let ai = -1;
-          for (let m5 = t.length - 1; m5 >= start; m5--) { if (t[m5] <= tt) { ai = m5; break; } }
-          if (ai < start) continue;
-          const x = X(Math.min(ai, start + n - 1)), y = Y(c[Math.min(ai, c.length - 1)] || c[c.length - 1]);
-          const buy = op.side === 'long';
-          const isHook = op.kind === 'hook';
-          if (isHook) {
-            const _sz = 5;
-            ctx.fillStyle = buy ? '#00E676' : '#FF5252';
-            const _cy = y + (buy ? 16 : -16);
-            ctx.beginPath();
-            ctx.moveTo(x, _cy - _sz); ctx.lineTo(x + _sz, _cy); ctx.lineTo(x, _cy + _sz); ctx.lineTo(x - _sz, _cy);
-            ctx.closePath(); ctx.fill();
-          } else {
-            ctx.fillStyle = buy ? 'rgba(46,204,113,.9)' : 'rgba(255,107,107,.9)';
-            ctx.beginPath(); ctx.arc(x, y + (buy ? 12 : -12), 2.6, 0, Math.PI * 2); ctx.fill();
-          }
+        for (const op of filterOpportunityDraws(mainOpportunityMarks(sym))) {
+          if (op.t < t[0]) continue;
+          const _kind = op.kind === 'hook' ? (op.side === 'long' ? 'hookGold' : 'hookDeath') : (op.side === 'long' ? 'oppBuy' : 'oppSell');
+          const p = markFxXY(_mainGeom, { t: op.t, kind: _kind });
+          if (!p) continue;
+          ctx.fillStyle = p.color;
+          _drawMarkShape(ctx, p);
         }
       } catch (e) {}
     }
@@ -5802,20 +5775,38 @@ export function withAlpha(color, a) {
   return 'rgba(255,255,255,' + al + ')';
 }
 
-// 主图标记样式表（kind → 相对基准价的 y 偏移 / 颜色 / 形状 / 半径）
-// 偏移与 drawMain 的绘制完全一致（三角 y±22~31、α 菱形 y-36、机会点 y±12）
+// 主图标记样式表（kind → 颜色/形状/半径 + 方向 side）
+// v1.6.29：新增 side（'up'|'down'|'none'）——**空/死钩/看空 → 在 K 线上方；多/金钩/看多 → 在 K 线下方**（用户裁定）。
+// off 仅作**回退**（geom 缺 h/l 时用）；有 h/l 时改按该根 K 线的高/低点锚定，避免标记落进蜡烛体被覆盖。
 const MARK_FX = {
-  oppBuy:     { off: 12,  color: '#2ecc71', shape: 'dot',     r: 2.6 },
-  oppSell:    { off: -12, color: '#ff6b6b', shape: 'dot',     r: 2.6 },
-  hookGold:   { off: 16,  color: '#00E676', shape: 'diamond', r: 5 },
-  hookDeath:  { off: -16, color: '#FF5252', shape: 'diamond', r: 5 },
-  srsiLong:   { off: 26,  color: '#2ecc71', shape: 'triUp',   r: 5 },
-  srsiShort:  { off: -26, color: '#ff6b6b', shape: 'triDown', r: 5 },
-  srsiClose:  { off: 0,   color: '#8899aa', shape: 'dot',     r: 3 },
-  alphaLong:  { off: -36, color: '#22d3ee', shape: 'diamond', r: 6 },
-  alphaShort: { off: -36, color: '#f59e0b', shape: 'diamond', r: 6 },
-  alphaClose: { off: -36, color: '#8899aa', shape: 'diamond', r: 6 },
+  oppBuy:     { off: 12,  color: '#2ecc71', shape: 'dot',     r: 2.6, side: 'down' },
+  oppSell:    { off: -12, color: '#ff6b6b', shape: 'dot',     r: 2.6, side: 'up' },
+  hookGold:   { off: 16,  color: '#00E676', shape: 'diamond', r: 5,   side: 'down' },
+  hookDeath:  { off: -16, color: '#FF5252', shape: 'diamond', r: 5,   side: 'up' },
+  srsiLong:   { off: 26,  color: '#2ecc71', shape: 'triUp',   r: 5,   side: 'down' },
+  srsiShort:  { off: -26, color: '#ff6b6b', shape: 'triDown', r: 5,   side: 'up' },
+  srsiClose:  { off: 0,   color: '#8899aa', shape: 'dot',     r: 3,   side: 'none' },
+  alphaLong:  { off: 36,  color: '#22d3ee', shape: 'diamond', r: 6,   side: 'down' },   // v1.6.29：原在上（-36）→ 改到下（多 → 下方）
+  alphaShort: { off: -36, color: '#f59e0b', shape: 'diamond', r: 6,   side: 'up' },
+  alphaClose: { off: -36, color: '#8899aa', shape: 'diamond', r: 6,   side: 'none' },
 };
+
+// 标记中心 y（纯函数，可单测）：up → 该根 K 线**最高价之上**；down → **最低价之下**；none → 收盘价 + off（旧行为）。
+// 有 h/l 时按高低点锚定（避免标记落在蜡烛体内被覆盖）；无 h/l 时回退到 off。结果钳制在主图区内。
+export function markAnchorY(geom, kind, ci) {
+  if (!geom) return null;
+  const { lo, hi, c, h, l } = geom;
+  if (!Array.isArray(c) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
+  const st = MARK_FX[kind] || MARK_FX.srsiClose;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
+  const cv = c[ci];
+  let y = (cv != null && Number.isFinite(cv)) ? Y(cv) + st.off : null;
+  const gap = st.r + 5;
+  if (st.side === 'up' && Array.isArray(h)) { const hv = h[ci]; if (hv != null && Number.isFinite(hv)) y = Y(hv) - gap; }
+  else if (st.side === 'down' && Array.isArray(l)) { const lv = l[ci]; if (lv != null && Number.isFinite(lv)) y = Y(lv) + gap; }
+  if (y == null || !Number.isFinite(y)) return null;
+  return Math.max(PAD_T + st.r, Math.min(PAD_T + MAIN_H - st.r, y));
+}
 
 // 标记清单（纯函数，可单测）：与 drawMain 的绘制条件一致
 // opts: { sigOverlay, srsiAutoOn, alphaLive, opportunities, srsiTrades, alphaMarks }
@@ -5848,8 +5839,10 @@ export function markFxXY(geom, mark) {
   if (cv == null || !Number.isFinite(cv)) return null;
   const x = PAD_L + (Math.min(idx, start + n - 1) - start) * xStep + xStep / 2;
   const base = PAD_T + (hi - cv) / (hi - lo) * MAIN_H;
+  const y = markAnchorY(geom, mark.kind, ci);
+  if (y == null) return null;
   const st = MARK_FX[mark.kind] || MARK_FX.srsiClose;
-  return { x, base, y: base + st.off, kind: mark.kind, color: st.color, shape: st.shape, r: st.r };
+  return { x, base, y, kind: mark.kind, color: st.color, shape: st.shape, r: st.r, side: st.side };
 }
 
 // 行动卡视图模型（纯函数，可单测）：canvas 回退与 DOM 浮层共用同一套文案/颜色（避免两处漂移）
@@ -6054,6 +6047,8 @@ export const kchartApi = {
   mainMarkList,
   buildMarkList,
   markFxXY,
+  markAnchorY,
+  __mainGeom: () => _mainGeom,
   pulseAlpha,
   withAlpha,
   legendItems,

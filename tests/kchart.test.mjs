@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3828,7 +3828,7 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('markFxXY oppBuy y = 基准+12', P.y > P.base && Math.abs(P.y - P.base - 12) < 1e-9);
   ok('markFxXY oppSell y = 基准-12', Math.abs(markFxXY(geom, { t: 3, kind: 'oppSell' }).y - (P.base - 12)) < 1e-9);
   ok('markFxXY srsiShort y = 基准-26', Math.abs(markFxXY(geom, { t: 3, kind: 'srsiShort' }).y - (P.base - 26)) < 1e-9);
-  ok('markFxXY α y = 基准-36', Math.abs(markFxXY(geom, { t: 3, kind: 'alphaLong' }).y - (P.base - 36)) < 1e-9);
+  ok('markFxXY α 多在下 / 空在上（v1.6.29）', Math.abs(markFxXY(geom, { t: 3, kind: 'alphaLong' }).y - (P.base + 36)) < 1e-9 && Math.abs(markFxXY(geom, { t: 3, kind: 'alphaShort' }).y - (P.base - 36)) < 1e-9);
   ok('markFxXY 颜色/形状随 kind', P.color === '#2ecc71' && P.shape === 'dot' && markFxXY(geom, { t: 3, kind: 'alphaShort' }).color === '#f59e0b');
   ok('markFxXY 未知 kind 回落灰点', markFxXY(geom, { t: 3, kind: 'zzz' }).color === '#8899aa');
   ok('markFxXY t < t[0] → null', markFxXY(geom, { t: -1, kind: 'oppBuy' }) === null);
@@ -3839,6 +3839,23 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   const PD = markFxXY(geom, { t: 3, kind: 'hookDeath' });
   ok('markFxXY 金钩菱形在下方', PH.shape === 'diamond' && Math.abs(PH.y - PH.base - 16) < 1e-9 && PH.color === '#00E676');
   ok('markFxXY 死钩菱形在上方', PD.shape === 'diamond' && Math.abs(PD.y - (PD.base - 16)) < 1e-9 && PD.color === '#FF5252');
+  // v1.6.29：按 K 线高低点锚定（空/死钩在上，多/金钩在下）——有 h/l 时优先
+  {
+    const g2 = { lo: 90, hi: 110, start: 0, n: 4, xStep: 10, c: [100, 100, 100, 100], h: [101, 108, 101, 101], l: [99, 92, 99, 99], t: [0, 1, 2, 3] };
+    const up = markAnchorY(g2, 'hookDeath', 1);      // 该根 high=108
+    const dn = markAnchorY(g2, 'hookGold', 1);       // 该根 low=92
+    const Y = (v) => 14 + (110 - v) / (110 - 90) * 320;
+    ok('markAnchorY up = 最高价上方（gap=r+5）', Math.abs(up - (Y(108) - 10)) < 1e-9);
+    ok('markAnchorY down = 最低价下方', Math.abs(dn - (Y(92) + 10)) < 1e-9);
+    ok('markAnchorY 空在上 / 多在下的相对关系', up < dn);
+    ok('markAnchorY side=none 用 off 回退（平仓）', Math.abs(markAnchorY(g2, 'srsiClose', 1) - Y(100)) < 1e-9);
+    // 钳制：极端高/低不越出主图区
+    const g3 = { lo: 90, hi: 110, start: 0, n: 1, xStep: 10, c: [110], h: [110], l: [90], t: [0] };
+    const t1 = markAnchorY(g3, 'hookDeath', 0), b1 = markAnchorY(g3, 'hookGold', 0);
+    ok('markAnchorY 钳制在 [PAD_T+r, PAD_T+MAIN_H-r]', t1 >= 14 + 5 - 1e-9 && b1 <= 14 + 320 - 5 + 1e-9);
+    ok('markAnchorY 非法 geom → null', markAnchorY(null, 'hookGold', 0) === null && markAnchorY({ lo: 1, hi: 1, c: [1] }, 'hookGold', 0) === null);
+    ok('markFxXY 带 h/l 时也按高低点（与 markAnchorY 一致）', Math.abs(markFxXY(g2, { t: 1, kind: 'hookDeath' }).y - up) < 1e-9);
+  }
 
   // ---- clampBoxPos ----
   ok('clampBoxPos 正常不越界', deepEq(clampBoxPos(50, 60, 100, 50, 400, 300), { x: 50, y: 60 }));
