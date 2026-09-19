@@ -4,7 +4,7 @@
 //       冷却、stop、r、invalidIdx、allowShort、数据不足与脏输入不抛。
 import {
   MA_REL_DEFAULTS, maSeries, vwapSeries, maDistPct, alignClosedIdx,
-  squeezeAt, maMarketState, buildMaRelation,
+  squeezeAt, maMarketState, buildMaRelation, maRelReadout,
 } from '../src/engine/maRelation.js';
 
 let passed = 0, failed = 0;
@@ -334,6 +334,70 @@ console.log('\n[maRelation: 对齐与 info 汇总]');
   ok('devAtr 标记远离均线', far.info.devAtr === true);
   ok('vwap 开关关闭 → 全 null', buildMaRelation({ closes: L1_CLOSES, opts: { vwap: false } }).vwap.every(v => v === null));
   ok('返回 opts 为归一化对象', (() => { const r = buildMaRelation({ closes: L1_CLOSES, opts: { allowShort: false } }); return r.opts.allowShort === false && r.opts.cool === MA_REL_DEFAULTS.cool; })());
+}
+
+
+// ============================================================
+// v1.6.31：maRelReadout —— 均线关系「小白解读」（供 PWA 驾驶舱面板）
+// ============================================================
+console.log('\n[maRelation: maRelReadout 解读行]');
+{
+  const mkData = (over) => Object.assign({
+    opts: Object.assign({}, MA_REL_DEFAULTS, { showSlow: false, daily: [20,50,200], weekly: [20,200], vwap: true, l3: true, allowShort: true }),
+    ma: { fast: [null, 100], mid: [null, 90], slow: [null, 80] },
+    vwap: [null, 99],
+    daily: { 20: [null, 101], 50: [null, 95], 200: [null, 70] },
+    weekly: { 20: [null, 90], 200: [null, 60] },
+    squeeze: { spreadPct: 4.2, squeezed: false },
+    market: { state: 'BULL', close: 100, maFast: 99, maMid: 95, slopePct: 0.12, aboveFast: true, aboveMid: true },
+    signals: [],
+    info: { distFast: 0.5, distDaily20: -0.4, distWeekly20: 6.5, distWeekly200: 4.8, devAtr: false, squeezed: false, lastSignal: null, px: 100, atrPct: 2 },
+  }, over || {});
+
+  const r0 = maRelReadout(null);
+  ok('null → tone none + 空 rows', r0.tone === 'none' && r0.rows.length === 0 && /未启用/.test(r0.verdict));
+
+  const bull = maRelReadout(mkData());
+  ok('BULL → tone bull', bull.tone === 'bull');
+  ok('含大环境行（只找做多）', bull.rows.some(r => /大环境 BULL/.test(r.label) && /只找做多/.test(r.label)));
+  ok('含本周期 MA20 位置行', bull.rows.some(r => /价在本周期MA20 上方/.test(r.label)));
+  ok('含均线排列行', bull.rows.some(r => /多头排列|空头排列|纠缠/.test(r.label)));
+  ok('含均线密集行', bull.rows.some(r => /均线未密集|均线密集/.test(r.label)));
+  ok('含日线/周线参照行', bull.rows.some(r => /日线MA20/.test(r.label)) && bull.rows.some(r => /周线MA20/.test(r.label)));
+  ok('含 VWAP 行', bull.rows.some(r => /VWAP/.test(r.label)));
+  ok('含等待区行', bull.rows.some(r => /等待区/.test(r.label)));
+  ok('BULL 结论含「顺势偏多」', /顺势偏多/.test(bull.verdict));
+
+  const bear = maRelReadout(mkData({ market: { state: 'BEAR', close: 90, maFast: 99, maMid: 95, slopePct: -0.3, aboveFast: false, aboveMid: false } }));
+  ok('BEAR → tone bear + 结论顺势偏空', bear.tone === 'bear' && /顺势偏空/.test(bear.verdict));
+  const rng = maRelReadout(mkData({ market: { state: 'RANGE', close: 100, maFast: 99, maMid: 95, slopePct: 0, aboveFast: true, aboveMid: true } }));
+  ok('RANGE → tone range + 结论震荡观望', rng.tone === 'range' && /震荡观望/.test(rng.verdict));
+
+  // 只解读「已开启」的项
+  const off = maRelReadout(mkData({ opts: Object.assign({}, MA_REL_DEFAULTS, { showSlow: false, daily: [], weekly: [], vwap: false }) }));
+  ok('关日线 → 无日线参照行', !off.rows.some(r => /日线MA20/.test(r.label)));
+  ok('关周线 → 无周线参照行', !off.rows.some(r => /周线MA20/.test(r.label)));
+  ok('关 VWAP → 无 VWAP 行', !off.rows.some(r => /VWAP/.test(r.label)));
+
+  // 最近信号行
+  const withSig = maRelReadout(mkData({ info: Object.assign({}, mkData().info, { lastSignal: { i: 9, side: 'long', type: 'L1', entry: 100, stop: 98, r: 2, invalidIdx: null } }) }));
+  const sigRow = withSig.rows.find(r => /L1/.test(r.label));
+  ok('含最近信号行（类型+方向+有效）', !!sigRow && /做多/.test(sigRow.label) && /有效/.test(sigRow.label) && !/已失效/.test(sigRow.label));
+  ok('信号行含 入场/防守/1R/2R目标', /入场 100/.test(sigRow.detail) && /防守 98/.test(sigRow.detail) && /1R 2/.test(sigRow.detail) && /2R目标 104/.test(sigRow.detail));
+  const invSig = maRelReadout(mkData({ info: Object.assign({}, mkData().info, { lastSignal: { i: 9, side: 'long', type: 'L1', entry: 100, stop: 98, r: 2, invalidIdx: 12 } }) }));
+  const invRow = invSig.rows.find(r => /L1/.test(r.label));
+  ok('失效信号 → 标签含「已失效」且灰', /已失效/.test(invRow.label) && invRow.color === '#8899aa');
+  ok('失效时结论追加认错提示', /已失效/.test(invSig.verdict));
+  const noSig = maRelReadout(mkData());
+  ok('无信号 → 提示等收盘态度', noSig.rows.some(r => /暂无可执行信号/.test(r.label)));
+
+  // 乖离
+  const dev = maRelReadout(mkData({ info: Object.assign({}, mkData().info, { devAtr: true }) }));
+  ok('乖离 → 勿追提示行', dev.rows.some(r => /远离均线/.test(r.label)));
+
+  // 健壮性
+  ok('缺 info/ma 不抛', (() => { try { const r = maRelReadout({ opts: MA_REL_DEFAULTS, ma: {}, info: {} }); return r && Array.isArray(r.rows); } catch (e) { return false; } })());
+  ok('每行都有 icon/label', bull.rows.every(r => r.icon && r.label));
 }
 
 console.log(`\n=== maRelation.test: ${passed} passed, ${failed} failed ===`);

@@ -9,6 +9,7 @@ import {
   cockpitNotifOn, setCockpitNotif
 } from '../tech2/signalCockpit.js';
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
+import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderRecentSignalsHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -848,6 +849,48 @@ export function installSignalAlertSink() {
     renderRecentSignals();
   });
 }
+function renderMaRel() {
+  const card = $('pwaMaRelCard');
+  if (!card) return;
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  const on = !!(cfg && cfg.maRelOn);
+  card.style.display = on ? '' : 'none';
+  if (!on) return;
+  let data = null;
+  try { data = api.__maRelData ? api.__maRelData() : null; } catch (e) { data = null; }
+  const box = $('pwaMaRel');
+  const pill = $('pwaMaRelPill');
+  const foot = $('pwaMaRelFoot');
+  if (!box) return;
+  if (!data) {
+    if (box.__sig !== 'nodata') { box.__sig = 'nodata'; box.innerHTML = '<div class="sig-alert-empty">⏳ 正在计算均线关系…（需本周期 K 线与日线/周线数据就绪）</div>'; }
+    if (pill) pill.textContent = '—';
+    if (foot) foot.textContent = '';
+    return;
+  }
+  let ro = null;
+  try { ro = buildMaRelReadout(data); } catch (e) { ro = null; }
+  if (!ro) return;
+  const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
+  if (pill) { pill.textContent = (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : ro.tone === 'range' ? '震荡' : '未启用'); pill.style.color = toneCol; }
+  // 行样式复用「最近信号」(.sig-ev) 的表达方式：图标 + 彩色标签 + 说明
+  const sig = JSON.stringify([ro.tone, ro.verdict, ro.rows.map(r => [r.icon, r.label, r.detail])]);
+  if (box.__sig !== sig) {
+    box.__sig = sig;
+    box.innerHTML = ro.rows.map(r =>
+      '<div class="sig-ev sig-ev-signal" style="border-left-color:' + r.color + '">' +
+        '<span class="sig-ev-i" style="color:' + r.color + '">' + r.icon + '</span>' +
+        '<span class="sig-ev-k" style="color:' + r.color + '">' + r.label + '</span>' +
+        '<span class="sig-ev-d">' + (r.detail || '') + '</span>' +
+      '</div>').join('');
+  }
+  if (foot) {
+    const t = '→ ' + ro.verdict;
+    if (foot.__t !== t) { foot.__t = t; foot.textContent = t; foot.style.color = toneCol; }
+  }
+}
+
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
@@ -1009,6 +1052,7 @@ export function refreshShell() {
   renderTfCycle();
   renderEngineBar();
   renderRecentSignals();
+  renderMaRel();
 }
 
 export function initPwaShell() {

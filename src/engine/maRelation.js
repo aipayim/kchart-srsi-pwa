@@ -377,6 +377,159 @@ export function buildMaRelation(input) {
       devAtr,
       squeezed: sqLast.squeezed,
       lastSignal: signals.length ? signals[signals.length - 1] : null,
+      // v1.6.31：解读面板需要的最新价与 ATR%（纯展示）
+      px: num(closes[lastI]) ? closes[lastI] : null,
+      atrPct: (num(atr[lastI]) && num(closes[lastI]) && closes[lastI] > 0) ? atr[lastI] / closes[lastI] * 100 : null,
     },
   };
+}
+
+// ============================================================
+// v1.6.31：均线关系「小白解读」——把状态翻译成「图标 + 彩色标签 + 说明」的行（供 PWA 驾驶舱面板）
+// 只解读用户**已开启**的项：opts.daily/weekly 为空数组表示未开；opts.vwap/l3/showSlow 为布尔。
+// 纯函数，可单测；不依赖 DOM。
+// ============================================================
+function _fmtPx(v) {
+  if (v == null || !isFinite(v)) return '--';
+  const a = Math.abs(v);
+  if (a >= 10000) return v.toFixed(0);
+  if (a >= 100) return v.toFixed(2);
+  if (a >= 1) return v.toFixed(3);
+  return v.toFixed(5);
+}
+function _pct(v) {
+  if (v == null || !isFinite(v)) return '--';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+}
+function _lastNum(arr) { if (!Array.isArray(arr) || !arr.length) return null; const v = arr[arr.length - 1]; return (v != null && isFinite(v)) ? v : null; }
+
+// 返回 { tone:'bull'|'bear'|'range'|'none', verdict:'一句话结论', rows:[{icon,color,label,detail}] }
+export function maRelReadout(data) {
+  const empty = { tone: 'none', verdict: '未启用均线关系（在主图工具面板点「📐 均线关系」开启）', rows: [] };
+  if (!data || !data.opts) return empty;
+  const o = data.opts;
+  const closes = (data.ma && data.ma.fast) || [];
+  const lastI = closes.length - 1;
+  if (lastI < 0) return empty;
+  const px = (data.info && data.info.px != null) ? data.info.px : null;
+  const mFast = _lastNum(data.ma.fast), mMid = _lastNum(data.ma.mid), mSlow = _lastNum(data.ma.slow);
+  const d20 = _lastNum(data.daily && data.daily[20]), d50 = _lastNum(data.daily && data.daily[50]), d200 = _lastNum(data.daily && data.daily[200]);
+  const w20 = _lastNum(data.weekly && data.weekly[20]), w200 = _lastNum(data.weekly && data.weekly[200]);
+  const vw = _lastNum(data.vwap);
+  const price = px != null ? px : mFast;   // 无实时价时用均线自身占位（仅用于“在均线上/下”的相对判断）
+  const mk = data.market || {};
+  const state = mk.state || 'RANGE';
+  const tone = state === 'BULL' ? 'bull' : state === 'BEAR' ? 'bear' : 'range';
+  const rows = [];
+
+  // 1) 大环境
+  const stIcon = tone === 'bull' ? '▲' : tone === 'bear' ? '▼' : '◆';
+  const stColor = tone === 'bull' ? '#2ecc71' : tone === 'bear' ? '#ff6b6b' : '#f59e0b';
+  const stDo = tone === 'bull' ? '只找做多' : tone === 'bear' ? '只找做空' : '不给方向·观望';
+  rows.push({
+    icon: stIcon, color: stColor,
+    label: '大环境 ' + state + '（' + stDo + '）',
+    detail: '日线收盘 ' + _fmtPx(mk.close) + ' · 日线MA20 ' + _fmtPx(mk.maFast) + ' · 斜率 ' + _pct(mk.slopePct) +
+      (mk.aboveMid != null ? ' · ' + (mk.aboveMid ? '在日线MA50 上方' : '在日线MA50 下方') : ''),
+  });
+
+  // 2) 价格 vs 本周期 MA20（主战场）
+  if (mFast != null) {
+    const up = price >= mFast;
+    rows.push({
+      icon: '●', color: up ? '#2ecc71' : '#ff6b6b',
+      label: '价在本周期MA' + (o.fast || 20) + ' ' + (up ? '上方' : '下方') + '（' + (up ? '偏多' : '偏空') + '）',
+      detail: 'MA' + (o.fast || 20) + ' ' + _fmtPx(mFast) + ' · 距 ' + _pct(data.info && data.info.distFast) +
+        (mMid != null ? ' · MA' + (o.mid || 60) + ' ' + _fmtPx(mMid) : ''),
+    });
+  }
+
+  // 3) 均线排列
+  if (mFast != null && mMid != null) {
+    const arr3 = (mSlow != null) ? [mFast, mMid, mSlow] : [mFast, mMid];
+    const bullArr = arr3.every((v, i) => i === 0 || arr3[i - 1] > v);
+    const bearArr = arr3.every((v, i) => i === 0 || arr3[i - 1] < v);
+    const ic = bullArr ? '▲' : bearArr ? '▼' : '◆';
+    const cl = bullArr ? '#2ecc71' : bearArr ? '#ff6b6b' : '#f59e0b';
+    rows.push({
+      icon: ic, color: cl,
+      label: bullArr ? '均线多头排列（趋势向上）' : bearArr ? '均线空头排列（趋势向下）' : '均线纠缠（无明确趋势）',
+      detail: 'MA' + (o.fast || 20) + ' ' + _fmtPx(mFast) + (mMid != null ? ' / MA' + (o.mid || 60) + ' ' + _fmtPx(mMid) : '') +
+        ((o.showSlow && mSlow != null) ? ' / MA' + (o.slow || 120) + ' ' + _fmtPx(mSlow) : ''),
+    });
+  }
+
+  // 4) 均线密集
+  const sq = data.squeeze || {};
+  if (sq.spreadPct != null) {
+    rows.push({
+      icon: sq.squeezed ? '●' : '○', color: sq.squeezed ? '#ffd740' : 'rgba(160,175,190,.85)',
+      label: sq.squeezed ? '均线密集（即将选方向，等收盘突破）' : '均线未密集（尚可顺势）',
+      detail: '三线最大差 ' + _pct(sq.spreadPct) + ' · 密集阈值 ' + (o.squeezePct != null ? o.squeezePct : 1.2) + '%',
+    });
+  }
+
+  // 5) 日线 / 周线参照（仅在开启时解读）
+  if (Array.isArray(o.daily) && o.daily.length) {
+    rows.push({
+      icon: '●', color: d20 != null && price >= d20 ? '#2ecc71' : '#ff6b6b',
+      label: '日线MA20 ' + (d20 != null && price >= d20 ? '上方' : '下方') + '（大方向参照）',
+      detail: '日MA20 ' + _fmtPx(d20) + ' · 距 ' + _pct(data.info && data.info.distDaily20) +
+        (d50 != null ? ' · 日MA50 ' + _fmtPx(d50) : '') + (d200 != null ? ' · 日MA200 ' + _fmtPx(d200) : ''),
+    });
+  }
+  if (Array.isArray(o.weekly) && o.weekly.length) {
+    rows.push({
+      icon: '●', color: w20 != null && price >= w20 ? '#00E676' : '#ff5252',
+      label: '周线MA20 ' + (w20 != null && price >= w20 ? '上方' : '下方') + '（大级别）',
+      detail: '周MA20 ' + _fmtPx(w20) + ' · 距 ' + _pct(data.info && data.info.distWeekly20) +
+        (w200 != null ? ' · 周MA200 ' + _fmtPx(w200) + ' · 距 ' + _pct(data.info && data.info.distWeekly200) : ''),
+    });
+  }
+
+  // 6) VWAP
+  if (o.vwap && vw != null) {
+    const up = price >= vw;
+    rows.push({
+      icon: '●', color: up ? '#2ecc71' : '#ff6b6b',
+      label: '价在 VWAP ' + (up ? '上方' : '下方') + '（当日成交均价参照）',
+      detail: 'VWAP ' + _fmtPx(vw) + ' · 距 ' + _pct(maDistPct(price, vw)),
+    });
+  }
+
+  // 7) 最近信号
+  const sig = data.info && data.info.lastSignal;
+  if (sig) {
+    const up = sig.side === 'long';
+    const invalid = sig.invalidIdx != null;
+    const dirTxt = up ? '做多' : '做空';
+    const rTxt = (sig.r != null && isFinite(sig.r)) ? _fmtPx(sig.r) : '--';
+    const tp2 = (sig.r != null && isFinite(sig.r)) ? _fmtPx(sig.entry + (up ? 1 : -1) * sig.r * 2) : '--';
+    rows.push({
+      icon: up ? '▲' : '▼', color: invalid ? '#8899aa' : (up ? '#2ecc71' : '#ff6b6b'),
+      label: (sig.type || 'L1') + ' ' + (sig.type === 'L2' ? '密集后打开' : sig.type === 'L3' ? '4H MA20 突破' : (up ? '回踩站稳' : '反弹受阻')) + ' · ' + dirTxt + (invalid ? '（已失效）' : '（有效）'),
+      detail: '入场 ' + _fmtPx(sig.entry) + ' · 防守 ' + _fmtPx(sig.stop) + ' · 1R ' + rTxt + ' · 2R目标 ' + tp2,
+    });
+  } else {
+    rows.push({ icon: '○', color: 'rgba(160,175,190,.85)', label: '暂无可执行信号', detail: '等价格给「收盘态度」：站上/跌破 MA' + (o.fast || 20) });
+  }
+
+  // 8) 等待区 / 乖离
+  const atrPct = (data.info && data.info.atrPct != null) ? data.info.atrPct : null;
+  if (tone === 'bull') rows.push({ icon: '⏳', color: '#2ecc71', label: '等待区：等回踩 MA' + (o.fast || 20) + ' 站稳再做多', detail: mFast != null ? ('回踩带 ' + _fmtPx(mFast) + ' ± 0.2×ATR' + (atrPct != null ? '（≈' + _fmtPx(mFast * atrPct / 100 * 0.2) + '）' : '')) : '' });
+  else if (tone === 'bear') rows.push({ icon: '⏳', color: '#ff6b6b', label: '等待区：等反抽 MA' + (o.fast || 20) + ' 受阻再做空', detail: mFast != null ? ('反抽带 ' + _fmtPx(mFast) + ' ± 0.2×ATR') : '' });
+  else rows.push({ icon: '⏳', color: '#f59e0b', label: '等待区：震荡不猜方向，等均线密集后收盘带量跳出', detail: mFast != null ? ('当前MA' + (o.fast || 20) + ' ' + _fmtPx(mFast)) : '' });
+  if (data.info && data.info.devAtr) {
+    const thr = (atrPct != null && o.devAtr != null) ? (o.devAtr * atrPct) : null;
+    rows.push({ icon: '⚠', color: '#f59e0b', label: '远离均线，勿追涨/追空', detail: '距本周期MA' + (o.fast || 20) + ' ' + _pct(data.info.distFast) + (thr != null ? ' · 阈值 ' + thr.toFixed(2) + '%（' + o.devAtr + '×ATR ' + atrPct.toFixed(2) + '%）' : '') });
+  }
+
+  // 结论
+  let verdict;
+  if (tone === 'bull') verdict = '顺势偏多：等回踩 MA' + (o.fast || 20) + ' 站稳再做多；收盘跌破 MA' + (o.fast || 20) + ' 先减仓观察';
+  else if (tone === 'bear') verdict = '顺势偏空：等反抽 MA' + (o.fast || 20) + ' 受阻再做空；收盘站上 MA' + (o.fast || 20) + ' 转观望';
+  else verdict = '震荡观望：不猜方向，等均线密集后收盘带量跳出密集区再动手';
+  if (sig && sig.invalidIdx != null) verdict += '（最近信号已失效，按防守位认错）';
+
+  return { tone, verdict, rows };
 }

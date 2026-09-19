@@ -3622,6 +3622,7 @@ function maRelData() {
         weekly: cfg.maRelShowWeekly ? MA_REL_DEFAULTS.weekly : [],
         squeezePct: cfg.maRelSqueezePct, devAtr: cfg.maRelDevAtr, swing: cfg.maRelSwing,
         cool: cfg.maRelCool, allowShort: cfg.maRelAllowShort, l3: cfg.maRelL3, vwap: cfg.maRelVwap,
+        showSlow: cfg.maRelShowSlow, showInfo: cfg.maRelShowInfo,
       },
     });
   } catch (e) { data = null; }
