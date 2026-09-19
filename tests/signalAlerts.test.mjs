@@ -23,6 +23,11 @@ globalThis.localStorage = {
 console.log('\n[signalAlerts: 纯函数]');
 {
   ok('SIGNAL_KINDS 含核心种类', !!(SIGNAL_KINDS['srsi-edge-upper'] && SIGNAL_KINDS['alpha-rebal'] && SIGNAL_KINDS['srsi-preview']));
+  // v1.6.25：主图机会点/钩也入流 + 上限 100
+  ok('SIGNAL_KINDS 含机会点/钩四类', !!(SIGNAL_KINDS['srsi-cross-buy'] && SIGNAL_KINDS['srsi-cross-sell'] && SIGNAL_KINDS['srsi-hook-gold'] && SIGNAL_KINDS['srsi-hook-death']));
+  ok('金钩/死钩方向与颜色', kindMeta('srsi-hook-gold').side === 'long' && kindMeta('srsi-hook-gold').color === '#00E676' && kindMeta('srsi-hook-death').side === 'short' && kindMeta('srsi-hook-death').color === '#FF5252');
+  ok('机会点 buy/sell 方向与颜色', kindMeta('srsi-cross-buy').side === 'long' && kindMeta('srsi-cross-sell').side === 'short');
+  ok('容量上限 = 100', MAX_SIGNAL_EVENTS === 100);
   ok('kindMeta 已知种类', kindMeta('srsi-edge-lower').side === 'long' && kindMeta('srsi-edge-lower').severity === 'signal');
   ok('kindMeta 未知回退', kindMeta('zzz').label === 'zzz' && kindMeta(null).label === '未知信号');
   ok('kindMeta 未知 color 有值', /^#/.test(kindMeta('zzz').color));

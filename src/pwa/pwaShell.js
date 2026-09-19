@@ -790,7 +790,7 @@ function renderRecentSignals() {
   const c = $('pwaSigCount');
   if (c) { c.textContent = recentSignals(999).length + ' 条'; }
   if (!box) return;
-  const html = renderRecentSignalsHtml(8);
+  const html = renderRecentSignalsHtml(30);   // v1.6.25：上限 100 条 → 面板多展示（容器可滚动）
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
 }
 

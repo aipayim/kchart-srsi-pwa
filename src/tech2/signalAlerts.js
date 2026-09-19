@@ -10,7 +10,7 @@
 //  - 容量上限：最多保留 MAX_EVENTS 条（时间升序，丢最旧）。
 
 export const SIG_EVENTS_KEY = 'pwa_signal_events';
-export const MAX_SIGNAL_EVENTS = 60;
+export const MAX_SIGNAL_EVENTS = 100;   // v1.6.25：50/60 → 100（用户要求：主图上的信号都要可回溯）
 
 // 事件种类 → 展示元数据（label/side/severity/color）
 // severity: 'trade'=真的成交 | 'signal'=策略信号（带边沿/确认/调仓） | 'preview'=预演（尚未确认）
@@ -21,6 +21,11 @@ export const SIGNAL_KINDS = {
   'srsi-open': { label: '卫星·开仓', side: null, severity: 'trade', color: '#22d3ee' },
   'srsi-close': { label: '卫星·平仓', side: null, severity: 'trade', color: '#8899aa' },
   'srsi-preview': { label: '卫星·预演将破带', side: null, severity: 'preview', color: '#FFB300' },
+  // v1.6.25：主图「机会点 / 钩」也入流（与主图标记一一对应）
+  'srsi-cross-buy': { label: '卫星·机会·跌入超卖（看多）', side: 'long', severity: 'signal', color: '#2ecc71' },
+  'srsi-cross-sell': { label: '卫星·机会·升入超买（看空）', side: 'short', severity: 'signal', color: '#ff6b6b' },
+  'srsi-hook-gold': { label: '卫星·金钩（看多）', side: 'long', severity: 'signal', color: '#00E676' },
+  'srsi-hook-death': { label: '卫星·死钩（看空）', side: 'short', severity: 'signal', color: '#FF5252' },
   'alpha-rebal': { label: '基石·调仓', side: null, severity: 'trade', color: '#22d3ee' },
   'alpha-open': { label: '基石·开仓', side: null, severity: 'trade', color: '#22d3ee' },
   'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa' }

@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, actionCardHtml, clampBoxPos } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, markFxXY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3733,11 +3733,25 @@ console.log('\n[kchart: 机会点 srsiOpportunityMarks / 标记行 markHitsInWin
   ok('机会点：非空', marks.length > 0);
   ok('机会点：每项 t 来自 t15', marks.every(m => t15.includes(m.t)));
   ok('机会点：side 仅 long/short', marks.every(m => m.side === 'long' || m.side === 'short'));
-  ok('机会点：label 含「机会」', marks.every(m => typeof m.label === 'string' && m.label.includes('●机会')));
+  ok('机会点：label 为 ●穿越 / ◆钩', marks.every(m => (m.kind === 'hook' && m.label.startsWith('◆')) || (m.kind === 'cross' && m.label.startsWith('●机会'))));
+  ok('机会点：kind 仅 hook/cross', marks.every(m => m.kind === 'hook' || m.kind === 'cross'));
   ok('机会点：long 侧标注看多', marks.filter(m => m.side === 'long').every(m => m.label.includes('看多')));
   ok('机会点：short 侧标注看空', marks.filter(m => m.side === 'short').every(m => m.label.includes('看空')));
   ok('机会点：两侧都出现（震荡市应有买有卖）', marks.some(m => m.side === 'long') && marks.some(m => m.side === 'short'));
   ok('机会点：side 与 label 方向永远一致', marks.every(m => m.label.includes('看多') === (m.side === 'long')));
+  // v1.6.25：钩优先——同根同侧有钩则丢圆点；两侧独立
+  {
+    const opps = [
+      { t: 1, side: 'short', kind: 'cross' }, { t: 1, side: 'short', kind: 'hook' },   // 同根同侧 → 丢圆点
+      { t: 2, side: 'long', kind: 'cross' }, { t: 2, side: 'short', kind: 'hook' },    // 同根异侧 → 都留
+      { t: 3, side: 'long', kind: 'cross' }                                            // 无钩 → 留
+    ];
+    const kept = filterOpportunityDraws(opps);
+    ok('钩优先：同根同侧圆点被丢弃', kept.length === 4 && !kept.some(o => o.t === 1 && o.kind === 'cross'));
+    ok('钩优先：同根异侧圆点保留', kept.some(o => o.t === 2 && o.kind === 'cross'));
+    ok('钩优先：无钩的圆点保留', kept.some(o => o.t === 3 && o.kind === 'cross'));
+    ok('钩优先：非法输入不抛', filterOpportunityDraws(null).length === 0 && filterOpportunityDraws([null, { t: 1, side: 'long', kind: 'hook' }]).length === 1);
+  }
   ok('机会点：t 升序', marks.every((m, i) => i === 0 || m.t > marks[i - 1].t));
   // 边界：数据不足 / 长度不齐 / 空
   ok('机会点：空数组 → []', srsiOpportunityMarks([], [], { upper: 80, lower: 20 }, p).length === 0);
@@ -3802,6 +3816,10 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('buildMarkList 关卫星则不收成交', buildMarkList({ sigOverlay: true, srsiAutoOn: false, srsiTrades: [{ t: 1, action: 'open', side: 'long' }] }).length === 0);
   ok('buildMarkList 关基石实盘则不收 α', buildMarkList({ sigOverlay: true, alphaLive: false, alphaMarks: [{ t: 1, dir: 1 }] }).length === 0);
   ok('buildMarkList 非有限 t 被过滤', buildMarkList({ sigOverlay: true, opportunities: [{ t: NaN }, { t: 5, side: 'long' }] }).length === 1);
+  ok('buildMarkList 钩机会点→hookGold/hookDeath', (() => {
+    const l = buildMarkList({ sigOverlay: true, opportunities: [{ t: 1, side: 'long', kind: 'hook' }, { t: 2, side: 'short', kind: 'hook' }] });
+    return l[0].kind === 'hookGold' && l[1].kind === 'hookDeath';
+  })());
 
   // ---- markFxXY ----
   const geom = { lo: 90, hi: 110, start: 0, n: 10, xStep: 10, c: [100, 101, 102, 103, 104, 105, 106, 107, 108, 109], t: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] };
@@ -3816,6 +3834,11 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('markFxXY t < t[0] → null', markFxXY(geom, { t: -1, kind: 'oppBuy' }) === null);
   ok('markFxXY 非法 geom/mark → null', markFxXY(null, { t: 1 }) === null && markFxXY(geom, null) === null && markFxXY(geom, { kind: 'oppBuy' }) === null);
   ok('markFxXY 超出右侧取最后一根', markFxXY(geom, { t: 99, kind: 'oppBuy' }).x === markFxXY(geom, { t: 9, kind: 'oppBuy' }).x);
+  // v1.6.25：钩菱形（金钩在下 / 死钩在上）
+  const PH = markFxXY(geom, { t: 3, kind: 'hookGold' });
+  const PD = markFxXY(geom, { t: 3, kind: 'hookDeath' });
+  ok('markFxXY 金钩菱形在下方', PH.shape === 'diamond' && Math.abs(PH.y - PH.base - 16) < 1e-9 && PH.color === '#00E676');
+  ok('markFxXY 死钩菱形在上方', PD.shape === 'diamond' && Math.abs(PD.y - (PD.base - 16)) < 1e-9 && PD.color === '#FF5252');
 
   // ---- clampBoxPos ----
   ok('clampBoxPos 正常不越界', deepEq(clampBoxPos(50, 60, 100, 50, 400, 300), { x: 50, y: 60 }));
@@ -3862,6 +3885,17 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   const h2 = actionCardHtml(v3);
   ok('actionCardHtml 逆势时含 warn 段', h2.includes('kac-warn') && h2.includes('逆日内趋势'));
   ok('actionCardHtml 空视图 → 空串', actionCardHtml(null) === '');
+
+  // ---- v1.6.25：图例单一数据源 ----
+  const L = legendItems();
+  ok('legendItems 共 10 项', L.length === 10);
+  ok('legendItems 含金钩与死钩（旧硬编码漏了死钩）', L.some(x => x.label === '金钩') && L.some(x => x.label === '死钩'));
+  ok('legendItems 含机会多/机会空（旧硬编码漏了）', L.some(x => x.label === '机会多') && L.some(x => x.label === '机会空'));
+  ok('legendItems 含 SRSI 平仓与 α 平仓', L.some(x => x.label === 'SRSI平仓') && L.some(x => x.label === 'α平'));
+  ok('legendItems 每项有 icon/color/label/title', L.every(x => x.icon && x.color && x.label && x.title));
+  const LH = renderLegendHtml();
+  ok('renderLegendHtml 含全部 label 与 title', L.every(x => LH.includes(x.label) && LH.includes(x.title)));
+  ok('renderLegendHtml 输出 <i> 标签', (LH.match(/<i /g) || []).length === 10);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
