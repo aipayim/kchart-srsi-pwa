@@ -638,3 +638,82 @@ body.pwa .kchart-maintools .mt-legend{display:none}
   .pwa-toast-host{max-width:94vw}
   .pwa-toast{font-size:11px;padding:6px 10px}
 }
+
+/* ============================================================================
+   v1.6.37：分信号自定义提示音（设置页）
+   ============================================================================ */
+body.pwa .pwa-snd-head{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+body.pwa .pwa-snd-box{margin:4px 0 10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.02)}
+body.pwa .pwa-snd-note{font-size:10.5px;color:var(--text2);margin-bottom:6px;line-height:1.35}
+body.pwa .pwa-snd-group{font-size:10px;font-weight:800;color:var(--accent);letter-spacing:.4px;margin:8px 0 2px;
+  padding-top:6px;border-top:1px dashed rgba(255,255,255,.08)}
+body.pwa .pwa-snd-group:first-child{margin-top:0;padding-top:0;border-top:none}
+body.pwa .pwa-snd-item{padding:6px 0!important;border-bottom:1px solid rgba(255,255,255,.03)!important}
+body.pwa .pwa-snd-item:last-child{border-bottom:none!important}
+body.pwa .pwa-snd-item > label{display:inline-flex;align-items:center;gap:5px;min-width:0;flex:1 1 auto;
+  font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+body.pwa .pwa-snd-ic{flex:none;font-weight:800}
+body.pwa .pwa-snd-ctl{display:inline-flex;align-items:center;gap:6px;flex:none}
+body.pwa .pwa-snd-sel{background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:8px;
+  font-family:inherit;font-size:10.5px;padding:4px 6px;max-width:120px}
+body.pwa .pwa-snd-sel:hover{border-color:var(--accent)}
+body.pwa .pwa-snd-test{background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:8px;
+  font-family:inherit;font-size:10.5px;font-weight:600;padding:5px 10px;cursor:pointer}
+body.pwa .pwa-snd-test:hover{border-color:var(--accent);color:var(--accent)}
+body.pwa .pwa-snd-test:active{background:var(--accent);color:#04121c}
+@media (max-width:640px){
+  body.pwa .pwa-snd-item{flex-wrap:wrap}
+  body.pwa .pwa-snd-item > label{flex:1 1 100%}
+  body.pwa .pwa-snd-ctl{flex:1 1 100%;justify-content:flex-end}
+  body.pwa .pwa-snd-sel{max-width:none;flex:1 1 auto}
+}
+
+/* ============================================================================
+   v1.6.37 满屏盯盘（只显示主图，放大铺满；可切右侧信息栏）+ 全场景平移缩放
+   全部规则限定 body.pwa 作用域（主系统零影响）
+   ============================================================================ */
+body.pwa #pwaFsBtn{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:9px;flex:0 0 auto;
+  border:1px solid var(--border);background:var(--card2);color:var(--text2);font-size:15px;cursor:pointer;margin-left:6px}
+body.pwa #pwaFsBtn:hover{color:var(--accent);border-color:var(--accent)}
+
+/* 满屏：隐藏所有非主图块 */
+body.pwa.kfs .pwa-appbar,
+body.pwa.kfs .pwa-kpiwrap,
+body.pwa.kfs .pwa-symbar,
+body.pwa.kfs #pwaTabBar,
+body.pwa.kfs .pwa-rail,
+body.pwa.kfs #pwaInstall,
+body.pwa.kfs .pwa-toolbar,
+body.pwa.kfs #kchartRuleMonitor,
+body.pwa.kfs #kchartOverviewWrap,
+body.pwa.kfs #kchartDiscWrap,
+body.pwa.kfs #kchartHint,
+body.pwa.kfs #discHud,
+body.pwa.kfs #ktThumbBar{display:none!important}
+body.pwa.kfs .pwa-body{overflow:hidden}
+body.pwa.kfs .pwa-content{overflow:hidden;padding:0}
+body.pwa.kfs .pwa-grid-k{grid-template-columns:1fr;gap:0}
+body.pwa.kfs:not(.kfs-info) #pwaCockpitCol{display:none}
+/* 主图卡铺满视口（用 --pwa-z 反算，兼容页面缩放） */
+body.pwa.kfs .pwa-card.pwa-scan{position:fixed;left:0;top:0;z-index:60;
+  width:calc(100vw / var(--pwa-z,1));height:calc(100vh / var(--pwa-z,1));
+  display:flex;flex-direction:column;border-radius:0;border:none;background:var(--bg);box-shadow:none;overflow:hidden}
+body.pwa.kfs .pwa-card.pwa-scan>.pwa-card-h{display:none!important}
+body.pwa.kfs .pwa-card.pwa-scan>.pwa-card-b{flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:0!important}
+body.pwa.kfs .pwa-card.pwa-scan .kchart-box{flex:1 1 auto;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;border:none;background:transparent;padding:0;height:100%}
+body.pwa.kfs .pwa-card.pwa-scan #kchartCanvas{width:100%;height:auto}
+/* 信息栏模式：整个 PWA 只剩右侧面板 */
+body.pwa.kfs.kfs-info .pwa-card.pwa-scan{display:none}
+body.pwa.kfs.kfs-info #pwaCockpitCol{display:block;position:fixed;left:0;top:0;z-index:60;
+  width:calc(100vw / var(--pwa-z,1));height:calc(100vh / var(--pwa-z,1));
+  overflow-y:auto;overflow-x:hidden;padding:10px 10px 64px;box-sizing:border-box;background:var(--bg)}
+/* 满屏浮条（底部全宽，避免缩放坐标偏差） */
+body.pwa.kfs #kfsBar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:70;align-items:center;justify-content:center;gap:6px;
+  padding:6px 10px calc(6px + env(safe-area-inset-bottom));background:rgba(10,15,24,.9);
+  border-top:1px solid var(--border);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  font-size:10.5px;color:var(--text2)}
+body.pwa.kfs #kfsBar button{background:var(--card2);border:1px solid var(--border);color:var(--text);
+  font-family:inherit;font-size:11px;padding:5px 12px;border-radius:999px;cursor:pointer;white-space:nowrap}
+body.pwa.kfs #kfsBar button:hover{border-color:var(--accent);color:var(--accent)}
+body.pwa.kfs #kfsBar .pwa-kfs-hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:640px){body.pwa.kfs #kfsBar .pwa-kfs-hint{display:none}}

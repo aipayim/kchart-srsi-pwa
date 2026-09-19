@@ -134,6 +134,7 @@
                     <button type="button" id="pwaTfNext" aria-label="下一周期">›</button>
                   </span>
                   <button class="pwa-more" id="pwaToolMore" type="button" title="更多图表设置（预设/根线/子图/主图叠加 SRSI/图例）" aria-expanded="false">⚙</button>
+                  <button class="pwa-more" id="pwaFsBtn" type="button" title="满屏盯盘（只显示主图，放大铺满；可拖动平移/滚轮缩放，Esc 退出）">⛶</button>
                   <span class="pwa-spacer"></span>
                   <div class="pwa-legend hide-phone" id="pwaLegend"></div>
                 </div>
@@ -309,6 +310,13 @@
 
     <!-- ===== 底部 Tab 栏（触屏） ===== -->
     <nav id="pwaTabBar"></nav>
+
+    <!-- ===== 满屏盯盘浮条（v1.6.37；body.pwa.kfs 时显示） ===== -->
+    <div id="kfsBar" class="pwa-kfsbar" hidden>
+      <button type="button" id="kfsExit" title="退出满屏（Esc）">✕ 退出</button>
+      <button type="button" id="kfsInfo" title="切换 主图 / 信息栏">📊 信息</button>
+      <span class="pwa-kfs-hint">拖动平移 · 双指/滚轮缩放 · 竖向拖动滚动页面</span>
+    </div>
   </div>
 
   <div id="pwaToastHost" class="pwa-toast-host"></div>

@@ -13,6 +13,7 @@ import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
+import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, SOUND_KIND_GROUPS } from './signalSounds.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -559,6 +560,73 @@ function bindStorageCard() {
   renderStorageCard();
 }
 
+// ---- 分信号自定义音效（设置页，v1.6.37）----
+// 每行 = 主图标记符 + 中文信号名（与「最近信号」/主图图例同源）+ 音效下拉 + 试听；按 SOUND_KIND_GROUPS 分组。
+function soundRowsHtml(map) {
+  const cat = soundCatalog();
+  return SOUND_KIND_GROUPS.map(g => {
+    const rows = g.kinds.map(k => {
+      const m = kindMeta(k);
+      const cur = resolveSound(k, m.severity, map);
+      const opts = cat.map(p => '<option value="' + p.id + '"' + (p.id === cur ? ' selected' : '') + '>' + p.name + (p.silent ? '（静音）' : '') + '</option>').join('');
+      return '<div class="setting-row pwa-snd-item" data-kind="' + k + '">' +
+        '<label><span class="pwa-snd-ic" style="color:' + m.color + '">' + (m.icon || '•') + '</span>' + m.label + '</label>' +
+        '<span class="pwa-snd-ctl">' +
+          '<select class="pwa-snd-sel" data-kind="' + k + '" aria-label="' + m.label + ' 提示音">' + opts + '</select>' +
+          '<button type="button" class="pwa-snd-test" data-kind="' + k + '">试听</button>' +
+        '</span></div>';
+    }).join('');
+    return '<div class="pwa-snd-group">' + g.name + '</div>' + rows;
+  }).join('');
+}
+function renderSoundRows() {
+  const box = $('pwaSndRows');
+  if (!box) return;
+  box.innerHTML = soundRowsHtml(readSoundMap());
+}
+function updateSoundNote() {
+  const n = $('pwaSndNote');
+  if (!n) return;
+  const on = prefOn('sound');
+  n.textContent = on ? '总开关已开启 · 每个信号按下方设置发声（预演默认静音）' : '⚠ 上方「信号提示音」总开关为关闭状态 → 下方设置暂不生效';
+  n.style.color = on ? '' : '#f59e0b';
+}
+function bindSoundSettings() {
+  const toggle = $('pwaSndToggle'), box = $('pwaSndBox');
+  if (toggle && box && !toggle.__bound) {
+    toggle.__bound = true;
+    let open = false;
+    try { open = localStorage.getItem('pwa_snd_open') === '1'; } catch (e) {}
+    const apply = (v) => { box.style.display = v ? '' : 'none'; toggle.textContent = v ? '收起 ▴' : '展开 ▾'; };
+    apply(open);
+    toggle.addEventListener('click', () => { open = !open; apply(open); try { localStorage.setItem('pwa_snd_open', open ? '1' : '0'); } catch (e) {} });
+  }
+  const reset = $('pwaSndReset');
+  if (reset && !reset.__bound) {
+    reset.__bound = true;
+    reset.addEventListener('click', () => { writeSoundMap({}); renderSoundRows(); });
+  }
+  const rows = $('pwaSndRows');
+  if (rows && !rows.__bound) {
+    rows.__bound = true;
+    rows.addEventListener('change', (e) => {
+      const sel = e.target && e.target.closest ? e.target.closest('.pwa-snd-sel') : null;
+      if (!sel) return;
+      const k = sel.getAttribute('data-kind');
+      const map = readSoundMap(); map[k] = sel.value; writeSoundMap(map);
+    });
+    rows.addEventListener('click', (e) => {
+      const btn = e.target && e.target.closest ? e.target.closest('.pwa-snd-test') : null;
+      if (!btn) return;
+      const k = btn.getAttribute('data-kind');
+      const sel = rows.querySelector('.pwa-snd-sel[data-kind="' + k + '"]');
+      unlockAudio();   // 试听必须在用户手势内解锁 AudioContext（否则被浏览器静默阻止）
+      try { playSound(_audioCtx, sel ? sel.value : resolveSound(k, kindMeta(k).severity, readSoundMap())); } catch (e) {}
+    });
+  }
+  updateSoundNote();
+}
+
 function initSettings() {
   // 三张设置卡默认展开（首次）；用户手动收起后尊重（pwa_set_<id>）
   ['pwaSettings', 'pwaSrcCard', 'kchartSrsiCardWrap'].forEach(id => {
@@ -588,6 +656,11 @@ function initSettings() {
       '<div class="setting-row"><label>信号通知</label><select id="pwaNotifSel"><option value="0">关闭</option><option value="1">开启（需浏览器授权）</option></select></div>' +
       '<div class="setting-row"><label>信号页面提醒</label><select id="pwaToastSel"><option value="1">开启（顶部提示条 + 最近信号列表）</option><option value="0">关闭</option></select></div>' +
       '<div class="setting-row"><label>信号提示音</label><select id="pwaSoundSel"><option value="1">开启</option><option value="0">关闭</option></select></div>' +
+      '<div class="setting-row pwa-snd-row"><label>分信号音效</label><span class="pwa-snd-head">' +
+        '<span class="pwa-dim" id="pwaSndHint">每种信号可单独设置</span>' +
+        '<button type="button" id="pwaSndToggle">展开 ▾</button>' +
+        '<button type="button" id="pwaSndReset">全部恢复默认</button></span></div>' +
+      '<div class="pwa-snd-box" id="pwaSndBox" style="display:none"><div class="pwa-snd-note" id="pwaSndNote"></div><div id="pwaSndRows"></div></div>' +
       '<div class="setting-row"><label>页面缩放</label><span class="pwa-zoomctl">' +
         '<button type="button" id="pwaZoomDown">－</button><span class="pwa-dim" id="pwaZoomInfo">100%</span><button type="button" id="pwaZoomUp">＋</button><button type="button" id="pwaZoomReset2">复位</button></span></div>' +
       '<div class="setting-row"><label>本地数据</label><button type="button" id="pwaClearLocal">清空本地设置并重建</button></div>' +
@@ -603,7 +676,7 @@ function initSettings() {
     ts.addEventListener('change', () => setAlertPref('toast', ts.value === '1'));
     const ss = $('pwaSoundSel');
     ss.value = prefOn('sound') ? '1' : '0';
-    ss.addEventListener('change', () => { setAlertPref('sound', ss.value === '1'); if (ss.value === '1') unlockAudio(); });
+    ss.addEventListener('change', () => { setAlertPref('sound', ss.value === '1'); if (ss.value === '1') unlockAudio(); updateSoundNote(); });
     const zr = $('pwaZoomReset');
     if (zr) zr.addEventListener('click', () => { const l = $('pwaZoomLbl'); if (l) l.click(); });
     const zd = $('pwaZoomDown');
@@ -616,6 +689,8 @@ function initSettings() {
     if (cl) cl.addEventListener('click', () => { if (globalThis.pwaClearAll) globalThis.pwaClearAll(); });
     const vi = $('pwaVerInfo');
     if (vi) vi.textContent = 'v' + APP_VERSION + ' · ' + String(APP_BUILD_TIME).slice(0, 10);
+    renderSoundRows();
+    bindSoundSettings();
   }
   syncZoomInfo();
 }
@@ -724,6 +799,62 @@ function bindTfCycle() {
   const prev = $('pwaTfPrev'), next = $('pwaTfNext');
   if (prev && !prev.__bound) { prev.__bound = true; prev.addEventListener('click', () => cycleMainTF(-1)); }
   if (next && !next.__bound) { next.__bound = true; next.addEventListener('click', () => cycleMainTF(1)); }
+}
+
+// ---------- v1.6.37：满屏盯盘（只显示主图；可切右侧信息栏）----------
+const FS_INFO_KEY = 'pwa_fs_info';
+export function isFullscreenUI() { return typeof document !== 'undefined' && !!document.body && document.body.classList.contains('kfs'); }
+function _kfsInfoOn() { return typeof document !== 'undefined' && !!document.body && document.body.classList.contains('kfs-info'); }
+function _setKfsBarLabel() {
+  const btn = $('kfsInfo');
+  if (btn) { btn.textContent = _kfsInfoOn() ? '📈 主图' : '📊 信息'; btn.title = _kfsInfoOn() ? '切回主图' : '切换为信息栏（整个 PWA 只剩右侧面板）'; }
+}
+// 进入/退出满屏；退出时移除 kfs-info（必须回到主图模式），一切恢复原样
+export function setFullscreenUI(on) {
+  if (typeof document === 'undefined' || !document.body) return;
+  const body = document.body;
+  const api = globalThis.kchartApi;
+  if (on) {
+    body.classList.add('kfs');
+    body.classList.remove('kfs-info');           // 进入满屏总是主图模式
+    try { localStorage.setItem(FS_INFO_KEY, '0'); } catch (e) {}
+    const bar = $('kfsBar'); if (bar) bar.hidden = false;
+    _setKfsBarLabel();
+    try { if (api && api.setFullscreen) api.setFullscreen(true); } catch (e) {}
+  } else {
+    body.classList.remove('kfs');
+    body.classList.remove('kfs-info');
+    const bar = $('kfsBar'); if (bar) bar.hidden = true;
+    try { if (api && api.setFullscreen) api.setFullscreen(false); } catch (e) {}
+    try { refreshShell(); } catch (e) {}
+  }
+}
+export function toggleFullscreenUI() { setFullscreenUI(!isFullscreenUI()); }
+// 满屏内切换「主图 ↔ 信息栏」
+export function setKfsInfoMode(on) {
+  if (typeof document === 'undefined' || !document.body || !isFullscreenUI()) return;
+  document.body.classList.toggle('kfs-info', !!on);
+  _setKfsBarLabel();
+  if (on) { try { refreshShell(); } catch (e) {} }
+  else { const api = globalThis.kchartApi; try { if (api && api.render) api.render(); } catch (e) {} }
+}
+function bindFullscreen() {
+  const fs = $('pwaFsBtn');
+  if (fs && !fs.__bound) { fs.__bound = true; fs.addEventListener('click', () => toggleFullscreenUI()); }
+  const exit = $('kfsExit');
+  if (exit && !exit.__bound) { exit.__bound = true; exit.addEventListener('click', () => setFullscreenUI(false)); }
+  const info = $('kfsInfo');
+  if (info && !info.__bound) { info.__bound = true; info.addEventListener('click', () => setKfsInfoMode(!_kfsInfoOn())); }
+  if (typeof document !== 'undefined' && !document.__kfsEscBound) {
+    document.__kfsEscBound = true;
+    document.addEventListener('keydown', (e) => { if ((e.key === 'Escape' || e.key === 'Esc') && isFullscreenUI()) setFullscreenUI(false); });
+  }
+  if (typeof window !== 'undefined' && !window.__kfsResizeBound) {
+    window.__kfsResizeBound = true;
+    const onResize = () => { if (!isFullscreenUI()) return; const api = globalThis.kchartApi; try { if (api && api.setFullscreen) api.setFullscreen(true); } catch (e) {} };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+  }
 }
 
 // ---------- 工具栏 ⚙ / 币对弹层 ----------
@@ -867,20 +998,15 @@ function unlockAudio() {
     o.start(); o.stop(_audioCtx.currentTime + 0.02);
   } catch (e) { /* 无声环境忽略 */ }
 }
-function beep(sev) {
+// 分信号自定义提示音（v1.6.37）：按 `pwa_signal_sounds` 映射选择内置合成音效。
+// 预演类是否静音**由映射表决定**（默认 silent），不再硬编码跳过 preview。
+function alertSound(kind, severity) {
   try {
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
     if (!AC) return;
     if (!_audioCtx) _audioCtx = new AC();
     if (_audioCtx.state === 'suspended') { try { _audioCtx.resume(); } catch (e) {} }
-    const o = _audioCtx.createOscillator(), g = _audioCtx.createGain();
-    o.type = 'sine'; o.frequency.value = sev === 'trade' ? 1180 : 880;
-    o.connect(g); g.connect(_audioCtx.destination);
-    const t = _audioCtx.currentTime;
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(0.07, t + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
-    o.start(t); o.stop(t + 0.36);
+    playSound(_audioCtx, resolveSound(kind, severity, readSoundMap()));
   } catch (e) { /* 无声环境忽略 */ }
 }
 function notifyDesktop(ev) {
@@ -899,7 +1025,7 @@ export function installSignalAlertSink() {
     if (ev) {
       const sev = kindMeta(ev.kind).severity;
       if (prefOn('toast')) showToast(ev);
-      if (prefOn('sound') && sev !== 'preview') beep(sev);
+      if (prefOn('sound')) alertSound(ev.kind, sev);   // 声音种类由映射决定（含静音）
       notifyDesktop(ev);
     }
     renderRecentSignals();
@@ -1154,6 +1280,7 @@ export function initPwaShell() {
   bindTopAutoHide();
   bindToolbar();
   bindTfCycle();
+  bindFullscreen();
   bindCollapseToggles();
   applyCollapseUI();
   initSettings();

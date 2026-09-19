@@ -117,6 +117,12 @@ const SUB_GAP = 22;          // 子图标题栏+间距
 const STATUS_H = 22;         // GOAL21：主图底部状态带（组合实盘/α 信号角标专用，不再压 K 线与 SRSI 带）
 const BASE_H = MAIN_H + PAD_T + PAD_B + STATUS_H;
 
+// v1.6.37：满屏盯盘（只显示主图，放大铺满视口）时主图高度动态化。
+// _dynMainH 为 null 时一切读取走常量 MAIN_H（非满屏逐位零变化）。
+let _dynMainH = null;
+let _fsOn = false;
+export function mainH() { return (_dynMainH != null && isFinite(_dynMainH) && _dynMainH > 0) ? _dynMainH : MAIN_H; }
+
 const STATE_KEY = 'smartTrader_kchart';
 
 const DEFAULT_SRSI = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
@@ -742,6 +748,11 @@ export function defaultKConfig() {
 
 export let cfg = defaultKConfig();
 
+// v1.6.37：视图平移偏移（距最新多少根，0=贴最新）。会话态，不落盘（persist 时剔除；loadCfg/切币/切周期归零）。
+let _panTouch = null;   // 触屏平移状态 {x0,y0,off0,dir}
+let _panMouse = null;   // 鼠标平移状态 {x0,off0}
+let _viewPill = null;   // 「回到最新」小胶囊 DOM
+
 // ---- 内部状态 ----
 let _cv = null, _ctx = null;
 // v1.5.58：行动卡 canvas 热区方案废弃（真机命中不可靠）——「实时监测」改为「主图叠加 SRSI」工具栏药丸按钮（DOM 顶层，见 renderMultiTfChips）
@@ -772,6 +783,7 @@ function readStore() {
 }
 function normalizeCfg(c) {
   if (!c) c = defaultKConfig();
+  c.viewOff = 0;   // v1.6.37：视图平移偏移为会话态，加载/切币/切周期一律归零（不落盘）
   if (!KLINE_TF.includes(c.mainTF)) c.mainTF = '5m';
   const sel = {}; KLINE_TF.forEach(tf => { sel[tf] = !!c.klineSel[tf]; }); c.klineSel = sel;
   if (!c.srsiByTf) c.srsiByTf = buildSrsiByTf();
@@ -1152,8 +1164,9 @@ export function persist() {
   } catch (e) {}
   _store.bySymbol[cfg.symbol] = cfg;
   _store.lastSymbol = cfg.symbol;
-  _safeSetItem(STATE_KEY, JSON.stringify(_store));
-  try { sessionStorage.setItem(STATE_KEY + ':ss', JSON.stringify(_store)); } catch (e) {}
+  // v1.6.37：视图平移偏移（viewOff）为会话态，不写入持久化（从序列化副本剔除，内存 cfg 不受影响）
+  _safeSetItem(STATE_KEY, JSON.stringify(_store, (k, v) => (k === 'viewOff' ? undefined : v)));
+  try { sessionStorage.setItem(STATE_KEY + ':ss', JSON.stringify(_store, (k, v) => (k === 'viewOff' ? undefined : v))); } catch (e) {}
   syncPwaKeys();   // PWA 模式：额外写入私有键（按币对），与共享 smartTrader_kchart 解耦
 }
 // ---- 跨实例同步：同源另一标签/主屏App 写入存档时，立即重载当前币对配置，避免陈旧实例互相覆盖 ----
@@ -2511,6 +2524,8 @@ const SUB_COLORS = { rsi: '#ffd740', srsi: '#c58aff', macd: '#ffffff' };
 
 // ---- 计算子图栈：按 show + 顺序，展开 SRSI 多子图 ----
 function buildSubList() {
+  // v1.6.37：满屏盯盘 = 只显示主图（用户裁定）——不展开任何 RSI/SRSI/MACD 子图
+  if (_fsOn) return [];
   const list = [];
   const all = ['rsi', 'srsi', 'macd'];
   const order = (cfg.subOrder && cfg.subOrder.length ? cfg.subOrder : all).filter(k => cfg.show[k]);
@@ -3568,10 +3583,23 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
 }
 
 // ---- 画布尺寸同步（DPR）----
+// v1.6.37：满屏时 H 由「视口宽高比」决定，主图高度 = H - PAD_T - PAD_B - STATUS_H（子图恒空）
+function fsLogicalH() {
+  let vw = 0, vh = 0;
+  try { vw = (window.innerWidth || 0); vh = (window.innerHeight || 0); } catch (e) {}
+  if (vw > 0 && vh > 0) return Math.max(BASE_H, Math.min(4000, Math.round(W * (vh / vw))));
+  return BASE_H;
+}
 function syncCanvasSize() {
   if (!_cv) return;
   const nSub = buildSubList().length;
-  const H = BASE_H + nSub * (SUB_H + SUB_GAP); // GOAL21：BASE_H 已含 STATUS_H
+  let H = BASE_H + nSub * (SUB_H + SUB_GAP); // GOAL21：BASE_H 已含 STATUS_H
+  if (_fsOn) {
+    H = fsLogicalH();
+    _dynMainH = Math.max(120, H - PAD_T - PAD_B - STATUS_H);
+  } else {
+    _dynMainH = null;
+  }
   const dpr = Math.max(1, window.devicePixelRatio || 1);
   let bw, bh;
   if (typeof _cv.getBoundingClientRect === 'function') {
@@ -3695,17 +3723,18 @@ function drawMaRelation(ctx) {
   const m = maRelData();
   if (!g || !m) return;
   const { lo, hi, start, n, xStep, c, t } = g;
+  const end = (g.end != null) ? g.end : c.length;
   const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
-  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
-  const inWin = (i) => i >= start && i < c.length;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * mainH();
+  const inWin = (i) => i >= start && i < end;
   const line = (arr, st) => {
     if (!Array.isArray(arr)) return;
     ctx.save();
-    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, MAIN_H); ctx.clip();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, mainH()); ctx.clip();
     ctx.strokeStyle = st.c; ctx.lineWidth = st.w; ctx.setLineDash(st.dash || []);
     ctx.beginPath();
     let started = false;
-    for (let i = Math.max(0, start); i < c.length; i++) {
+    for (let i = Math.max(0, start); i < end; i++) {
       const v = arr[i];
       if (v == null || !Number.isFinite(v)) { started = false; continue; }
       const x = X(i), y = Y(v);
@@ -3725,7 +3754,7 @@ function drawMaRelation(ctx) {
   // 信号：箭头 + 失效叉 + 防守线 + 1R/2R（只画窗口内、最多最近 24 个——理论要求「信号要克制」，避免箭头过密）
   const sigs = (m.signals || []).filter(s => inWin(s.i)).slice(-24);
   ctx.save();
-  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, MAIN_H); ctx.clip();
+  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, mainH()); ctx.clip();
   for (const s of sigs) {
     const x = X(s.i), yb = Y(c[s.i]);
     const up = s.side === 'long';
@@ -3740,10 +3769,10 @@ function drawMaRelation(ctx) {
     ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(s.type, x, ay + dir * 16);
     // 防守线（从信号根到失效/最后一根）
-    const iEnd = s.invalidIdx != null ? s.invalidIdx : c.length - 1;
+    const iEnd = s.invalidIdx != null ? s.invalidIdx : end - 1;
     if (inWin(iEnd)) {
       ctx.strokeStyle = col; ctx.globalAlpha = .55; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
-      ctx.beginPath(); ctx.moveTo(x, Y(s.stop)); ctx.lineTo(X(Math.min(iEnd, c.length - 1)), Y(s.stop)); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, Y(s.stop)); ctx.lineTo(X(Math.min(iEnd, end - 1)), Y(s.stop)); ctx.stroke();
       ctx.setLineDash([]); ctx.globalAlpha = 1;
     }
     // 失效叉
@@ -3757,7 +3786,7 @@ function drawMaRelation(ctx) {
   // 最近一个信号的 1R / 2R 参考线
   const last = sigs.length ? sigs[sigs.length - 1] : null;
   if (last && last.r > 0) {
-    const iEnd = Math.min(last.invalidIdx != null ? last.invalidIdx : c.length - 1, c.length - 1);
+    const iEnd = Math.min(last.invalidIdx != null ? last.invalidIdx : end - 1, end - 1);
     if (inWin(iEnd)) {
       const dir = last.side === 'long' ? 1 : -1;
       const x1 = X(last.i), x2 = X(iEnd);
@@ -3924,7 +3953,7 @@ function _actionCardDefaultPos(box) {
   const Hlog = (_cv && _cv.__logicalH) || BASE_H;
   const sx = (_cv && _cv.offsetWidth ? _cv.offsetWidth / W : 1);
   const sy = (_cv && _cv.offsetHeight ? _cv.offsetHeight / Hlog : 1);
-  return { x: (_cv ? _cv.offsetLeft : 0) + (PAD_L + 6) * sx, y: (_cv ? _cv.offsetTop : 0) + ((PAD_T + MAIN_H) / 2 - 40) * sy };
+  return { x: (_cv ? _cv.offsetLeft : 0) + (PAD_L + 6) * sx, y: (_cv ? _cv.offsetTop : 0) + ((PAD_T + mainH()) / 2 - 40) * sy };
 }
 
 function _placeActionCard(el, box) {
@@ -3972,6 +4001,60 @@ function bindActionCardDrag(el, box) {
 }
 
 // 行动卡 DOM 渲染（签名守卫；内容与 canvas 回退共用 actionCardView）
+// ============================================================
+// v1.6.37：满屏盯盘（只显示主图，放大铺满视口）+ 视图平移/缩放（全场景）
+// ============================================================
+export function isFullscreen() { return _fsOn; }
+export function setFullscreen(on) {
+  const next = !!on;
+  _fsOn = next;
+  if (!_fsOn) { _dynMainH = null; _subRegions = []; }
+  if (_cv) { try { syncCanvasSize(); renderKChart(); } catch (e) {} }
+  return _fsOn;
+}
+export function toggleFullscreen() { setFullscreen(!_fsOn); return _fsOn; }
+
+// 当前主图序列长度（满屏/平移取数用）
+function _mainLen() { try { return nativeMain(cfg.symbol, cfg.mainTF).c.length || 0; } catch (e) { return 0; } }
+
+// 把 cfg.viewOff 钳制到合法区间（缩放 bars / 切币后调用）
+export function clampViewOff() {
+  const w = viewWindow(_mainLen(), cfg.bars, cfg.viewOff);
+  if (cfg.viewOff !== w.off) cfg.viewOff = w.off;
+  return cfg.viewOff;
+}
+
+// 从拖拽起点按逻辑像素位移平移：dxLogical>0（向右拖）= 看更早数据 → off 增大
+function panFrom(startOff, dxLogical) {
+  const w = viewWindow(_mainLen(), cfg.bars, 0);
+  if (!w.n) return;
+  const xStep = (W - PAD_L - PAD_R) / w.n;
+  const no = Math.round(startOff + dxLogical / xStep);
+  const clamped = Math.max(0, Math.min(w.maxOff, no));
+  if (clamped !== cfg.viewOff) { cfg.viewOff = clamped; renderKChart(); }
+}
+
+// 「回到最新」小胶囊（viewOff>0 时显示；pointer-events 仅在该元素上开启，不影响 canvas 取值）
+function syncViewPill() {
+  if (typeof document === 'undefined' || !_cv) return;
+  const box = _cv.parentElement;
+  if (!box || typeof box.appendChild !== 'function') return;
+  if (!_viewPill || !_viewPill.isConnected) {
+    let el = document.getElementById('kchartViewPill');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kchartViewPill';
+      el.style.cssText = 'position:absolute;left:50%;transform:translateX(-50%);top:8px;z-index:7;pointer-events:auto;cursor:pointer;font:11px sans-serif;color:#e6f1ff;background:rgba(16,22,30,.92);border:1px solid rgba(34,211,238,.5);border-radius:999px;padding:4px 12px;box-shadow:0 2px 10px rgba(0,0,0,.45);white-space:nowrap';
+      el.addEventListener('click', () => { cfg.viewOff = 0; renderKChart(); });
+      box.appendChild(el);
+    }
+    _viewPill = el;
+  }
+  const off = cfg.viewOff || 0;
+  if (off > 0) { _viewPill.style.display = ''; _viewPill.textContent = '⏸ 历史 -' + off + ' 根 · 点此回到最新'; }
+  else _viewPill.style.display = 'none';
+}
+
 function renderActionCardDom() {
   if (typeof document === 'undefined' || !_cv) return;
   const box = _cv.parentElement;
@@ -4029,7 +4112,7 @@ export function renderKChart() {
 
   // 子图
   const subList = buildSubList();
-  let y0 = PAD_T + MAIN_H + STATUS_H + 2; // GOAL21：子图下移，让出主图底部状态带
+  let y0 = PAD_T + mainH() + STATUS_H + 2; // GOAL21：子图下移，让出主图底部状态带
   const regs = [];
   subList.forEach((sub, idx) => {
     const y1 = y0 + SUB_H;
@@ -4047,6 +4130,7 @@ export function renderKChart() {
     y0 = y1 + SUB_GAP;
   });
   _subRegions = regs;
+  try { syncViewPill(); } catch (e) {}
 
   // 拖拽指示线
   if (_drag && _drag.moved && _drag.curY != null) {
@@ -4247,33 +4331,34 @@ function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = nativeMain(sym, tf);
   const bars = cfg.bars;
-  const n = Math.min(bars, c.length);
+  const vw = viewWindow(c.length, bars, cfg.viewOff);
+  const n = vw.n;
   if (n < 2) return false;
-  const start = c.length - n;
+  const start = vw.start, end = vw.end;
   const plotW = W - PAD_L - PAD_R;
-  const mainBottom = PAD_T + MAIN_H;
+  const mainBottom = PAD_T + mainH();
   const xStep = plotW / n;
   const cw = Math.max(1, xStep * 0.72);
 
   let lo = Infinity, hi = -Infinity;
-  for (let i = start; i < c.length; i++) {
+  for (let i = start; i < end; i++) {
     if (l[i] != null && isFinite(l[i]) && l[i] < lo) lo = l[i];
     if (h[i] != null && isFinite(h[i]) && h[i] > hi) hi = h[i];
   }
   if (!isFinite(lo) || !isFinite(hi) || hi <= lo) { lo = c[c.length - 1] * 0.999; hi = c[c.length - 1] * 1.001; }
   const pad = (hi - lo) * 0.08 || hi * 0.001;
   lo -= pad; hi += pad;
-  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * mainH();
   const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
   // v1.6.29：缓存主图几何 → 供标记光晕覆盖层（markFxXY）像素级对齐；含 h/l 供标记按高低点锚定
-  _mainGeom = { sym, tf, lo, hi, start, n, xStep, c, h, l, t };
+  _mainGeom = { sym, tf, lo, hi, start, n, end, off: (cfg.viewOff || 0), xStep, c, h, l, t };
 
   // 网格
-  drawGrid(ctx, PAD_L, PAD_T, plotW, MAIN_H, 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
+  drawGrid(ctx, PAD_L, PAD_T, plotW, mainH(), 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
 
   ctx.save();
-  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, MAIN_H); ctx.clip();
-  for (let i = start; i < c.length; i++) {
+  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, mainH()); ctx.clip();
+  for (let i = start; i < end; i++) {
     const x = X(i), oo = o[i], hh = h[i], ll = l[i], cc = c[i];
     if (cc == null) continue;
     const up = cc >= (oo != null ? oo : cc);
@@ -4300,11 +4385,11 @@ function drawMain(ctx, sym, tf, H) {
 
   // 主图 SRSI 多周期叠加：仅叠加 overlayTfs 中勾选的周期（按周期独立，不再跟随全量 klineSel）；临时隐藏的跳过
   const srsiPlan = mainChartSrsiPlan(cfg).filter(dp => !(cfg.ovHide && cfg.ovHide[dp.tf]));
-  const baseT = (t && t.length >= c.length) ? t.slice(start, c.length) : null;
+  const baseT = (t && t.length >= c.length) ? t.slice(start, end) : null;
   if (srsiPlan.length) {
     ctx.save();
-    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, MAIN_H); ctx.clip();
-    const Y0 = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * MAIN_H;
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, mainH()); ctx.clip();
+    const Y0 = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * mainH();
     // 50 中线（极淡，作为唯一通用参考）
     ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.setLineDash([2, 3]);
     const yMid = Y0(50); ctx.beginPath(); ctx.moveTo(PAD_L, yMid); ctx.lineTo(W - PAD_R, yMid); ctx.stroke();
@@ -4327,7 +4412,7 @@ function drawMain(ctx, sym, tf, H) {
     const axisVals = [0, 25, 50, 75, 100];
     ctx.textBaseline = 'middle'; ctx.font = '9px monospace'; ctx.textAlign = 'right';
     axisVals.forEach(v => {
-      const y = Math.max(PAD_T + 6, Math.min(PAD_T + MAIN_H - 6, Y0(v))); // GOAL22：刻度文字钳制在主图区内（顶部100/底部0 原被画布边裁一半）
+      const y = Math.max(PAD_T + 6, Math.min(PAD_T + mainH() - 6, Y0(v))); // GOAL22：刻度文字钳制在主图区内（顶部100/底部0 原被画布边裁一半）
       if (v !== 50) {
         ctx.strokeStyle = 'rgba(255,255,255,0.05)'; ctx.setLineDash([1, 4]); ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke(); ctx.setLineDash([]);
@@ -4363,12 +4448,12 @@ function drawMain(ctx, sym, tf, H) {
         drawAlign(kArr, dp.aux ? [1, 2] : [], dp.tf === cfg.mainTF ? 1.6 : 1);
         drawAlign(dArr, dp.aux ? [2, 3] : [4, 3], dp.tf === cfg.mainTF ? 1.4 : 0.9);
       } else {
-        const sl = srsiPanelSeries(pc, cfg2, bars);
-        const off = Math.max(0, pc.length - Math.min(bars, pc.length));
+        const sl = srsiPanelSeries(pc, cfg2, bars, cfg.viewOff);
+        const off = viewWindow(pc.length, bars, cfg.viewOff).start;
         const drawSlice = (arr, dash, w) => {
           ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash || []);
           ctx.beginPath(); let started = false;
-          for (let i = start; i < c.length; i++) {
+          for (let i = start; i < end; i++) {
             const li = i - off; if (li < 0 || li >= arr.length) continue;
             const v = arr[li]; if (v == null || !isFinite(v)) { started = false; continue; }
             const x = X(i), y = Y0(v);
@@ -4409,7 +4494,7 @@ function drawMain(ctx, sym, tf, H) {
       // 更新透明化：信号随 K 线刷新周期重算（默认 60s），显示数据年龄避免误以为逐 tick 实时
       const ageS = Math.max(0, Math.round((Date.now() - (A.updatedT || 0)) / 1000));
       const ageTxt = ageS < 60 ? ageS + 's前' : Math.round(ageS / 60) + 'm前';
-      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}% · ${ageTxt}`, W - PAD_R - 4, PAD_T + MAIN_H + 15); // GOAL21：移主图底部状态带右（原右上压 SRSI 上限带）
+      ctx.fillText(`α ${lw > 0.02 ? '多' : lw < -0.02 ? '空' : '平'} ${Math.abs(lw * 100).toFixed(0)}% · ${ageTxt}`, W - PAD_R - 4, PAD_T + mainH() + 15); // GOAL21：移主图底部状态带右（原右上压 SRSI 上限带）
       ctx.textAlign = 'left';
       ctx.restore();
     }
@@ -4427,7 +4512,7 @@ function drawMain(ctx, sym, tf, H) {
   if (typeof window !== 'undefined') {
     ctx.save();
     ctx.strokeStyle = 'rgba(139,155,180,.25)'; ctx.setLineDash([2, 3]);
-    ctx.beginPath(); ctx.moveTo(PAD_L, PAD_T + MAIN_H + 2); ctx.lineTo(W - PAD_R, PAD_T + MAIN_H + 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(PAD_L, PAD_T + mainH() + 2); ctx.lineTo(W - PAD_R, PAD_T + mainH() + 2); ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
   }
@@ -4577,7 +4662,7 @@ function drawMain(ctx, sym, tf, H) {
         col = '#2ecc71'; bg = 'rgba(16,22,30,.72)'; bd = 'rgba(46,204,113,.35)';
       }
       const tw = ctx.measureText(label).width;
-      const bx = PAD_L + 6, by = PAD_T + MAIN_H + 4; // GOAL21：移主图底部状态带左（原主图右下压 SRSI 下限带）
+      const bx = PAD_L + 6, by = PAD_T + mainH() + 4; // GOAL21：移主图底部状态带左（原主图右下压 SRSI 下限带）
       ctx.fillStyle = bg;
       ctx.fillRect(bx, by, tw + 12, 18);
       ctx.strokeStyle = bd; ctx.strokeRect(bx, by, tw + 12, 18);
@@ -4637,9 +4722,9 @@ function drawMain(ctx, sym, tf, H) {
 
   // 优化预览叠加（optPreviewOn）：以白色虚线画各已优选周期的 K/D + 上下带（不写入配置，便于看图对比）
   if (cfg.optPreviewOn && cfg.srsiOptPreview) {
-    const Y0p = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * MAIN_H;
+    const Y0p = (v) => PAD_T + (100 - (v != null ? v : 50)) / 100 * mainH();
     ctx.save();
-    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, MAIN_H); ctx.clip();
+    ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, mainH()); ctx.clip();
     Object.keys(cfg.srsiOptPreview).forEach(tf => {
       const pr = cfg.srsiOptPreview[tf]; if (!pr || !pr.best) return;
       const pc = getTFData(sym, tf).c; if (!pc || pc.length < 2) return;
@@ -4664,11 +4749,11 @@ function drawMain(ctx, sym, tf, H) {
         };
         drawP(kArr, [2, 3], 1.1); drawP(dArr, [1, 3], 0.8);
       } else {
-        const sl = srsiPanelSeries(pc, pr.best, bars);
-        const off = Math.max(0, pc.length - Math.min(bars, pc.length));
+        const sl = srsiPanelSeries(pc, pr.best, bars, cfg.viewOff);
+        const off = viewWindow(pc.length, bars, cfg.viewOff).start;
         const drawS = (arr, dash, w) => {
           ctx.strokeStyle = col; ctx.lineWidth = w; ctx.setLineDash(dash); ctx.beginPath(); let st = false;
-          for (let i = start; i < c.length; i++) { const li = i - off; if (li < 0 || li >= arr.length) continue; const v = arr[li]; if (v == null || !isFinite(v)) { st = false; continue; } const x = X(i), y = Y0p(v); if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y); }
+          for (let i = start; i < end; i++) { const li = i - off; if (li < 0 || li >= arr.length) continue; const v = arr[li]; if (v == null || !isFinite(v)) { st = false; continue; } const x = X(i), y = Y0p(v); if (!st) { ctx.moveTo(x, y); st = true; } else ctx.lineTo(x, y); }
           ctx.stroke();
         };
         drawS(sl.k, [2, 3], 1.1); drawS(sl.d, [1, 3], 0.8);
@@ -4704,10 +4789,11 @@ function drawSub(ctx, sub, sym, y0) {
     drawMacd(ctx, s && s.series ? s.series : null, y0, sub, cfg.bars);
     drawSubTitle(ctx, sub.name, SUB_COLORS.macd, y0);
   } else if (sub.key === 'srsi') {
-    const n = Math.min(cfg.bars, price.length);
+    const w = viewWindow(price.length, cfg.bars, cfg.viewOff);
+    const n = w.n;
     if (n < 2) { drawSubTitle(ctx, sub.name, SUB_COLORS.srsi, y0); return; }
     const srsiCfg = perTfSrsi(sub.tf || cfg.mainTF, cfg.srsiByTf, cfg.srsi);
-    const sl = srsiPanelSeries(price, srsiCfg, n);
+    const sl = srsiPanelSeries(price, srsiCfg, cfg.bars, cfg.viewOff);
     drawSrsiPanel(ctx, { k: sl.k, d: sl.d, hooks: sl.hooks }, sl.crossings, y0, n, sub, srsiCfg);
     // 标题：SRSI 周期  Kxx.x Dxx.x ▲金叉/▼死叉  [主图]
     const k = sl.k.length ? sl.k[sl.k.length - 1] : null;
@@ -4731,18 +4817,20 @@ function drawSubTitle(ctx, text, color, y0) {
 // 纯函数：SRSI 面板序列。为避免 RSI(默认85) 长 warmup 吃掉窗口前部导致 KD 只画右侧/10m 完全不显示，
 // 先对全量 price 计算 srsiKD，再只截取最近 bars 根用于展示（warmup 用前面历史）。
 // 返回 { k, d, crossings }（均已切到最后 bars 根，索引 0..bars-1，可直接按 0 基画）。
-export function srsiPanelSeries(price, cfg, bars) {
+export function srsiPanelSeries(price, cfg, bars, off) {
   const p = Array.isArray(price) ? price : [];
-  const n = Math.min(bars, p.length);
+  const w = viewWindow(p.length, bars, off);
+  const n = w.n;
   if (!(n >= 2)) return { k: [], d: [], crossings: [], hooks: [] };  // GOAL25：补 hooks，防空结构下 sl.hooks[-1] 崩
   const sl = srsiKD(p, cfg);
   const cross = srsiCrossings(sl.k, cfg);
   const hooks = srsiHooks(sl.k, sl.d, cfg);
+  const s = w.start, e = w.end;
   return {
-    k: sl.k.slice(-n),
-    d: sl.d.slice(-n),
-    crossings: cross.slice(-n),
-    hooks: hooks.slice(-n)
+    k: sl.k.slice(s, e),
+    d: sl.d.slice(s, e),
+    crossings: cross.slice(s, e),
+    hooks: hooks.slice(s, e)
   };
 }
 
@@ -4752,9 +4840,11 @@ function subTf(sym, tf) {
 }
 
 function drawOscillator(ctx, data, y0, refs, color, sub, bars) {
-  const n = Math.min(bars, data.length);
+  const w = viewWindow(data.length, bars, cfg.viewOff);
+  const n = w.n;
   if (n < 2) return;
-  const start = data.length - n;
+  const start = w.start;
+  const end = w.end;
   const plotW = W - PAD_L - PAD_R;
   const xStep = plotW / n;
   const Y = (v) => y0 + (100 - v) / 100 * SUB_H;
@@ -4773,7 +4863,7 @@ function drawOscillator(ctx, data, y0, refs, color, sub, bars) {
   ctx.strokeStyle = color; ctx.lineWidth = 1.3;
   ctx.beginPath();
   let started = false;
-  for (let i = start; i < data.length; i++) {
+  for (let i = start; i < end; i++) {
     const v = data[i];
     if (v == null) { started = false; continue; }
     const x = X(i), y = Y(v);
@@ -4781,7 +4871,7 @@ function drawOscillator(ctx, data, y0, refs, color, sub, bars) {
   }
   ctx.stroke();
   ctx.restore();
-  const cur = data[data.length - 1];
+  const cur = data[end - 1];
   if (cur != null) {
     ctx.fillStyle = color; ctx.font = 'bold 9px monospace';
     ctx.fillText(fmt(cur), PAD_L + plotW - 46, y0 + SUB_H - 4);
@@ -4791,14 +4881,16 @@ function drawOscillator(ctx, data, y0, refs, color, sub, bars) {
 function drawMacd(ctx, series, y0, sub, bars) {
   if (!series) return;
   const data = series.macdLine;
-  const n = Math.min(bars, data.length);
+  const w = viewWindow(data.length, bars, cfg.viewOff);
+  const n = w.n;
   if (n < 2) return;
-  const start = data.length - n;
+  const start = w.start;
+  const end = w.end;
   const plotW = W - PAD_L - PAD_R;
   const xStep = plotW / n;
   let m = 1;
   const abs = [];
-  for (let i = start; i < series.macdHist.length; i++) { const v = series.macdHist[i]; if (v != null && isFinite(v)) abs.push(Math.abs(v)); }
+  for (let i = start; i < end; i++) { const v = series.macdHist[i]; if (v != null && isFinite(v)) abs.push(Math.abs(v)); }
   if (abs.length) m = Math.max(...abs);
   if (!m) m = 1;
   const lo = -m * 1.1, hi = m * 1.1;
@@ -4813,7 +4905,7 @@ function drawMacd(ctx, series, y0, sub, bars) {
   ctx.save();
   ctx.beginPath(); ctx.rect(PAD_L, y0, plotW, SUB_H); ctx.clip();
   const bw = Math.max(1, xStep * 0.6);
-  for (let i = start; i < series.macdHist.length; i++) {
+  for (let i = start; i < end; i++) {
     const v = series.macdHist[i];
     if (v == null) continue;
     const x = X(i);
@@ -4822,12 +4914,12 @@ function drawMacd(ctx, series, y0, sub, bars) {
   }
   ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.2;
   ctx.beginPath(); let started = false;
-  for (let i = start; i < data.length; i++) { const v = data[i]; if (v == null) { started = false; continue; } const x = X(i), y = Y(v); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); }
+  for (let i = start; i < end; i++) { const v = data[i]; if (v == null) { started = false; continue; } const x = X(i), y = Y(v); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); }
   ctx.stroke();
   if (series.macdSignal) {
     ctx.strokeStyle = '#ffd740'; ctx.lineWidth = 1.1;
     ctx.beginPath(); started = false;
-    for (let i = start; i < series.macdSignal.length; i++) { const v = series.macdSignal[i]; if (v == null) { started = false; continue; } const x = X(i), y = Y(v); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); }
+    for (let i = start; i < end; i++) { const v = series.macdSignal[i]; if (v == null) { started = false; continue; } const x = X(i), y = Y(v); if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y); }
     ctx.stroke();
   }
   ctx.restore();
@@ -4905,15 +4997,16 @@ function drawHover(ctx, subList, H) {
   const { lx, ly } = _hover;
   const plotW = W - PAD_L - PAD_R;
   if (lx < PAD_L || lx > PAD_L + plotW || ly < PAD_T) return;
-  const mainBottom = PAD_T + MAIN_H;
+  const mainBottom = PAD_T + mainH();
   const tf = cfg.mainTF;
   const sym = cfg.symbol;
   const { o, h, l, c, v, t } = nativeMain(sym, tf);
   const bars = cfg.bars;
   const frac = (lx - PAD_L) / plotW;
-  const i = idxFromFrac(frac, c.length, bars);
-  const n = Math.min(bars, c.length);
-  const start = c.length - n;
+  const vw = viewWindow(c.length, bars, cfg.viewOff);
+  const i = idxFromFrac(frac, c.length, bars, cfg.viewOff);
+  const n = vw.n;
+  const start = vw.start, end = vw.end;
   const xStep = plotW / n;
 
   // ---- 十字竖线（贯穿全高）----
@@ -4927,14 +5020,14 @@ function drawHover(ctx, subList, H) {
   // ---- 主图：横虚线 + 价格 chip（hovered 柱 close）----
   if (i >= 0 && i < c.length && c[i] != null) {
     let lo = Infinity, hi = -Infinity;
-    for (let k = start; k < c.length; k++) {
+    for (let k = start; k < end; k++) {
       if (l[k] != null && isFinite(l[k]) && l[k] < lo) lo = l[k];
       if (h[k] != null && isFinite(h[k]) && h[k] > hi) hi = h[k];
     }
     if (!isFinite(lo) || !isFinite(hi) || hi <= lo) { lo = c[i] * 0.999; hi = c[i] * 1.001; }
     const pad = (hi - lo) * 0.08 || hi * 0.001;
     lo -= pad; hi += pad;
-    const Y = (val) => PAD_T + (hi - val) / (hi - lo) * MAIN_H;
+    const Y = (val) => PAD_T + (hi - val) / (hi - lo) * mainH();
     const yc = Y(c[i]);
     ctx.save();
     ctx.setLineDash([4, 4]);
@@ -4950,7 +5043,7 @@ function drawHover(ctx, subList, H) {
   }
 
   // ---- 顶部联动汇总栏（任意位置都显示：主图 + 全部子图 在 hovered x 的读数；GOAL25 锁定时加🔒）----
-  const m = i >= 0 ? mainHoverAt(frac, sym, tf, bars) : null;
+  const m = i >= 0 ? mainHoverAt(frac, sym, tf, bars, cfg.viewOff) : null;
   drawLinkBar(ctx, subList, m, tf, frac, mainBottom);
   if (_hoverLock) {
     ctx.save();
@@ -5002,7 +5095,7 @@ function drawMainDetail(ctx, m, lx, ly, plotW, H) {
 function drawSubDetail(ctx, hit, frac, lx, ly, plotW, H, bars) {
   const sym = cfg.symbol;
   const tf = hit.tf || cfg.mainTF;
-  const d = subHoverAt(frac, sym, tf, hit.key, bars);
+  const d = subHoverAt(frac, sym, tf, hit.key, bars, { off: cfg.viewOff });
   let lines = [];
   let lastCol = '#fff';
   if (hit.key === 'rsi') {
@@ -5085,7 +5178,7 @@ function drawLinkBar(ctx, subList, m, tf, frac, mainBottom) {
 
   subList.forEach(sub => {
     // v1.5.63：读数按主图 hover K 线时刻跨周期对齐（m.time=null 时回退旧的垂直位置语义）
-    const dt = subHoverAt(frac, sym, sub.tf || tf, sub.key, cfg.bars, (m && m.time != null) ? { t: m.time } : null);
+    const dt = subHoverAt(frac, sym, sub.tf || tf, sub.key, cfg.bars, { t: (m && m.time != null) ? m.time : null, off: cfg.viewOff });
     const hl = hit && hit.kind === 'sub' && hit.key === sub.key && (hit.tf === sub.tf);
     if (sub.key === 'rsi') {
       drawSeg(`RSI ${dt.rsi != null ? dt.rsi.toFixed(1) : '--'}`, hl, '#ffd740');
@@ -5117,6 +5210,8 @@ export function initKChart() {
       _resizeObs.observe(_cv);
     }
     window.addEventListener && window.addEventListener('resize', () => { syncCanvasSize(); renderKChart(); });
+    // v1.6.37：满屏时旋转屏幕/改变视口 → 重算逻辑高度并重绘
+    window.addEventListener && window.addEventListener('orientationchange', () => { if (_fsOn) { syncCanvasSize(); renderKChart(); } });
   }
   if (!_cv.__kchartHoverBound) {
     _cv.__kchartHoverBound = true;
@@ -5131,13 +5226,20 @@ export function initKChart() {
     let _touchT = null;
     let _longT = null;                        // 长按锁定定时器
     let _pinch = null;                        // 双指缩放状态 {d0, bars0}
-    const touchLocal = (e) => { const t = e.touches[0] || e.changedTouches[0]; return t ? { x: t.clientX, y: t.clientY, lx: t.clientX - _cv.getBoundingClientRect().left, ly: t.clientY - _cv.getBoundingClientRect().top } : null; };
+    _cv.style.touchAction = 'pan-y';   // v1.6.37：竖向手势交给浏览器滚动页面，横向/双指由本处理器接管
+    const touchLocal = (e) => {
+      const t = e.touches[0] || e.changedTouches[0]; if (!t) return null;
+      const rect = _cv.getBoundingClientRect();
+      const H = _cv.__logicalH || BASE_H;
+      return { x: t.clientX, y: t.clientY, lx: (t.clientX - rect.left) * (W / (rect.width || 1)), ly: (t.clientY - rect.top) * (H / (rect.height || 1)) };
+    };
     const touchDist = (e) => { const a = e.touches, t0 = a[0], t1 = a[1]; return (t0 && t1) ? Math.hypot(t0.clientX - t1.clientX, t0.clientY - t1.clientY) : 0; };
     const pinchApply = (e) => {               // 双指：距离比→可视根数
       if (!_pinch) return;
       const nb = barsFromPinch(_pinch.bars0, _pinch.d0, touchDist(e));
       if (nb !== cfg.bars) {
         cfg.bars = nb;
+        clampViewOff();
         const bEl = document.getElementById('kchartBars'), bLbl = document.getElementById('kchartBarsLbl');
         if (bEl) bEl.value = nb;
         if (bLbl) bLbl.textContent = nb;
@@ -5145,24 +5247,43 @@ export function initKChart() {
       }
     };
     _cv.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      if (e.touches.length >= 2) {            // 双指=缩放（取消长按与锁定）
+      if (e.touches.length >= 2) {            // 双指=缩放（取消长按/平移）
+        e.preventDefault();
         if (_longT) { clearTimeout(_longT); _longT = null; }
-        _hoverLock = false;
+        _panTouch = null; _hoverLock = false;
         _pinch = { d0: touchDist(e), bars0: cfg.bars };
         _hover = null; renderKChart();
         return;
       }
       const p = touchLocal(e); if (!p) return;
+      // 单指：不 preventDefault（竖向要放行页面滚动）；记平移起点，touchmove 里再定方向
+      _panTouch = { x0: p.lx, y0: p.ly, off0: cfg.viewOff, dir: null };
       _hoverLock = false;                     // 再次点按=解锁（并作为新取值点）
       _hover = p; renderKChart();
       if (_longT) clearTimeout(_longT);
       _longT = setTimeout(() => { _hoverLock = true; renderKChart(); }, 500);
     }, { passive: false });
     _cv.addEventListener('touchmove', (e) => {
-      e.preventDefault();
-      if (_pinch && e.touches.length >= 2) { pinchApply(e); return; }
+      if (_pinch && e.touches.length >= 2) { e.preventDefault(); pinchApply(e); return; }
       const p = touchLocal(e); if (!p) return;
+      if (_panTouch) {
+        const dx = p.lx - _panTouch.x0, dy = p.ly - _panTouch.y0;
+        if (!_panTouch.dir) {
+          if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) _panTouch.dir = 'pan';
+          else if (Math.abs(dy) > 8 && Math.abs(dy) >= Math.abs(dx)) _panTouch.dir = 'v';
+        }
+        if (_panTouch.dir === 'pan') {        // 水平→平移（不阻断页面滚动，因为已判定为横向）
+          e.preventDefault();
+          if (_longT) { clearTimeout(_longT); _longT = null; }
+          _hover = null; _hoverLock = false;
+          panFrom(_panTouch.off0, dx);
+          return;
+        }
+        if (_panTouch.dir === 'v') {          // 竖向→放行页面滚动（不 preventDefault）
+          if (_longT) { clearTimeout(_longT); _longT = null; }
+          return;
+        }
+      }
       if (_hover) {
         const dx = Math.abs(p.lx - _hover.lx), dy = Math.abs(p.ly - _hover.ly);
         if (dx > 8 || dy > 8) { if (_longT) { clearTimeout(_longT); _longT = null; } }  // 移动取消长按
@@ -5171,15 +5292,24 @@ export function initKChart() {
     }, { passive: false });
     _cv.addEventListener('touchend', (e) => {
       if (_longT) { clearTimeout(_longT); _longT = null; }
-      if (e.touches.length === 0 && _pinch) { _pinch = null; persist(); }   // 缩放结束一次性落盘
+      if (e.touches.length === 0 && _pinch) { _pinch = null; clampViewOff(); persist(); }   // 缩放结束一次性落盘
+      if (e.touches.length === 0) _panTouch = null;
       _touchClear();
       if (!_hoverLock) _touchT = setTimeout(() => { _hover = null; renderKChart(); }, 2000);  // 锁定时不自动清除
     }, { passive: true });
+    _cv.addEventListener('touchcancel', () => { _panTouch = null; if (_longT) { clearTimeout(_longT); _longT = null; } }, { passive: true });
     // iOS 页面级双指缩放手势拦截（canvas 上双指只用于图表缩放）
     const _gest = (e) => e.preventDefault();
     _cv.addEventListener('gesturestart', _gest);
     _cv.addEventListener('gesturechange', _gest);
     _cv.addEventListener('mousemove', (e) => {
+      if (_panMouse) {                       // v1.6.37：主图区鼠标水平拖动=平移
+        const p = toLocal(e);
+        const dx = p.lx - _panMouse.x0;
+        if (Math.abs(dx) > 4) { _panMouse.moved = true; _pressMoved = true; panFrom(_panMouse.off0, dx); }
+        else { _hover = p; renderKChart(); }
+        return;
+      }
       _hover = toLocal(e);
       // 区分拖动与点击：mousedown 后位移过大视为拖动（点击监听据此忽略）
       if (_press && !_pressMoved) {
@@ -5197,7 +5327,24 @@ export function initKChart() {
       _press = p; _pressMoved = false;
       const reg = _subRegions.find(r => p.ly >= r.y0 && p.ly <= r.y0 + SUB_GAP && p.lx >= PAD_L && p.lx <= W - PAD_R);
       if (reg) _drag = { fromIdx: reg.idx, startX: p.lx, startY: p.ly, curY: p.ly, moved: false };
+      else if (p.ly >= PAD_T && p.ly <= PAD_T + mainH()) _panMouse = { x0: p.lx, off0: cfg.viewOff, moved: false };
     });
+    // v1.6.37：鼠标滚轮缩放（±10 根，60-300），preventDefault 防页面滚动
+    let _wheelSaveT = null;
+    _cv.addEventListener('wheel', (e) => {
+      if (!e.deltaY) return;
+      e.preventDefault();
+      const nb = Math.max(60, Math.min(300, cfg.bars + (e.deltaY > 0 ? 10 : -10)));
+      if (nb === cfg.bars) return;
+      cfg.bars = nb;
+      clampViewOff();
+      const bEl = document.getElementById('kchartBars'), bLbl = document.getElementById('kchartBarsLbl');
+      if (bEl) bEl.value = nb;
+      if (bLbl) bLbl.textContent = nb;
+      renderKChart();
+      if (_wheelSaveT) clearTimeout(_wheelSaveT);
+      _wheelSaveT = setTimeout(() => { try { persist(); } catch (err) {} }, 500);
+    }, { passive: false });
     const endDrag = () => {
       if (_drag && _drag.moved) {
         const target = _subRegions.find(r => _drag.curY >= r.y0 && _drag.curY <= r.y1);
@@ -5225,11 +5372,12 @@ export function initKChart() {
         }
       }
       _drag = null;
+      _panMouse = null;
       renderKChart();
     };
     _cv.addEventListener('mouseup', endDrag);
     window.addEventListener('mouseup', endDrag);
-    _cv.addEventListener('mouseleave', () => { _hover = null; _hoverLock = false; _press = null; _pressMoved = false; renderKChart(); });
+    _cv.addEventListener('mouseleave', () => { _hover = null; _hoverLock = false; _press = null; _pressMoved = false; _panMouse = null; renderKChart(); });
     // SRSI 周期切换已迁出 HTML chip 栏（#kchartOvQuick），画布内不再处理点击命中
   }
   renderKChart();
@@ -5326,6 +5474,7 @@ function applyKMode(res) {
   if (!res) return;
   if (res.mainTF) cfg.mainTF = res.mainTF;
   cfg.klineSel = res.sel;
+  cfg.viewOff = 0;   // v1.6.37：切周期归零视图偏移
   persist();
   renderControls();
   renderKChart();
@@ -5363,7 +5512,7 @@ function setSigOverlay(on) {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { renderKChart(); renderMainTools(); });
   else { renderKChart(); renderMainTools(); }
 }
-function setBars(v) { cfg.bars = Math.max(60, Math.min(300, parseInt(v) || 150)); persist(); renderKChart(); const lbl = document.getElementById('kchartBarsLbl'); if (lbl) lbl.textContent = cfg.bars; }
+function setBars(v) { cfg.bars = Math.max(60, Math.min(300, parseInt(v) || 150)); clampViewOff(); persist(); renderKChart(); const lbl = document.getElementById('kchartBarsLbl'); if (lbl) lbl.textContent = cfg.bars; }
 function setShow(key, on) {
   if (!(key in cfg.show)) return;
   cfg.show[key] = !!on;
@@ -5902,13 +6051,29 @@ export function timeAlignIdx(times, t) {
   return ans;
 }
 
-export function idxFromFrac(frac, len, bars) {
+// v1.6.37：可视窗口（纯函数，可单测）。off = 距最新多少根（0=贴最新）。
+// off 先 clamp 到 [0, max(0, len-bars)]；end = len-off；n = min(bars,end)；start = max(0, end-n)。
+// 非法输入（NaN/负数/null）回退到贴最新（off=0）。
+export function viewWindow(len, bars, off) {
+  const L = (typeof len === 'number' && isFinite(len) && len > 0) ? Math.floor(len) : 0;
+  const B = (typeof bars === 'number' && isFinite(bars) && bars > 0) ? Math.floor(bars) : L;
+  if (L === 0 || B === 0) return { start: 0, n: 0, end: 0, off: 0, maxOff: 0 };
+  const maxOff = Math.max(0, L - B);
+  let o = (typeof off === 'number' && isFinite(off) && off > 0) ? Math.floor(off) : 0;
+  if (o > maxOff) o = maxOff;
+  const end = L - o;
+  const n = Math.min(B, end);
+  const start = Math.max(0, end - n);
+  return { start, n, end, off: o, maxOff };
+}
+
+export function idxFromFrac(frac, len, bars, off) {
   if (!(len > 0)) return -1;
-  const n = Math.min(bars, len);
+  const w = viewWindow(len, bars, off);
+  const n = w.n;
   if (n < 1) return -1;
-  const start = len - n;
   const f = Math.max(0, Math.min(1, frac));
-  return start + Math.max(0, Math.min(n - 1, Math.round(f * (n - 1))));
+  return w.start + Math.max(0, Math.min(n - 1, Math.round(f * (n - 1))));
 }
 
 // 成交量缩写: >=1e6 → 12.3M, >=1e3 → 4.5K, 否则原样(2位小数)
@@ -5950,9 +6115,9 @@ function panelFromLy(ly, subRegions, mainBottom) {
 }
 
 // 主图 hover 柱信息 (纯数据)
-export function mainHoverAt(frac, sym, tf, bars) {
+export function mainHoverAt(frac, sym, tf, bars, off) {
   const { o, h, l, c, v, t } = nativeMain(sym, tf);
-  const i = idxFromFrac(frac, c.length, bars);
+  const i = idxFromFrac(frac, c.length, bars, off);
   if (i < 0 || i >= c.length) return null;
   const prev = i > 0 ? c[i - 1] : null;
   const chg = (prev != null && isFinite(prev) && prev !== 0) ? (c[i] - prev) / prev * 100 : null;
@@ -6080,14 +6245,14 @@ export function markAnchorY(geom, kind, ci) {
   const { lo, hi, c, h, l } = geom;
   if (!Array.isArray(c) || !Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
   const st = MARK_FX[kind] || MARK_FX.srsiClose;
-  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * MAIN_H;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * mainH();
   const cv = c[ci];
   let y = (cv != null && Number.isFinite(cv)) ? Y(cv) + st.off : null;
   const gap = st.r + 5;
   if (st.side === 'up' && Array.isArray(h)) { const hv = h[ci]; if (hv != null && Number.isFinite(hv)) y = Y(hv) - gap; }
   else if (st.side === 'down' && Array.isArray(l)) { const lv = l[ci]; if (lv != null && Number.isFinite(lv)) y = Y(lv) + gap; }
   if (y == null || !Number.isFinite(y)) return null;
-  return Math.max(PAD_T + st.r, Math.min(PAD_T + MAIN_H - st.r, y));
+  return Math.max(PAD_T + st.r, Math.min(PAD_T + mainH() - st.r, y));
 }
 
 // 标记清单（纯函数，可单测）：与 drawMain 的绘制条件一致
@@ -6176,12 +6341,13 @@ export function markFxXY(geom, mark) {
   if (!t.length || mark.t < t[0]) return null;
   let idx = -1;
   for (let i = t.length - 1; i >= start; i--) { if (t[i] <= mark.t) { idx = i; break; } }
-  if (idx < start) idx = start;
+  // v1.6.37：仅在「已平移」时才丢弃早于窗口的标记；viewOff=0 保持旧行为（钉在左缘）——主系统零回归
+  if (idx < start) { if (geom.off > 0) return null; idx = start; }
   const ci = Math.min(idx, c.length - 1);
   const cv = c[ci];
   if (cv == null || !Number.isFinite(cv)) return null;
   const x = PAD_L + (Math.min(idx, start + n - 1) - start) * xStep + xStep / 2;
-  const base = PAD_T + (hi - cv) / (hi - lo) * MAIN_H;
+  const base = PAD_T + (hi - cv) / (hi - lo) * mainH();
   const y = markAnchorY(geom, mark.kind, ci);
   if (y == null) return null;
   const st = MARK_FX[mark.kind] || MARK_FX.srsiClose;
@@ -6275,10 +6441,10 @@ export function subHoverAt(frac, sym, tf, key, bars, opts) {
     if (key === 'rsi') return { i: j, rsi: safe(series && series.rsi) };
     if (key === 'macd') return { i: j, macd: safe(series && series.macdLine), signal: safe(series && series.macdSignal), hist: safe(series && series.macdHist) };
     if (key === 'srsi') {
-      const sl = srsiPanelSeries(base.c, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars) || { k: [], d: [], crossings: [], hooks: [] };
-      // sl 是最近 bars 根的局部数组（0..n-1），j 是全量索引 → 局部索引 = j - off
-      const off = Math.max(0, base.c.length - Math.min(bars, base.c.length));
-      const li = j - off;
+      const w = viewWindow(base.c.length, bars, opts.off);
+      const sl = srsiPanelSeries(base.c, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars, opts.off) || { k: [], d: [], crossings: [], hooks: [] };
+      // sl 是窗口内局部数组（0..n-1），j 是全量索引 → 局部索引 = j - start
+      const li = j - w.start;
       const safeL = (arr) => (li >= 0 && Array.isArray(arr) && li < arr.length) ? arr[li] : null;
       return { i: j, k: safeL(sl.k), d: safeL(sl.d), cross: safeL(sl.crossings) || null, hook: safeL(sl.hooks) || null };
     }
@@ -6288,7 +6454,7 @@ export function subHoverAt(frac, sym, tf, key, bars, opts) {
   const lenBase = (key === 'srsi')
     ? nativeMain(sym, tf).c.length
     : aggTFData(sym, tf).c.length;
-  const i = idxFromFrac(frac, lenBase, bars);
+  const i = idxFromFrac(frac, lenBase, bars, opts && opts.off);
   if (key === 'rsi') {
     const v = series && series.rsi ? series.rsi[i] : null;
     return { i, rsi: v };
@@ -6303,10 +6469,10 @@ export function subHoverAt(frac, sym, tf, key, bars, opts) {
   }
   if (key === 'srsi') {
     const price = nativeMain(sym, tf).c;
-    const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars) || { k: [], d: [], crossings: [], hooks: [] };
-    // srsiPanelSeries 把数组切到最后 bars 根(局部索引 0..n-1)，需把绝对索引 i 换算成局部索引
-    const off = Math.max(0, price.length - Math.min(bars, price.length));
-    const li = i - off;
+    const w = viewWindow(price.length, bars, opts && opts.off);
+    const sl = srsiPanelSeries(price, perTfSrsi(tf, cfg.srsiByTf, cfg.srsi), bars, opts && opts.off) || { k: [], d: [], crossings: [], hooks: [] };
+    // srsiPanelSeries 返回窗口内局部数组(0..n-1)，需把绝对索引 i 换算成局部索引
+    const li = i - w.start;
     // GOAL25：li<0（数据不足 warmup）一律 null，防空数组/缺失字段下负索引崩（触屏取值首次暴露）
     const safe = (arr) => (li >= 0 && Array.isArray(arr) && li < arr.length) ? arr[li] : null;
     return { i, k: safe(sl.k), d: safe(sl.d), cross: safe(sl.crossings) || null, hook: safe(sl.hooks) || null };
@@ -6358,6 +6524,13 @@ export const kchartApi = {
   resetSrsi: () => { resetSrsi(); },
   renderControls: renderKControls,
   render: renderKChart,
+  // v1.6.37：满屏盯盘 + 视图平移/缩放
+  setFullscreen,
+  isFullscreen,
+  toggleFullscreen,
+  clampViewOff,
+  mainH,
+  viewWindow,
   renderMainTools,
   refreshPanels,
   init: initKChart,

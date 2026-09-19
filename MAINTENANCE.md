@@ -35,11 +35,11 @@ public/pwa-512.png
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer}.js
+src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,pwaShell.js,pwa.css}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs}
+src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,pwaShell.js,signalSounds.js,pwa.css}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```

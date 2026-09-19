@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, marksToSignalEvents, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, marksToSignalEvents, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck, viewWindow, mainH } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -3999,6 +3999,31 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   const b3 = storageBootCheck();
   ok('启动自检：占用 >3500KB 也触发清理', b3.repaired !== null && !('srsiOptHist:v8:BIG' in _ls4));
   delete globalThis.localStorage;
+}
+
+// ============================================================
+//  v1.6.37：viewWindow 平移窗口 + mainH 默认
+// ============================================================
+console.log('\n[kchart: viewWindow 平移窗口]');
+{
+  ok('贴最新：off=0 → start=len-bars', (() => { const w = viewWindow(500, 150, 0); return w.start === 350 && w.n === 150 && w.end === 500 && w.off === 0 && w.maxOff === 350; })());
+  ok('中间：off=100 → 窗口前移', (() => { const w = viewWindow(500, 150, 100); return w.start === 250 && w.n === 150 && w.end === 400 && w.off === 100; })());
+  ok('超出上限：off=999 → clamp 到 maxOff', (() => { const w = viewWindow(500, 150, 999); return w.off === 350 && w.start === 0 && w.end === 150; })());
+  ok('负数 off → 回退贴最新', (() => { const w = viewWindow(500, 150, -5); return w.off === 0 && w.start === 350; })());
+  ok('NaN off → 回退贴最新', (() => { const w = viewWindow(500, 150, NaN); return w.off === 0 && w.start === 350; })());
+  ok('null off → 回退贴最新', (() => { const w = viewWindow(500, 150, null); return w.off === 0 && w.start === 350; })());
+  ok('len<bars → 全量窗口 start=0', (() => { const w = viewWindow(80, 150, 0); return w.start === 0 && w.n === 80 && w.end === 80 && w.maxOff === 0; })());
+  ok('len<bars 且 off>0 → clamp 0', (() => { const w = viewWindow(80, 150, 20); return w.off === 0 && w.n === 80; })());
+  ok('len=0 → 空窗口', (() => { const w = viewWindow(0, 150, 0); return w.n === 0 && w.start === 0 && w.end === 0; })());
+  ok('len 非法（NaN）→ 空窗口', (() => { const w = viewWindow(NaN, 150, 0); return w.n === 0; })());
+  ok('bars 非法 → 视为 len（全量）', (() => { const w = viewWindow(500, NaN, 0); return w.n === 500 && w.start === 0 && w.maxOff === 0; })());
+  ok('恰好在边界：off=maxOff', (() => { const w = viewWindow(500, 150, 350); return w.start === 0 && w.n === 150 && w.end === 150; })());
+  ok('end 恒等于 len-off', (() => { const w = viewWindow(500, 150, 42); return w.end === 458 && w.start === 308 && w.n === 150; })());
+  ok('非法输入不抛异常', (() => { try { viewWindow(undefined, undefined, undefined); viewWindow(-1, -1, -1); return true; } catch (e) { return false; } })());
+}
+console.log('\n[kchart: mainH 默认（非满屏零变化）]');
+{
+  ok('mainH() 默认返回 320', mainH() === 320);
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
