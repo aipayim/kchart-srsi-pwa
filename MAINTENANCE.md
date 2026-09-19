@@ -38,8 +38,8 @@ scripts/verify-pwa-data.mjs
 src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
 src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,pwaShell.js,pwa.css}
-src/tech2/kchart.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```
