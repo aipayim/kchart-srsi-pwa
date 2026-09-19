@@ -490,19 +490,9 @@ body.pwa .pwa-install{padding-bottom:10px;border-radius:0}
 
 /* ---- 手机端：TF 芯片加大 + 横滑 + ⚙ 收起高级项 + KPI 变矮 ---- */
 @media (max-width:640px){
-  .pwa-tfbar{flex-wrap:wrap;row-gap:6px}
-  .pwa-tfbar .kchart-tfs{flex:1 1 0;min-width:0;display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;
-    padding:2px 0 4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
-  .pwa-tfbar .kchart-tfs::-webkit-scrollbar{display:none}
-  .pwa-tfbar .kchart-tfbtn{flex:0 0 auto;min-width:54px;min-height:44px;padding:4px 10px;border-radius:11px;
-    font-size:12.5px;font-weight:600;position:relative;justify-content:center}
-  .pwa-tfbar .kchart-tfbtn.main{border-color:var(--green);color:var(--green);background:rgba(0,230,118,.10)}
-  .pwa-tfbar .kchart-tfdot{width:6px;height:6px}
-  .pwa-tfbar .kchart-tfsq{position:absolute;top:4px;right:4px;width:18px;height:18px;border-radius:6px;
-    border:1px solid var(--border);background:rgba(255,255,255,.05)}
-  .pwa-tfbar .kchart-tfsq.on{background:var(--accent);border-color:var(--accent);box-shadow:0 0 8px rgba(34,211,238,.5)}
-  .pwa-more{display:inline-grid;place-items:center;width:40px;height:40px;border-radius:11px;flex:0 0 auto;
-    border:1px solid var(--border);background:var(--card2);color:var(--text2);font-size:17px;cursor:pointer}
+  .pwa-tfbar{display:none}
+  .pwa-more{display:inline-grid;place-items:center;width:30px;height:30px;border-radius:9px;flex:0 0 auto;
+    border:1px solid var(--border);background:var(--card2);color:var(--text2);font-size:15px;cursor:pointer;margin-left:6px}
   .pwa-more.on{color:var(--accent);border-color:var(--accent)}
   .pwa-toolmore{display:none}
   .pwa-toolbar.more-open .pwa-toolmore{display:flex}
@@ -563,16 +553,10 @@ body.pwa .kchart-maintools .mt-legend{display:none}
   line-height:1;padding:5px 10px;cursor:pointer}
 .pwa-tfcycle button:hover{color:var(--accent)}
 .pwa-tfcycle #pwaTfCur{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--accent);min-width:38px;text-align:center;text-transform:none}
-/* v1.6.20：主图卡头内联「主图叠加 SRSI 周期」快选（小方块，可横滑；不占额外行） */
-.pwa-srsi-tfs{display:inline-flex;align-items:center;gap:3px;margin-left:6px;max-width:100%;overflow-x:auto;
-  scrollbar-width:none;white-space:nowrap;flex:0 1 auto;min-width:0}
-.pwa-srsi-tfs::-webkit-scrollbar{display:none}
-.pwa-srsitf{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;line-height:1;padding:4px 5px;border-radius:6px;
-  border:1px solid var(--border);background:var(--card2);color:var(--text2);cursor:pointer;user-select:none;position:relative}
-.pwa-srsitf.on{color:var(--c,#22d3ee);border-color:var(--c,#22d3ee);background:color-mix(in srgb,var(--c,#22d3ee) 16%,transparent)}
-.pwa-srsitf.aux{font-weight:700}
-/* 手机：隐藏横滑的「各周期K线」行（主图周期用 ‹ › 切；叠加周期用主图卡头的小方块） */
-@media (max-width:900px){ body.pwa .pwa-tfbar .kchart-tfs{display:none!important} }
+/* v1.6.21：主图卡头紧凑化——「主图」「‹ 5m ›」「⚙」不压缩变形（手机窄屏） */
+.pwa-card-h .ttl{flex-shrink:0;white-space:nowrap}
+.pwa-card-h .pwa-tfcycle{flex-shrink:0}
+.pwa-card-h .pwa-more{flex-shrink:0}
 /* 速览表：手机隐藏「能量/闸门/参数」三列（信息在信号条/设置页），6 列不再横向裁切 */
 @media (max-width:640px){
   body.pwa .kchart-ov-head-row,body.pwa .kchart-ov-row{grid-template-columns:42px 38px 38px 42px minmax(0,1fr) 50px;gap:5px;padding:2px 6px}
