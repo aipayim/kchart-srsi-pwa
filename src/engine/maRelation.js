@@ -95,23 +95,45 @@ export function maDistPct(price, ma) {
 
 // 「已收盘」更高周期对齐（防前视）：out[i] = 最后一个满足 T[j] <= t[i] 的 j；无则 -1。
 // T 假定升序（更高周期 bar 的时间戳）。t 为主图 bar 时间戳。二分查找。
-export function alignClosedIdx(T, t) {
+// v1.6.38：新增可选第三参 barMs（该高周期一根 bar 的毫秒数）。
+//   - 提供（正有限数）时要求 T[j] + barMs <= t[i]，即该 bar **已收盘**（消除「进行中 bar 被当作历史」的前视）；
+//   - 不提供 / 非正数时保持旧语义 T[j] <= t[i]（向后兼容其它调用方）。
+export function alignClosedIdx(T, t, barMs) {
   const times = arr(t);
   const n = times.length;
   const out = new Array(n).fill(-1);
   const H = arr(T);
   if (H.length === 0 || n === 0) return out;
+  const useBar = num(barMs) && barMs > 0;
   for (let i = 0; i < n; i++) {
     const ti = times[i];
     if (!num(ti)) { out[i] = -1; continue; }
     let lo = 0, hi = H.length - 1, res = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
-      if (num(H[mid]) && H[mid] <= ti) { res = mid; lo = mid + 1; } else hi = mid - 1;
+      const hm = H[mid];
+      const okClosed = num(hm) && (useBar ? (hm + barMs <= ti) : (hm <= ti));
+      if (okClosed) { res = mid; lo = mid + 1; } else hi = mid - 1;
     }
     out[i] = res;
   }
   return out;
+}
+
+// v1.6.38：推断更高周期一根 bar 的步长（毫秒）——相邻时间戳差的中位数。
+// 不足 2 根 / 无有效差值 → 回退 fallback（日线 1d / 4H 4h / 周线 7d）。
+function inferBarMs(times, fallback) {
+  const T = arr(times);
+  if (T.length < 2) return fallback;
+  const diffs = [];
+  for (let i = 1; i < T.length; i++) {
+    const d = T[i] - T[i - 1];
+    if (num(d) && d > 0) diffs.push(d);
+  }
+  if (!diffs.length) return fallback;
+  diffs.sort((a, b) => a - b);
+  const m = diffs[Math.floor(diffs.length / 2)];
+  return (num(m) && m > 0) ? m : fallback;
 }
 
 // 内部：给定三条均线值 + 收盘价，判定密集/挤压
@@ -175,19 +197,45 @@ export function maMarketState(closes1d, opts) {
 // 内部：把更高周期序列对齐到主图 bar。
 // - 提供 times（更高周期时间戳，长度与 raw 相同）与 mainT 时：走 alignClosedIdx（真正防前视）。
 // - 否则视为「已对齐」；长度不齐时按尾部对齐（防御性，调用方应优先传时间戳）。
-function alignToMain(raw, times, mainT, n) {
+function alignToMain(raw, times, mainT, n, barMs) {
   const out = nullArr(n);
   const R = arr(raw);
   if (R.length === 0 || n === 0) return out;
   const T = arr(times), M = arr(mainT);
   if (T.length === R.length && M.length === n) {
-    const idx = alignClosedIdx(T, M);
+    const idx = alignClosedIdx(T, M, barMs);
     for (let i = 0; i < n; i++) { const j = idx[i]; if (j >= 0 && j < R.length) out[i] = R[j]; }
     return out;
   }
   const m = R.length, off = n - m;
   for (let i = 0; i < n; i++) { const j = i - off; if (j >= 0 && j < m) out[i] = R[j]; }
   return out;
+}
+
+// v1.6.38：因果日线 regime —— stateAt(i) = 主图 bar i 时刻「最后已收盘日线」的市场状态。
+// 仅在提供 t1d 且长度与 closes1d 一致、mainT 长度与 n 一致时可用（走 alignClosedIdx + barMs，防前视）；
+// 否则回退为全局最新状态（旧行为，向后兼容无时间戳的调用方）。
+// 按日线索引缓存：同一根已收盘日线只算一次 maMarketState（避免 O(n) 次全量计算）。
+function makeCausalMarketState(closes1d, t1d, mainT, n, barMs, fallbackMarket) {
+  const C = arr(closes1d);
+  const T = arr(t1d);
+  const M = arr(mainT);
+  const fb = (fallbackMarket && fallbackMarket.state) || 'RANGE';
+  if (C.length === 0 || T.length !== C.length || M.length !== n || n === 0) {
+    return () => fb;
+  }
+  const idx = alignClosedIdx(T, M, barMs);
+  const cache = new Map();
+  return (i) => {
+    const di = idx[i];
+    if (di < 0) return 'RANGE';          // 尚无任何已收盘日线 → 不给方向
+    let st = cache.get(di);
+    if (st === undefined) {
+      st = maMarketState(C.slice(0, di + 1), {}).state;
+      cache.set(di, st);
+    }
+    return st;
+  };
 }
 
 // 内部：回踩/刺到均线判定（L1/L1'）
@@ -270,7 +318,7 @@ export function buildMaRelation(input) {
     };
     out0.stand = standProgress(out0);
     out0.breakout = squeezeBreakout(out0);
-    out0.stats = signalForwardStats([], closes, atr);
+    out0.stats = signalForwardStats([], closes, atr, { baseline: true });
     return out0;
   }
 
@@ -287,11 +335,18 @@ export function buildMaRelation(input) {
   // 原实现「先对齐（前向填充）再算均线」→ 同一根高周期收盘被重复填充 N 次（N=主图在该高周期内的根数）
   //   → 均线恒等于该高周期收盘价（假值！表现为「日MA20 = 日线收盘 · 距 +0.00%」）。
   const dRaw = arr(inp.closes1d), d4Raw = arr(inp.closes4h), wRaw = arr(inp.closes1w);
-  const daily = {}; for (const p of dPer) daily[p] = alignToMain(maSeries(dRaw, p, o.type), inp.t1d, mainT, n);
-  const weekly = {}; for (const p of wPer) weekly[p] = alignToMain(maSeries(wRaw, p, o.type), inp.t1w, mainT, n);
-  const ma4h = alignToMain(maSeries(d4Raw, o.fast, o.type), inp.t4h, mainT, n);
+  // v1.6.38：高周期对齐必须只用「已收盘」bar（barMs = 该周期一根 bar 的毫秒数，按时间戳中位数推断，失败回退常量）。
+  const dBarMs = inferBarMs(inp.t1d, 86400e3);
+  const h4BarMs = inferBarMs(inp.t4h, 4 * 3600e3);
+  const wBarMs = inferBarMs(inp.t1w, 7 * 86400e3);
+  const daily = {}; for (const p of dPer) daily[p] = alignToMain(maSeries(dRaw, p, o.type), inp.t1d, mainT, n, dBarMs);
+  const weekly = {}; for (const p of wPer) weekly[p] = alignToMain(maSeries(wRaw, p, o.type), inp.t1w, mainT, n, wBarMs);
+  const ma4h = alignToMain(maSeries(d4Raw, o.fast, o.type), inp.t4h, mainT, n, h4BarMs);
 
+  // 展示用的「当前大环境」= 最新日线读数（含进行中 bar）——这是当前读数，不是历史过滤器。
   const market = maMarketState(inp.closes1d, {});
+  // v1.6.38：因果 regime —— 历史信号只允许用「该主图 bar 时刻已收盘」的日线状态（消除前视）。
+  const stateAt = makeCausalMarketState(dRaw, inp.t1d, mainT, n, dBarMs, market);
 
   // 最后一根的挤压状态
   const lastI = n - 1;
@@ -316,15 +371,16 @@ export function buildMaRelation(input) {
     const f = ma.fast[i], fp = ma.fast[i - 1];
     const mid = ma.mid[i];
     const ai = atr[i];
+    const mstate = stateAt(i);
 
     // L1 回踩站稳（多）
-    if (market.state !== 'BEAR' && num(c) && num(f) && num(fp) && f >= fp
+    if (mstate !== 'BEAR' && num(c) && num(f) && num(fp) && f >= fp
       && c > f && touched(i, 'long', o, lows, highs, ma.fast, atr)) {
       push(i, 'long', 'L1', c, structStop(i, 'long', o, lows, highs, f));
     }
 
     // L1' 反弹受阻（空）
-    if (o.allowShort && market.state !== 'BULL' && num(c) && num(f) && num(fp) && f <= fp
+    if (o.allowShort && mstate !== 'BULL' && num(c) && num(f) && num(fp) && f <= fp
       && c < f && touched(i, 'short', o, lows, highs, ma.fast, atr)) {
       push(i, 'short', 'L1', c, structStop(i, 'short', o, lows, highs, f));
     }
@@ -349,12 +405,12 @@ export function buildMaRelation(input) {
     if (o.l3 && has4h) {
       const m4 = ma4h[i], m4p = ma4h[i - 1];
       if (num(c) && num(p) && num(m4) && num(m4p)) {
-        if (market.state !== 'BEAR' && c > m4 && p <= m4p) {
+        if (mstate !== 'BEAR' && c > m4 && p <= m4p) {
           const st = structStop(i, 'long', o, lows, highs, f);
           const stop = num(st) && num(ai) ? st - 0.1 * ai : st;
           push(i, 'long', 'L3', c, stop);
         }
-        if (o.allowShort && market.state !== 'BULL' && c < m4 && p >= m4p) {
+        if (o.allowShort && mstate !== 'BULL' && c < m4 && p >= m4p) {
           const st = structStop(i, 'short', o, lows, highs, f);
           const stop = num(st) && num(ai) ? st + 0.1 * ai : st;
           push(i, 'short', 'L3', c, stop);
@@ -396,7 +452,7 @@ export function buildMaRelation(input) {
   // v1.6.36：三项新增分析（纯函数，结果随 data 一起返回；livePrice 由解读面板按实时价重算）
   out.stand = standProgress(out);
   out.breakout = squeezeBreakout(out);
-  out.stats = signalForwardStats(signals, closes, atr);
+  out.stats = signalForwardStats(signals, closes, atr, { baseline: true });
   return out;
 }
 
@@ -523,13 +579,26 @@ export function squeezeBreakout(data) {
 // v1.6.36：历史信号前瞻胜率（L1/L2/L3 按 2×ATR 止盈 / 1.5×ATR 止损判定）
 // 诚实展示：这套理论在**本币本周期**的数据上到底有没有优势（复用 winLossByAtr，与因子消融同口径）。
 // 纯函数；样本不足时 winRate=null。
+// v1.6.38：新增 opts.baseline=true 时的**随机基线对照**——「同方向、逐 bar 入场」的胜率。
+//   用抽样（每 max(1, floor(len/400)) 根取一根）避免每根 horizon 全扫描；抽样时 baselineSampled=true。
 // ============================================================
+function _baselineWinRate(closes, atr, dir, tpAtr, slAtr, horizon, step) {
+  const n = Array.isArray(closes) ? closes.length : 0;
+  let wins = 0, losses = 0;
+  for (let i = 0; i < n - 1; i += step) {
+    const r = winLossByAtr(closes, atr, { entryIdx: i, direction: dir, tpAtr, slAtr, horizon });
+    if (r.win === 1) wins++; else if (r.win === -1) losses++;
+  }
+  const resolved = wins + losses;
+  return resolved > 0 ? wins / resolved : null;
+}
+
 export function signalForwardStats(signals, closes, atr, opts) {
   const o = opts || {};
   const tpAtr = num(o.tpAtr) ? o.tpAtr : THRESH.BT_TP_ATR;
   const slAtr = num(o.slAtr) ? o.slAtr : THRESH.BT_SL_ATR;
   const horizon = num(o.horizon) ? o.horizon : THRESH.BT_HORIZON;
-  const out = { n: 0, wins: 0, losses: 0, unresolved: 0, winRate: null, avgPnlPct: null, byType: {} };
+  const out = { n: 0, wins: 0, losses: 0, unresolved: 0, winRate: null, avgPnlPct: null, byType: {}, baseline: null, baselineLong: null, baselineShort: null, edge: null, baselineStep: null, baselineSampled: false };
   const list = Array.isArray(signals) ? signals : [];
   let pnlSum = 0, pnlN = 0, valid = 0;
   for (const s of list) {
@@ -552,6 +621,24 @@ export function signalForwardStats(signals, closes, atr, opts) {
     const t = out.byType[k];
     const rr = t.wins + t.losses;
     t.winRate = rr > 0 ? t.wins / rr : null;
+  }
+  // v1.6.38：随机基线对照（仅 opts.baseline===true 时计算；默认关闭以保持向后兼容）
+  if (o.baseline === true) {
+    const nBars = Array.isArray(closes) ? closes.length : 0;
+    const step = Math.max(1, Math.floor(nBars / 400));
+    out.baselineStep = step;
+    out.baselineSampled = step > 1;
+    out.baselineLong = _baselineWinRate(closes, atr, 'buy', tpAtr, slAtr, horizon, step);
+    out.baselineShort = _baselineWinRate(closes, atr, 'sell', tpAtr, slAtr, horizon, step);
+    let lng = 0, sht = 0;
+    for (const s of list) { if (s && s.side === 'long') lng++; else if (s && s.side === 'short') sht++; }
+    const tot = lng + sht, bl = out.baselineLong, bs = out.baselineShort;
+    if (tot === 0) out.baseline = (bl != null && bs != null) ? (bl + bs) / 2 : (bl != null ? bl : bs);
+    else if (sht === 0) out.baseline = bl;
+    else if (lng === 0) out.baseline = bs;
+    else if (bl != null && bs != null) out.baseline = (bl * lng + bs * sht) / tot;
+    else out.baseline = (bl != null ? bl : bs);
+    if (out.winRate != null && out.baseline != null) out.edge = out.winRate - out.baseline;
   }
   return out;
 }
@@ -581,7 +668,7 @@ export function maRelReadout(data, opts2) {
   // v1.6.36：新增三项分析（在下方对应位置 push 行，结果一并返回供渲染层使用）
   const sp = standProgress(data, { livePrice: o2.livePrice });
   const bo = squeezeBreakout(data);
-  const st2 = (data.stats && data.stats.n != null) ? data.stats : signalForwardStats(data.signals, data.closes, data.atr);
+  const st2 = (data.stats && data.stats.n != null) ? data.stats : signalForwardStats(data.signals, data.closes, data.atr, { baseline: true });
 
   // 1) 大环境
   const stIcon = tone === 'bull' ? '▲' : tone === 'bear' ? '▼' : '◆';
@@ -699,23 +786,41 @@ export function maRelReadout(data, opts2) {
     rows.push({ icon: '○', color: 'rgba(160,175,190,.85)', label: '暂无可执行信号', detail: '等价格给「收盘态度」：站上/跌破 MA' + (o.fast || 20) });
   }
 
-  // 7.5) v1.6.36：历史信号前瞻胜率（诚实展示：这套理论在本币本周期到底有没有优势）
+  // 7.5) v1.6.36/38：历史信号前瞻胜率 + 随机基线对照（诚实展示：这套理论在本币本周期到底有没有优势）
   if (st2 && st2.n > 0) {
-    const wrTxt = st2.winRate != null ? (st2.winRate * 100).toFixed(0) + '%' : '--';
-    const wrColor = st2.winRate == null ? '#8899aa' : st2.winRate >= 0.55 ? '#2ecc71' : st2.winRate <= 0.45 ? '#ff6b6b' : '#f59e0b';
+    const MIN_N = 200;                        // v1.6.38：样本量守卫（500 根 K 线 ≈ 70 样本，统计意义极弱）
+    const insufficient = st2.n < MIN_N;
     const parts = Object.keys(st2.byType).sort().map(k => {
       const t = st2.byType[k];
       const rr = t.wins + t.losses;
       return k + ' ' + (rr > 0 ? (t.wins / rr * 100).toFixed(0) + '%' : '--') + '(' + t.n + ')';
     });
-    // 诚实口径：胜率≤45% 直说「无优势」，≥55% 标「有优势」，中间标「不明确」
-    const edgeTxt = st2.winRate == null ? '' : st2.winRate <= 0.45 ? '（本币历史无优势）' : st2.winRate >= 0.55 ? '（本币历史有优势）' : '（优势不明确）';
+    const blPct = (st2.baseline != null) ? (st2.baseline * 100).toFixed(0) + '%' : null;
+    let label, color;
+    if (insufficient) {
+      // 样本不足：不给看起来权威的百分比结论
+      label = '历史信号胜率 · 样本不足（n<' + MIN_N + '）· 仅参考（样本 ' + st2.n + '）';
+      color = '#8899aa';
+    } else {
+      const wrTxt = st2.winRate != null ? (st2.winRate * 100).toFixed(0) + '%' : '--';
+      let edgeWord;
+      if (st2.edge == null || blPct == null) edgeWord = '优势不明确';
+      else if (st2.edge >= 0.03) edgeWord = '有优势';
+      else if (st2.edge <= -0.03) edgeWord = '无优势';
+      else edgeWord = '优势不明确';
+      color = edgeWord === '有优势' ? '#2ecc71' : edgeWord === '无优势' ? '#ff6b6b' : '#f59e0b';
+      label = '历史信号胜率 ' + wrTxt + '（样本 ' + st2.n + '）' +
+        (blPct != null ? ' · 随机基线 ' + blPct : '') + ' → ' + edgeWord;
+    }
     rows.push({
-      icon: '📊', color: wrColor,
-      label: '历史信号胜率 ' + wrTxt + '（2×ATR止盈 / 1.5×ATR止损 · 样本 ' + st2.n + '）' + edgeTxt,
+      icon: '📊', color,
+      label,
       detail: '盈 ' + st2.wins + ' · 亏 ' + st2.losses + ' · 未定 ' + st2.unresolved +
         (st2.avgPnlPct != null ? ' · 均盈亏 ' + _pct(st2.avgPnlPct) : '') +
         (parts.length ? ' · 分类型 ' + parts.join(' ') : '') +
+        (st2.baseline != null ? ' · 随机基线(多' + (st2.baselineLong != null ? (st2.baselineLong * 100).toFixed(0) + '%' : '--') +
+          '/空' + (st2.baselineShort != null ? (st2.baselineShort * 100).toFixed(0) + '%' : '--') + ')' : '') +
+        (st2.baselineSampled ? ' · 抽样基线' : '') +
         ' · 仅历史统计不代表未来',
     });
   }

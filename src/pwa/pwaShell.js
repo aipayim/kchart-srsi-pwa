@@ -13,7 +13,7 @@ import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
-import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, SOUND_KIND_GROUPS } from './signalSounds.js';
+import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -614,17 +614,33 @@ function bindSoundSettings() {
       if (!sel) return;
       const k = sel.getAttribute('data-kind');
       const map = readSoundMap(); map[k] = sel.value; writeSoundMap(map);
+      showSoundStatus('已保存：' + sel.value);
     });
     rows.addEventListener('click', (e) => {
       const btn = e.target && e.target.closest ? e.target.closest('.pwa-snd-test') : null;
       if (!btn) return;
       const k = btn.getAttribute('data-kind');
       const sel = rows.querySelector('.pwa-snd-sel[data-kind="' + k + '"]');
-      unlockAudio();   // 试听必须在用户手势内解锁 AudioContext（否则被浏览器静默阻止）
-      try { playSound(_audioCtx, sel ? sel.value : resolveSound(k, kindMeta(k).severity, readSoundMap())); } catch (e) {}
+      // v1.6.38：必须用**用户手势内**拿到的 ctx；并给用户明确反馈（旧版点了静音音效毫无反应 → 用户以为坏了）
+      const ctx = unlockAudio();
+      const id = sel ? sel.value : resolveSound(k, kindMeta(k).severity, readSoundMap());
+      const p = presetById ? presetById(id) : null;
+      const name = (p && p.name) || id;
+      let ok = false;
+      try { ok = playSound(ctx, id); } catch (e) { ok = false; }
+      try { console.log('[SOUND] 试听', k, '→', id, '| ctx=', ctx && ctx.state, '| played=', ok); } catch (e) {}
+      if (ok) showSoundStatus('🔊 已播放「' + name + '」（若听不到：检查系统/媒体音量，iPhone 请关侧边静音开关）');
+      else if (id === 'silent') showSoundStatus('该信号当前设为「静音」→ 不会发声（可在左侧下拉换成其它音效）');
+      else if (!ctx) showSoundStatus('⚠ 此浏览器不支持 WebAudio，无法发声');
+      else showSoundStatus('⚠ 未能播放（浏览器阻止音频，ctx=' + ctx.state + '）→ 请先点一下页面空白处再试，并检查系统静音');
     });
   }
   updateSoundNote();
+}
+// 试听/保存结果的即时反馈（用户反馈“试听没声音”→ 必须让用户看到“播了没播”）
+function showSoundStatus(msg) {
+  const el = $('pwaSndStatus');
+  if (el) { el.textContent = msg; el.style.color = msg.indexOf('⚠') === 0 ? '#f59e0b' : (msg.indexOf('该信号当前设为') === 0 ? '#8899aa' : '#2ecc71'); }
 }
 
 function initSettings() {
@@ -660,7 +676,7 @@ function initSettings() {
         '<span class="pwa-dim" id="pwaSndHint">每种信号可单独设置</span>' +
         '<button type="button" id="pwaSndToggle">展开 ▾</button>' +
         '<button type="button" id="pwaSndReset">全部恢复默认</button></span></div>' +
-      '<div class="pwa-snd-box" id="pwaSndBox" style="display:none"><div class="pwa-snd-note" id="pwaSndNote"></div><div id="pwaSndRows"></div></div>' +
+      '<div class="pwa-snd-box" id="pwaSndBox" style="display:none"><div class="pwa-snd-note" id="pwaSndNote"></div><div class="pwa-snd-status" id="pwaSndStatus"></div><div id="pwaSndRows"></div></div>' +
       '<div class="setting-row"><label>页面缩放</label><span class="pwa-zoomctl">' +
         '<button type="button" id="pwaZoomDown">－</button><span class="pwa-dim" id="pwaZoomInfo">100%</span><button type="button" id="pwaZoomUp">＋</button><button type="button" id="pwaZoomReset2">复位</button></span></div>' +
       '<div class="setting-row"><label>本地数据</label><button type="button" id="pwaClearLocal">清空本地设置并重建</button></div>' +
@@ -984,30 +1000,44 @@ function showToast(ev) {
 }
 
 let _audioCtx = null;
-// 浏览器策略：AudioContext 必须在**用户手势**里解锁，否则首个信号时的 beep 会被静默阻止。
-// 因此在「⚡ 启动信号引擎」/切换提示音开关时调用本函数（带一个 0 音量 blip）。
-function unlockAudio() {
+// v1.6.38：音频健壮化
+//  ① iOS 的 AudioContext 除 'suspended' 外还有 'interrupted'（来电/切后台/锁屏后）—— 旧代码只 resume 'suspended'，
+//     导致 iOS 一旦被中断就永久无声。现改为 state !== 'running' 就 resume。
+//  ② resume() 返回 Promise，必须吞掉 rejection（否则控制台报未捕获错误且无人知道没解锁）。
+//  ③ 返回 ctx，供调用方判断“到底有没有拿到可播放的上下文”并给用户反馈。
+function ensureAudioCtx() {
   try {
     const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!AC) return;
+    if (!AC) return null;
     if (!_audioCtx) _audioCtx = new AC();
-    if (_audioCtx.state === 'suspended') { try { _audioCtx.resume(); } catch (e) {} }
-    const o = _audioCtx.createOscillator(), g = _audioCtx.createGain();
+    if (_audioCtx.state !== 'running') {
+      try { const pr = _audioCtx.resume(); if (pr && typeof pr.catch === 'function') pr.catch(() => {}); } catch (e) {}
+    }
+    return _audioCtx;
+  } catch (e) { return null; }
+}
+// 浏览器策略：AudioContext 必须在**用户手势**里解锁，否则首个信号时的提示音会被静默阻止。
+// 在「⚡ 启动信号引擎」/切换提示音开关/点「试听」时调用本函数（带一个极低音量 blip 真正“跑一遍”）。
+function unlockAudio() {
+  const ctx = ensureAudioCtx();
+  if (!ctx) return null;
+  try {
+    const o = ctx.createOscillator(), g = ctx.createGain();
     g.gain.value = 0.0001;
-    o.connect(g); g.connect(_audioCtx.destination);
-    o.start(); o.stop(_audioCtx.currentTime + 0.02);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.02);
   } catch (e) { /* 无声环境忽略 */ }
+  return ctx;
 }
 // 分信号自定义提示音（v1.6.37）：按 `pwa_signal_sounds` 映射选择内置合成音效。
 // 预演类是否静音**由映射表决定**（默认 silent），不再硬编码跳过 preview。
 function alertSound(kind, severity) {
-  try {
-    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
-    if (!AC) return;
-    if (!_audioCtx) _audioCtx = new AC();
-    if (_audioCtx.state === 'suspended') { try { _audioCtx.resume(); } catch (e) {} }
-    playSound(_audioCtx, resolveSound(kind, severity, readSoundMap()));
-  } catch (e) { /* 无声环境忽略 */ }
+  const ctx = ensureAudioCtx();
+  if (!ctx) return false;
+  const id = resolveSound(kind, severity, readSoundMap());
+  const ok = playSound(ctx, id);
+  if (!ok) { try { console.warn('[SOUND] 未播放', kind, id, 'ctx=' + ctx.state); } catch (e) {} }
+  return ok;
 }
 function notifyDesktop(ev) {
   try {

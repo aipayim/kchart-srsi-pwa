@@ -591,11 +591,115 @@ console.log('\n[maRelation: v1.6.36 maRelReadout 新增行]');
   // RANGE → 措辞改为「均线贴合度」
   const rRange = maRelReadout(mkRd({ market: { state: 'RANGE', close: 100, maFast: 100, slopePct: 0.1 } }));
   ok('readout: RANGE → 「均线贴合度」措辞', rRange.rows.some(x => x.label.indexOf('均线贴合度') === 0));
-  // 胜率优势标注（诚实口径）
-  const rWin = maRelReadout(mkRd({ closes: [100, 103, 100, 103, 100, 103], signals: [{ i: 0, side: 'long', type: 'L1' }, { i: 2, side: 'long', type: 'L1' }, { i: 4, side: 'long', type: 'L1' }] }));
-  ok('readout: 高胜率 → 标「有优势」', rWin.rows.some(x => x.label.indexOf('有优势') >= 0));
-  const rLose = maRelReadout(mkRd({ closes: [100, 98, 100, 98, 100, 98], signals: [{ i: 0, side: 'long', type: 'L1' }, { i: 2, side: 'long', type: 'L1' }, { i: 4, side: 'long', type: 'L1' }] }));
-  ok('readout: 低胜率 → 标「无优势」', rLose.rows.some(x => x.label.indexOf('无优势') >= 0));
+  // 胜率优势标注（诚实口径）——v1.6.38：必须给足样本（n≥200）才给结论
+  const mkStats = (over) => Object.assign({
+    n: 500, wins: 300, losses: 200, unresolved: 0, winRate: 0.6, avgPnlPct: 0.1,
+    baseline: 0.55, baselineLong: 0.55, baselineShort: 0.45, edge: 0.05,
+    byType: { L1: { n: 500, wins: 300, losses: 200, unresolved: 0, winRate: 0.6 } },
+  }, over || {});
+  const rWin = maRelReadout(mkRd({ stats: mkStats() }));
+  ok('readout: 高胜率+基线 → 标「有优势」', rWin.rows.some(x => x.label.indexOf('有优势') >= 0));
+  const rLose = maRelReadout(mkRd({ stats: mkStats({ winRate: 0.4, wins: 200, losses: 300, edge: -0.15 }) }));
+  ok('readout: 低胜率+基线 → 标「无优势」', rLose.rows.some(x => x.label.indexOf('无优势') >= 0));
+  const rMid = maRelReadout(mkRd({ stats: mkStats({ winRate: 0.56, edge: 0.01 }) }));
+  ok('readout: 优势在 ±3pp 内 → 标「优势不明确」', rMid.rows.some(x => x.label.indexOf('优势不明确') >= 0));
+  // v1.6.38：样本量守卫 —— n<200 不给百分比结论
+  const rSmall = maRelReadout(mkRd({ stats: mkStats({ n: 70, wins: 30, losses: 40, winRate: 0.43, edge: -0.12 }) }));
+  const smallRow = rSmall.rows.find(x => x.label.indexOf('历史信号胜率') === 0);
+  ok('readout: n<200 → 标「样本不足」', !!smallRow && smallRow.label.indexOf('样本不足') >= 0 && smallRow.label.indexOf('n<200') >= 0);
+  ok('readout: n<200 → 不给百分比结论（label 无 %）', !!smallRow && smallRow.label.indexOf('%') < 0);
+  // v1.6.38：有基线 → label 含「随机基线」
+  const rBase = maRelReadout(mkRd({ stats: mkStats() }));
+  ok('readout: 有基线 → label 含「随机基线」', rBase.rows.some(x => x.label.indexOf('随机基线') >= 0));
+  // 无基线（未算）→ 不显示随机基线且优势不明确
+  const rNoBase = maRelReadout(mkRd({ stats: mkStats({ baseline: null, baselineLong: null, baselineShort: null, edge: null }) }));
+  ok('readout: 无基线 → 不显随机基线 / 优势不明确', !rNoBase.rows.some(x => x.label.indexOf('随机基线') >= 0) && rNoBase.rows.some(x => x.label.indexOf('优势不明确') >= 0));
+}
+
+console.log('\n[maRelation: v1.6.38 alignClosedIdx 已收盘语义（防前视）]');
+{
+  const T = [0, 100, 200];
+  const bar = 100;
+  const t = [50, 100, 150, 200, 300];
+  ok('alignClosedIdx 无 barMs 保持旧行为', JSON.stringify(alignClosedIdx(T, t)) === JSON.stringify([0, 1, 1, 2, 2]));
+  const nc = alignClosedIdx(T, t, bar);
+  ok('barMs: 进行中 bar 之前无已收盘 → -1', nc[0] === -1);
+  ok('barMs: t=bar 收盘 → 0', nc[1] === 0);
+  ok('barMs: t 在 bar 内 → 仍 0', nc[2] === 0);
+  ok('barMs: 下一根收盘 → 1', nc[3] === 1);
+  ok('barMs: 再下一根 → 2', nc[4] === 2);
+  ok('barMs: 恰好等于收盘时刻采用', alignClosedIdx([0], [100], 100)[0] === 0);
+  ok('barMs: 差 1ms 未收盘不采用', alignClosedIdx([0], [99], 100)[0] === -1);
+  ok('barMs 非法值回退旧行为', alignClosedIdx([0, 100], [50], 0)[0] === 0 && alignClosedIdx([0, 100], [50], NaN)[0] === 0 && alignClosedIdx([0, 100], [50], -5)[0] === 0);
+}
+
+console.log('\n[maRelation: v1.6.38 因果 regime（历史信号不受未来日线影响）]');
+{
+  // 主图：缓慢上行 + 周期回踩（会反复触发 L1 多）
+  function risingWithDips(len) {
+    const a = []; let v = 100;
+    for (let i = 0; i < len; i++) { const ph = i % 12; v += ph >= 9 ? -1.2 : 0.9; a.push(v); }
+    return a;
+  }
+  const N = 120;
+  const main = risingWithDips(N);
+  const mainT = main.map((_, i) => i * 86400e3);
+  const highs = main.map(v => v + 0.5), lows = main.map(v => v - 0.5);
+  const atr = new Array(N).fill(1);
+  const opts = { type: 'sma', fast: 3, mid: 5, slow: 8, swing: 2, cool: 1, l3: false, vwap: false, daily: [], weekly: [] };
+  const prefix = new Array(60).fill(100);                          // 共享前缀：走平 → RANGE
+  const tailBull = Array.from({ length: 60 }, (_, i) => 101 + i);  // 后段上涨 → 末态 BULL
+  const tailBear = Array.from({ length: 60 }, (_, i) => 99 - i);   // 后段下跌 → 末态 BEAR
+  const dA = prefix.concat(tailBull), dB = prefix.concat(tailBear);
+  const t1d = mainT.slice();
+  const rA = buildMaRelation({ closes: main, highs, lows, atr, t: mainT, closes1d: dA, t1d, opts });
+  const rB = buildMaRelation({ closes: main, highs, lows, atr, t: mainT, closes1d: dB, t1d, opts });
+  ok('因果: 两版末态日线不同（A BULL / B BEAR）', rA.market.state === 'BULL' && rB.market.state === 'BEAR');
+  const early = (r) => r.signals.filter(s => s.i < 60);
+  const eA = early(rA), eB = early(rB);
+  ok('因果: 早期有信号（用例有意义）', eA.length > 0);
+  ok('因果: 早期信号不受后期日线影响', JSON.stringify(eA) === JSON.stringify(eB));
+  // 对照：去掉 t1d（无法因果）→ 退回全局末态过滤，早期信号应受末态影响
+  const rA2 = buildMaRelation({ closes: main, highs, lows, atr, t: mainT, closes1d: dA, opts });
+  const rB2 = buildMaRelation({ closes: main, highs, lows, atr, t: mainT, closes1d: dB, opts });
+  const eA2 = rA2.signals.filter(s => s.i < 60), eB2 = rB2.signals.filter(s => s.i < 60);
+  ok('因果对照: 无时间戳时退回全局过滤（早期信号受末态影响）', eA2.length !== eB2.length);
+}
+
+console.log('\n[maRelation: v1.6.38 signalForwardStats 随机基线]');
+{
+  const closes = [100, 100, 105, 100, 100, 98, 100, 100, 100];
+  const atr = new Array(closes.length).fill(1);
+  const sigs = [
+    { i: 0, side: 'long', type: 'L1' },
+    { i: 3, side: 'long', type: 'L1' },
+    { i: 6, side: 'long', type: 'L2' },
+  ];
+  const st = signalForwardStats(sigs, closes, atr, { baseline: true });
+  ok('baseline: 有 baselineLong/Short/baseline/edge', st.baselineLong != null && st.baselineShort != null && st.baseline != null && st.edge != null);
+  ok('baseline: 全多信号 → baseline=baselineLong', st.baseline === st.baselineLong);
+  ok('baseline: edge = winRate - baseline', near(st.edge, st.winRate - st.baseline));
+  // 默认关闭（不传 opts.baseline）→ 全 null（向后兼容）
+  const off = signalForwardStats(sigs, closes, atr);
+  ok('baseline: 默认不计算（向后兼容）', off.baseline === null && off.baselineLong === null && off.edge === null);
+  // 多空混合 → 按比例加权
+  const mix = signalForwardStats([
+    { i: 0, side: 'long' }, { i: 3, side: 'long' }, { i: 6, side: 'short' }, { i: 7, side: 'short' },
+  ], closes, atr, { baseline: true });
+  const expect = (mix.baselineLong * 2 + mix.baselineShort * 2) / 4;
+  ok('baseline: 多空混合按比例加权', near(mix.baseline, expect));
+  // 单边空
+  const onlyShort = signalForwardStats([{ i: 0, side: 'short' }], closes, atr, { baseline: true });
+  ok('baseline: 全空 → baseline=baselineShort', onlyShort.baseline === onlyShort.baselineShort);
+  // 空信号输入仍给多空基线
+  const empty = signalForwardStats([], closes, atr, { baseline: true });
+  ok('baseline: 空信号仍给多空基线', empty.n === 0 && empty.baselineLong != null && empty.baselineShort != null && empty.baseline != null);
+  ok('baseline: 空 closes → 基线 null 不抛', signalForwardStats([], [], [], { baseline: true }).baseline === null);
+  // 大样本抽样（len/400）
+  const many = new Array(1200).fill(0).map((_, i) => 100 + (i % 7));
+  const big = signalForwardStats([{ i: 0, side: 'long' }], many, new Array(many.length).fill(1), { baseline: true });
+  ok('baseline: 大样本抽样 step>1 且标记', big.baselineStep > 1 && big.baselineSampled === true);
+  ok('baseline: 小样本 step=1 且未标记抽样', st.baselineStep === 1 && st.baselineSampled === false);
 }
 
 console.log(`\n=== maRelation.test: ${passed} passed, ${failed} failed ===`);

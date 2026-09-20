@@ -645,6 +645,8 @@ body.pwa .kchart-maintools .mt-legend{display:none}
 body.pwa .pwa-snd-head{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 body.pwa .pwa-snd-box{margin:4px 0 10px;padding:8px 10px;border:1px solid var(--border);border-radius:10px;background:rgba(255,255,255,.02)}
 body.pwa .pwa-snd-note{font-size:10.5px;color:var(--text2);margin-bottom:6px;line-height:1.35}
+/* v1.6.38：试听/保存的即时反馈（用户反馈“试听没声音”→ 必须让用户看到播了没播） */
+body.pwa .pwa-snd-status{font-size:10.5px;line-height:1.4;margin:2px 0 8px;min-height:14px;word-break:break-word}
 body.pwa .pwa-snd-group{font-size:10px;font-weight:800;color:var(--accent);letter-spacing:.4px;margin:8px 0 2px;
   padding-top:6px;border-top:1px dashed rgba(255,255,255,.08)}
 body.pwa .pwa-snd-group:first-child{margin-top:0;padding-top:0;border-top:none}

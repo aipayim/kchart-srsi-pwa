@@ -136,6 +136,10 @@ export function soundCatalog() {
 }
 
 // 用给定 AudioContext 合成播放一个预设。返回是否真的播了（静音/无效 ctx → false），**不抛**。
+// v1.6.38：主增益（用户反馈“试听没声音”→ 实测 0.08 在手机外放/低音量下偏轻）。
+// 只在此处放大，所有预设统一受益；如需再调，改这一个常量即可。
+const MASTER_GAIN = 1.8;
+
 export function playSound(ctx, presetId, opts) {
   try {
     if (!ctx || typeof ctx.createOscillator !== 'function' || typeof ctx.createGain !== 'function') return false;
@@ -146,7 +150,7 @@ export function playSound(ctx, presetId, opts) {
     const o = (opts && typeof opts === 'object') ? opts : {};
     const base = Number.isFinite(+o.now) ? +o.now : (Number.isFinite(ctx.currentTime) ? ctx.currentTime : 0);
     const vol = Number.isFinite(+o.gain) ? Math.max(0, +o.gain) : 1;
-    const baseGain = Number.isFinite(+spec.gain) ? +spec.gain : 0.08;
+    const baseGain = (Number.isFinite(+spec.gain) ? +spec.gain : 0.08) * MASTER_GAIN;
     let played = 0;
     for (const n of spec.notes) {
       if (!n || typeof n !== 'object') continue;
