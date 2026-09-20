@@ -312,6 +312,23 @@ export async function fetchFundingRate(sym, startTime, endTime) {
   } catch (e) { return []; }
 }
 
+// 拉取永续标记价 + 最新资金费率（Binance /fapi/v1/premiumIndex），供自适应组合 carry 腿结算使用。
+// fapi 不可达时返回 null（调用方优雅降级：carry 腿暂停结算并记事件）。
+export async function fetchPremiumIndex(sym) {
+  const path = '/fapi/v1/premiumIndex?symbol=' + sym;
+  try {
+    const j = await fetchApiData(path, 'fapi');
+    if (!j || j.markPrice == null) return null;
+    return {
+      symbol: j.symbol || sym,
+      markPrice: +j.markPrice,
+      indexPrice: j.indexPrice != null ? +j.indexPrice : +j.markPrice,
+      lastFundingRate: j.lastFundingRate != null ? +j.lastFundingRate : null,
+      nextFundingTime: j.nextFundingTime != null ? +j.nextFundingTime : null,
+    };
+  } catch (e) { return null; }
+}
+
 // 拉取最新价/24h 涨跌（Binance /ticker/24hr），写回 globalThis.S.prices[sym]
 export async function refreshPrice(sym) {
   const S = globalThis.S;

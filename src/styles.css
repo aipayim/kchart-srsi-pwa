@@ -927,3 +927,30 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .sc-ev .ev-up{color:var(--green,#00E676)}.sc-ev .ev-dn{color:var(--red,#FF5252)}.sc-ev .ev-neu{color:var(--gold,#FFD740)}
 .sc-ev .kbar{display:inline-block;width:2px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 .sc-ev .kb-alpha{background:var(--cyan,#22d3ee)}.sc-ev .kb-band{background:var(--green,#00E676)}.sc-ev .kb-gate{background:var(--purple,#7C4DFF)}.sc-ev .kb-rel{background:var(--accent,#FF6B35)}
+
+/* ===== 自适应组合面板（主系统融合页卡片 + PWA「组合」tab 共用）===== */
+.adp-head{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:4px}
+.adp-spacer{flex:1 1 auto}
+.adp-badge{display:inline-block;padding:1px 7px;border-radius:9px;background:var(--card2);border:1px solid var(--border);color:var(--text2);font-size:10px;white-space:nowrap}
+.adp-eq{font-size:11px;color:var(--text2)}
+.adp-eq b{color:var(--text);font-size:12px}
+.adp-dim{color:var(--text2);font-size:10px}
+.adp-state{font-size:10px;padding:1px 6px;border-radius:8px;border:1px solid var(--border)}
+.adp-state.on{color:var(--green);border-color:var(--green)}
+.adp-state.off{color:var(--text2)}
+.adp-btn{background:var(--card2);border:1px solid var(--accent);color:var(--accent);padding:2px 9px;border-radius:6px;font-size:10px;cursor:pointer;font-family:inherit}
+.adp-btn:hover{background:var(--accent);color:#fff}
+.adp-btn2{border-color:var(--border);color:var(--text2)}
+.adp-btn2:hover{background:var(--card2);color:var(--text)}
+.adp-empty{color:var(--text2);font-size:10px;margin:3px 0}
+.adp-legs{display:flex;flex-direction:column;gap:3px;margin-top:4px;border-top:1px solid var(--border);padding-top:4px}
+.adp-leg{font-size:10px}
+.adp-leg-h{color:var(--text);font-weight:bold;font-size:10px}
+.adp-leg-c{color:var(--text2);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;white-space:normal;word-break:break-word}
+.adp-evs{margin-top:4px;border-top:1px solid var(--border);padding-top:4px;max-height:150px;overflow:auto}
+.adp-ev{display:flex;gap:5px;align-items:flex-start;font-size:10px;line-height:1.5;padding:1px 0}
+.adp-ev-i{flex:0 0 auto;width:12px;text-align:center}
+.adp-ev-t{color:var(--text2);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;word-break:break-word}
+.adp-ev-s{color:var(--text);font-weight:bold}
+.fusion-card .adp-head{margin-top:2px}
+.fusion-card .adp-evs{max-height:120px}

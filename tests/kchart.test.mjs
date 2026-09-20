@@ -8,7 +8,7 @@
 
 import { deepStrictEqual, strictEqual } from 'assert';
 import { downsampleOHLC, sumVol } from '../src/engine/indicators.js';
-import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, marksToSignalEvents, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck, viewWindow, mainH } from '../src/tech2/kchart.js';
+import { manualSignal, actionCardData, __defaultKConfig, __buildSubListFor, srsiPanelSeries, idxFromFrac, fmtVol, mainHoverAt, subHoverAt, nextKMode, kPresetCombos, buildSrsiOverview, overviewVerdict, analyzeTradeDiscipline, dirName, pickConfirm, latestCross, discLiveInfo, horizonTrend, macroTrend, atrPctHistory, deadZoneLatch, deadZoneValue, conflictPenalty, trendConflictNote, hookEnergy, leadingTF, signalLifecycle,   isReversed, countBullBear, bullBearTfs, positionSizing,   shortSignalWeight, weightedVerdict, weightedShortVerdict, energyBallLayout, energyBallHitTest, drawEnergyBall, drawPricePath,   pricePathForecast, reversalInnerColor, kdZone, kdSweepFrac, tfOverviewStat, fmtPrice, perTfSrsi, auxGateDir, auxGateStatus, alignSeriesToBase, kchartApi, computeDirectionScore,       srsiAutoBandState, runSrsiAutoTrade, resetSrsiAuto, bandEdge, srsiConfirmPass, backtestSrsiAuto, klineDirFromCloses, srsiDirFromKD, srsiDirOf, srsiAutoDirs, fetchKlinesRange, _renderBacktestResult, _getSim, buildBacktestConditions, resolveEntryBands,   kdTrendColor, emaOpp2, aggTFData, nativeMain, loadCfg, persist, _btCfgSave, _btCfgLoad, cfg, _btCfg, applyOptToSym, _cfgForSym, setPwaMode, readPwaSrsiOpt, readPwaSrsiAuto, firstOptimizedTf, setTradeConfig, setTradeEngine, kchartTradeOpen, kchartTradeClose, srsiAutoRegime, speedGrade, srsiSpeedInfo, setSrsiLead, _safeSetItem, storageTop, saveSignalMarks, restoreSignalMarks, srsiOpportunityMarks, markHitsInWindow, pulseAlpha, withAlpha, buildMarkList, marksToSignalEvents, markFxXY, markAnchorY, actionCardView, actionCardHtml, clampBoxPos, legendItems, renderLegendHtml, filterOpportunityDraws, maRelInfo, storageSelfCheck, repairStorage, storageBootCheck, viewWindow, mainH, adaptiveOverlayAt, setAdaptiveOverlay } from '../src/tech2/kchart.js';
 import {   srsiKD } from '../src/engine/indicators.js';
 import { THRESH } from '../src/engine/thresholds.js';
 import { KLINE_TF, resample } from '../src/engine/timeframe.js';
@@ -4028,6 +4028,72 @@ console.log('\n[kchart: viewWindow 平移窗口]');
 console.log('\n[kchart: mainH 默认（非满屏零变化）]');
 {
   ok('mainH() 默认返回 320', mainH() === 320);
+}
+
+// ============================================================
+//  自适应组合主图叠加：adaptiveOverlayAt 防前视对齐（纯函数）
+// ============================================================
+console.log('\n[kchart: adaptiveOverlayAt 自适应组合对齐]');
+{
+  const H = 3600e3; // 1h
+  const series = {
+    t: Float64Array.from([0, H, 2 * H, 3 * H, 4 * H]),
+    volQ: Float64Array.from([0.1, 0.4, NaN, 0.9, 0.5]),
+    wA: Float64Array.from([0.1, 0.2, 0.3, 0.4, 0.5]),
+  };
+  // 主图 4h bar（t=0,4H,8H,12H）；4h 的 idx1 应取 1h 最后一根 <= 4H（即 idx4）
+  const times4h = [0, 4 * H, 8 * H, 12 * H];
+  const r1 = adaptiveOverlayAt(series, times4h, 0, 4);
+  ok('基本对齐：bar0(t=0)→series idx0', r1.volQ[0] === 0.1 && r1.wA[0] === 0.1);
+  ok('跨周期：4h bar1(t=4H)→series idx4(≤)', r1.volQ[1] === 0.5 && r1.wA[1] === 0.5);
+  ok('超出 series 末尾：仍取最后一根', r1.volQ[2] === 0.5 && r1.wA[3] === 0.5);
+  ok('返回类型 Float64Array 且长度=end-start', r1.volQ instanceof Float64Array && r1.wA instanceof Float64Array && r1.volQ.length === 4);
+  const r2 = adaptiveOverlayAt(series, [2 * H], 0, 1);
+  ok('NaN 传播：series.volQ[2]=NaN → 输出 NaN，wA 正常', Number.isNaN(r2.volQ[0]) && r2.wA[0] === 0.3);
+  const r3 = adaptiveOverlayAt(series, [-H], 0, 1);
+  ok('早于 series 起点 → NaN', Number.isNaN(r3.volQ[0]) && Number.isNaN(r3.wA[0]));
+  const r4 = adaptiveOverlayAt(series, null, 1, 4);
+  ok('times 缺失回退 series.t：idx1..3', r4.volQ[0] === 0.4 && r4.wA[2] === 0.4 && Number.isNaN(r4.volQ[1]));
+  const r5 = adaptiveOverlayAt(series, times4h, 2, 2);
+  ok('start===end → 空数组', r5.volQ.length === 0 && r5.wA.length === 0);
+  const r6 = adaptiveOverlayAt(series, times4h, -5, 2);
+  ok('负 start 边界：长度正确且越界处 NaN', r6.volQ.length === 7 && Number.isNaN(r6.volQ[0]) && r6.volQ[5] === 0.1 && r6.volQ[6] === 0.5);
+  const r7 = adaptiveOverlayAt(null, times4h, 0, 3);
+  ok('series 为空 → 全 NaN（不抛异常）', r7.volQ.length === 3 && Number.isNaN(r7.volQ[0]) && Number.isNaN(r7.wA[2]));
+  const r8 = adaptiveOverlayAt(series, times4h, 0, 999);
+  ok('end 超界不抛异常且长度按参数', r8.volQ.length === 999);
+}
+
+// ============================================================
+//  自适应组合叠加开关接线（cfg 默认 / normalizeCfg / setAdaptiveOverlay）
+// ============================================================
+console.log('\n[kchart: adaptiveOverlay 开关接线]');
+{
+  const d = __defaultKConfig();
+  ok('默认 adaptiveOverlay=true', d.adaptiveOverlay === true);
+  const nc = __defaultKConfig(); nc.adaptiveOverlay = 'x';
+  kchartApi.__normalizeCfg(nc);
+  ok('normalizeCfg 非布尔 → true', nc.adaptiveOverlay === true);
+  const nc2 = __defaultKConfig(); nc2.adaptiveOverlay = false;
+  kchartApi.__normalizeCfg(nc2);
+  ok('normalizeCfg 保留 false', nc2.adaptiveOverlay === false);
+  ok('kchartApi 暴露 setAdaptiveOverlay/adaptiveOverlayAt', typeof kchartApi.setAdaptiveOverlay === 'function' && typeof kchartApi.adaptiveOverlayAt === 'function');
+  // setAdaptiveOverlay：DOM chip 更新（用 stub document + no-op rAF 避免触发真实重绘）
+  const _fakeEl = { style: {}, textContent: '' };
+  const _prevDoc = globalThis.document, _prevRaf = globalThis.requestAnimationFrame;
+  globalThis.document = { getElementById: (id) => (id === 'adaptiveChip' ? _fakeEl : null) };
+  globalThis.requestAnimationFrame = () => 0;
+  const _prev = cfg.adaptiveOverlay;
+  try {
+    setAdaptiveOverlay(false);
+    ok('setAdaptiveOverlay(false) 写入 cfg + chip 关态', cfg.adaptiveOverlay === false && _fakeEl.textContent === '自适应' && _fakeEl.style.color === 'var(--text2)');
+    setAdaptiveOverlay(true);
+    ok('setAdaptiveOverlay(true) 写入 cfg + chip ✓', cfg.adaptiveOverlay === true && _fakeEl.textContent === '自适应 ✓' && _fakeEl.style.color === '#a78bfa');
+  } finally {
+    cfg.adaptiveOverlay = _prev;
+    if (_prevDoc === undefined) delete globalThis.document; else globalThis.document = _prevDoc;
+    if (_prevRaf === undefined) delete globalThis.requestAnimationFrame; else globalThis.requestAnimationFrame = _prevRaf;
+  }
 }
 
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);

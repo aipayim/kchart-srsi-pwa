@@ -692,6 +692,7 @@ export function defaultKConfig() {
     ruleMonitorOpen: false,     // 规则监测面板展开状态（记忆；v1.5.52 起同时是 HUD 悬浮卡总开关）
     ruleHudPos: null,           // v1.5.52：HUD 拖动后位置 {x,y}（相对 .kchart-box px；null=CSS 默认）
     sigOverlay: true,           // GOAL13：主图实盘信号层（Alpha/SRSI 信号映射，总开关）
+    adaptiveOverlay: true,      // 自适应组合主图叠加（volQ 分位带 + w_A 阶梯线 + 组合事件标记；未启用组合时零绘制）
     btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
     srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
     srsiAutoMode: 'follow',     // 本位：follow=跟随快捷交易(开空U本位/开多币本位) / usdt / coin
@@ -834,6 +835,7 @@ function normalizeCfg(c) {
   if (typeof c.ruleMonitorOpen !== 'boolean') c.ruleMonitorOpen = false; // 规则监测面板默认收缩
   if (!c.ruleHudPos || typeof c.ruleHudPos !== 'object' || typeof c.ruleHudPos.x !== 'number' || typeof c.ruleHudPos.y !== 'number') c.ruleHudPos = null; // v1.5.52：HUD 位置（保留对象或 null）
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
+  if (typeof c.adaptiveOverlay !== 'boolean') c.adaptiveOverlay = true; // 自适应组合主图叠加（默认开，未启用组合时零绘制）
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
   if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
@@ -1380,7 +1382,7 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span id="maRelChip" title="价格-均线关系盯盘辅助层（默认关，纯显示不接自动交易）：本周期 MA20/60(+MA120) · 日线 MA20/50/200 · 周线 MA20/200 · VWAP；右上角 BULL/BEAR/RANGE 状态 + 均线密集/乖离提示；回踩站上(L1)/密集突破(L2)/4H MA20 突破(L3) 信号 + 结构防守位 + 1R/2R 参考线 + 失效叉" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.maRelOn ? '#f59e0b' : 'var(--border)'};background:${cfg.maRelOn ? 'rgba(245,158,11,.15)' : 'var(--card2)'};color:${cfg.maRelOn ? '#f59e0b' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📐 均线关系${cfg.maRelOn ? ' ✓' : ''}</span>${cfg.maRelOn ? `<span id="maRelOpts" class="mt-marel">` +
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span id="adaptiveChip" title="自适应组合主图叠加（默认开）：volQ 分位带（绿低/灰中/红高）+ w_A 阶梯线 + 组合事件标记；需先在 console 启用 window.__adaptivePortfolio（未启用时零绘制）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--border)'};background:${cfg.adaptiveOverlay ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">自适应${cfg.adaptiveOverlay ? ' ✓' : ''}</span><span id="maRelChip" title="价格-均线关系盯盘辅助层（默认关，纯显示不接自动交易）：本周期 MA20/60(+MA120) · 日线 MA20/50/200 · 周线 MA20/200 · VWAP；右上角 BULL/BEAR/RANGE 状态 + 均线密集/乖离提示；回踩站上(L1)/密集突破(L2)/4H MA20 突破(L3) 信号 + 结构防守位 + 1R/2R 参考线 + 失效叉" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.maRelOn ? '#f59e0b' : 'var(--border)'};background:${cfg.maRelOn ? 'rgba(245,158,11,.15)' : 'var(--card2)'};color:${cfg.maRelOn ? '#f59e0b' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📐 均线关系${cfg.maRelOn ? ' ✓' : ''}</span>${cfg.maRelOn ? `<span id="maRelOpts" class="mt-marel">` +
     `<button data-mr="type" title="均线类型（SMA/EMA）">${cfg.maRelType.toUpperCase()}</button>` +
     `<button data-mr="slow" class="${cfg.maRelShowSlow ? 'on' : ''}" title="本周期 MA120">MA120</button>` +
     `<button data-mr="daily" class="${cfg.maRelShowDaily ? 'on' : ''}" title="日线 MA20/50/200">日线</button>` +
@@ -1399,6 +1401,8 @@ function renderMainTools() {
   if (sc) sc.addEventListener('click', () => setSigOverlay(!cfg.sigOverlay));
   const rc = el.querySelector('#rmChip');
   if (rc) rc.addEventListener('click', () => kToggleRuleMonitor());
+  const adc = el.querySelector('#adaptiveChip');
+  if (adc) adc.addEventListener('click', () => setAdaptiveOverlay(!cfg.adaptiveOverlay));
   // v1.6.30：价格-均线关系盯盘辅助层开关 + 参数行
   const mc = el.querySelector('#maRelChip');
   if (mc) mc.addEventListener('click', () => setMaRel(!cfg.maRelOn));
@@ -4327,6 +4331,30 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
+// 自适应组合主图叠加：仅通过 window.__adaptivePortfolio 读取（不 import，避免循环依赖，同 __srsiLiveTrades 模式）。
+// 未开启 cfg.adaptiveOverlay 或 getSeries 返回 null（未启用/无数据）→ null，完全零绘制。
+function adaptiveSeries(sym) {
+  if (!cfg.adaptiveOverlay) return null;
+  try {
+    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
+    if (!AP || typeof AP.getSeries !== 'function') return null;
+    return AP.getSeries(sym) || null;
+  } catch (e) { return null; }
+}
+function adaptiveEnabled() {
+  try {
+    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
+    return !!(AP && typeof AP.isEnabled === 'function' && AP.isEnabled());
+  } catch (e) { return false; }
+}
+function adaptiveEvents(sym) {
+  try {
+    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
+    if (!AP || typeof AP.getEvents !== 'function') return [];
+    const evs = AP.getEvents() || [];
+    return Array.isArray(evs) ? evs.filter(e => e && e.sym === sym && Number.isFinite(e.ts)) : [];
+  } catch (e) { return []; }
+}
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = nativeMain(sym, tf);
@@ -4352,9 +4380,47 @@ function drawMain(ctx, sym, tf, H) {
   const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
   // v1.6.29：缓存主图几何 → 供标记光晕覆盖层（markFxXY）像素级对齐；含 h/l 供标记按高低点锚定
   _mainGeom = { sym, tf, lo, hi, start, n, end, off: (cfg.viewOff || 0), xStep, c, h, l, t };
+  const _adpSeries = adaptiveSeries(sym);   // 自适应组合叠加数据（null=未启用/关闭 → 零绘制）
 
   // 网格
   drawGrid(ctx, PAD_L, PAD_T, plotW, mainH(), 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
+
+  // 自适应组合叠加（背景层，画在蜡烛之前）：volQ 分位带 + w_A 阶梯线/面积。
+  // 绘制顺序决策：先于蜡烛 clip/蜡烛循环 → 蜡烛体/影线完整盖住背景，不重叠蜡烛。
+  if (_adpSeries) {
+    const _adAl = adaptiveOverlayAt(_adpSeries, t, start, end);
+    const _mb = PAD_T + mainH();
+    // 1) volQ 分位带（整列背景）：low(<1/3) 绿 / mid 灰 / high(>2/3) 红，a≈0.06
+    for (let k = 0; k < _adAl.volQ.length; k++) {
+      const vq = _adAl.volQ[k];
+      if (!isFinite(vq)) continue;
+      const x = X(start + k);
+      ctx.fillStyle = vq < 1 / 3 ? 'rgba(0,230,118,0.06)' : (vq > 2 / 3 ? 'rgba(255,82,82,0.06)' : 'rgba(139,149,165,0.06)');
+      ctx.fillRect(x - cw / 2, PAD_T, cw, _mb - PAD_T);
+    }
+    // 2) w_A 阶梯线 + 极淡面积：wA 映射 [0,0.7] → [mainBottom,PAD_T]（wA 越大面积越高）
+    const _WA_MAX = 0.7;
+    const _yWA = (w) => _mb - Math.max(0, Math.min(1, w / _WA_MAX)) * (_mb - PAD_T);
+    ctx.fillStyle = 'rgba(34,211,238,0.05)';
+    for (let k = 0; k < _adAl.wA.length; k++) {
+      const w = _adAl.wA[k];
+      if (!isFinite(w)) continue;
+      const x = X(start + k), y = _yWA(w);
+      ctx.fillRect(x - cw / 2, y, cw, _mb - y);
+    }
+    ctx.strokeStyle = 'rgba(34,211,238,0.55)'; ctx.lineWidth = 1;
+    ctx.beginPath();
+    let _st = false, _py = null;
+    for (let k = 0; k < _adAl.wA.length; k++) {
+      const w = _adAl.wA[k];
+      if (!isFinite(w)) { _st = false; _py = null; continue; }
+      const x = X(start + k), y = _yWA(w);
+      if (!_st) { ctx.moveTo(x, y); _st = true; }
+      else { ctx.lineTo(x, _py); ctx.lineTo(x, y); }   // 先水平后垂直 → 阶梯
+      _py = y;
+    }
+    ctx.stroke();
+  }
 
   ctx.save();
   ctx.beginPath(); ctx.rect(PAD_L, PAD_T, plotW, mainH()); ctx.clip();
@@ -4760,6 +4826,52 @@ function drawMain(ctx, sym, tf, H) {
       }
     });
     ctx.setLineDash([]); ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // 自适应组合叠加（蜡烛之后）：顶部事件刻度 + 左上角状态标签。绘制顺序决策：
+  // 放在所有线/标记之后、标题之前 → 标记/标签不被蜡烛遮，且不与标题（PAD_T+10）重叠。
+  if (_adpSeries) {
+    // 3) 组合历史事件：主图区顶部小竖线（同列多个事件只画一个）
+    const _evs = adaptiveEvents(sym);
+    if (_evs.length) {
+      const _evCol = { volQ_cross: '#22d3ee', carry_rebalance: '#f59e0b', alpha_reweight: '#a78bfa', funding: '#00E676' };
+      const _t0 = t[start], _t1 = t[end - 1];
+      const _barMs = (end - start >= 2 && t[start + 1] != null) ? (t[start + 1] - t[start]) : 0;
+      const _hiT = (_t1 != null && _barMs > 0) ? _t1 + _barMs : _t1;
+      const _seen = new Set();
+      ctx.save();
+      ctx.lineWidth = 1.5;
+      for (const e of _evs) {
+        if (_t0 == null || e.ts < _t0) continue;
+        if (_hiT != null && e.ts > _hiT) continue;
+        let lo = start, hi = end - 1, idx = -1;
+        while (lo <= hi) { const m = (lo + hi) >> 1; if (t[m] <= e.ts) { idx = m; lo = m + 1; } else hi = m - 1; }
+        if (idx < start) idx = start;
+        if (_seen.has(idx)) continue;
+        _seen.add(idx);
+        const x = X(idx);
+        ctx.strokeStyle = _evCol[e.type] || '#8899aa';
+        ctx.beginPath(); ctx.moveTo(x, PAD_T + 3); ctx.lineTo(x, PAD_T + 9); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    // 4) 左上角状态标签（PAD_T+20，避开 PAD_T+10 的「币对·周期」标题）
+    let _vq = null;
+    for (let i = _adpSeries.volQ.length - 1; i >= 0; i--) { const v = _adpSeries.volQ[i]; if (v != null && isFinite(v)) { _vq = v; break; } }
+    let _wa = null;
+    for (let i = _adpSeries.wA.length - 1; i >= 0; i--) { const v = _adpSeries.wA[i]; if (v != null && isFinite(v)) { _wa = v; break; } }
+    const _bucket = _vq == null ? '--' : (_vq < 1 / 3 ? '低波' : _vq > 2 / 3 ? '高波' : '中波');
+    const _lbl = '自适应 volQ ' + (_vq == null ? '--' : _vq.toFixed(2)) + ' ' + _bucket + ' · w_A ' + (_wa == null ? '--' : Math.round(_wa * 100) + '%') + ' · 组合 ' + (adaptiveEnabled() ? '运行中' : '未启用');
+    ctx.save();
+    ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    const _lw = ctx.measureText(_lbl).width;
+    ctx.fillStyle = 'rgba(16,22,30,.72)';
+    ctx.fillRect(PAD_L + 6, PAD_T + 20, _lw + 12, 16);
+    ctx.strokeStyle = 'rgba(167,139,250,.5)'; ctx.lineWidth = 1;
+    ctx.strokeRect(PAD_L + 6, PAD_T + 20, _lw + 12, 16);
+    ctx.fillStyle = '#a78bfa';
+    ctx.fillText(_lbl, PAD_L + 12, PAD_T + 32);
     ctx.restore();
   }
 
@@ -5512,6 +5624,19 @@ function setSigOverlay(on) {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { renderKChart(); renderMainTools(); });
   else { renderKChart(); renderMainTools(); }
 }
+// 自适应组合主图叠加总开关（默认开；未启用组合时 getSeries 返回 null → 零绘制）
+export function setAdaptiveOverlay(on) {
+  cfg.adaptiveOverlay = !!on; persist();
+  const c = typeof document !== 'undefined' ? document.getElementById('adaptiveChip') : null;
+  if (c) {
+    c.style.border = cfg.adaptiveOverlay ? '1px solid #a78bfa' : '1px solid var(--border)';
+    c.style.background = cfg.adaptiveOverlay ? 'rgba(167,139,250,.15)' : 'var(--card2)';
+    c.style.color = cfg.adaptiveOverlay ? '#a78bfa' : 'var(--text2)';
+    c.textContent = '自适应' + (cfg.adaptiveOverlay ? ' ✓' : '');
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => { renderKChart(); renderMainTools(); });
+  else { renderKChart(); renderMainTools(); }
+}
 function setBars(v) { cfg.bars = Math.max(60, Math.min(300, parseInt(v) || 150)); clampViewOff(); persist(); renderKChart(); const lbl = document.getElementById('kchartBarsLbl'); if (lbl) lbl.textContent = cfg.bars; }
 function setShow(key, on) {
   if (!(key in cfg.show)) return;
@@ -6067,6 +6192,31 @@ export function viewWindow(len, bars, off) {
   return { start, n, end, off: o, maxOff };
 }
 
+// 自适应组合主图叠加：防前视对齐（纯函数，可单测）。
+// series = { t(升序毫秒), volQ, wA }（1h 网格）；times = 主图 bar 时间数组；start/end = 可见索引。
+// 对每个主图 bar i，二分找 series.t 中 <= times[i] 的最后一根 j，取 series.volQ[j]/wA[j]。
+// 无匹配（早于 series 起点）/NaN/缺失 → NaN。times 缺失时回退用 series.t 对齐。
+export function adaptiveOverlayAt(series, times, start, end) {
+  const s0 = start | 0, e0 = end | 0;
+  const n = Math.max(0, e0 - s0);
+  const volQ = new Float64Array(n).fill(NaN);
+  const wA = new Float64Array(n).fill(NaN);
+  if (!series || !series.t || !series.t.length || n === 0) return { volQ, wA };
+  const st = series.t;
+  const ts = (times && times.length) ? times : st; // times 缺失回退：直接用 series.t 对齐
+  const sV = series.volQ || [], sW = series.wA || [];
+  for (let k = 0; k < n; k++) {
+    const ti = ts[s0 + k];
+    if (ti == null || !isFinite(ti)) continue; // 主图 bar 时间缺失 → NaN
+    let lo = 0, hi = st.length - 1, j = -1;
+    while (lo <= hi) { const m = (lo + hi) >> 1; if (st[m] <= ti) { j = m; lo = m + 1; } else hi = m - 1; }
+    if (j < 0) continue; // 早于 series 起点 → NaN
+    const v = sV[j]; if (v != null && isFinite(v)) volQ[k] = v;
+    const w = sW[j]; if (w != null && isFinite(w)) wA[k] = w;
+  }
+  return { volQ, wA };
+}
+
 export function idxFromFrac(frac, len, bars, off) {
   if (!(len > 0)) return -1;
   const w = viewWindow(len, bars, off);
@@ -6511,6 +6661,8 @@ export const kchartApi = {
   manualSignal,
   kToggleTradePanel,
   setSigOverlay,
+  setAdaptiveOverlay,
+  adaptiveOverlayAt,
   setMainTF: (tf) => setMainTF(tf),
   setKlineSel: (tf, on) => setKlineSel(tf, on),
   setDiscEvidence: (v) => { cfg.discEvidenceOpen = !!v; persist(); },
@@ -6646,6 +6798,8 @@ export const kchartApi = {
   srsiDirOf
 };
 if (typeof window !== 'undefined') window.kchartApi = kchartApi;
+// GOAL13 红线：onclick 直调必须同时绑 kchartApi + window
+if (typeof window !== 'undefined') window.setAdaptiveOverlay = (on) => setAdaptiveOverlay(on);
 
 // ===================== 快捷合约交易（纸面）=====================
 // 方向定死：空=U本位 / 多=币本位；平仓利润的 50% 自动再投到另一资产。

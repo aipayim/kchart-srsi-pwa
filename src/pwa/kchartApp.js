@@ -9,6 +9,7 @@ import { positionPnlPct } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
 import { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine } from './pwaShell.js';
+import { installAdaptivePortfolio } from './adaptivePortfolio.js';
 globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
@@ -435,6 +436,7 @@ async function init() {
   renderSymList();
   initPwaShell();
   initPwaTrade();
+  initAdaptivePortfolio();
   initLocalLoop();
   initAlphaLab();
   loadSymbol(curSym);   // 回到上次使用的币对（curSym 已含 pwa_last_sym 优先逻辑）
@@ -506,6 +508,17 @@ function savePwaPaper() {
   } catch (e) {}
 }
 
+// 自适应组合（批次 1：引擎 + 纸面记录；UI 稍后）：独立 $1000 账本，默认 disabled。
+// 用户 console 显式 window.__adaptivePortfolio.enable() 后，1s 循环才驱动 tick（纸面）。
+function initAdaptivePortfolio() {
+  try {
+    installAdaptivePortfolio({ symbols: ['BTCUSDT', 'ETHUSDT'], w0: 0.5, capital: 1000 });
+  } catch (e) { try { console.warn('[ADAPTIVE] 初始化失败', e && e.message); } catch (_) {} }
+  // 自适应组合 UI 控制（「组合」tab 按钮 onclick 直调 → 必须挂 globalThis）
+  globalThis.adaptiveToggle = () => { const ap = globalThis.__adaptivePortfolio; if (!ap) return; if (ap.isEnabled()) ap.disable(); else ap.enable(); };
+  globalThis.adaptiveReset = () => { const ap = globalThis.__adaptivePortfolio; if (ap && confirm('重置自适应组合纸面账本？此操作不可撤销。')) ap.reset(); };
+}
+
 function initPwaTrade() {
   if (!globalThis.S.subs) globalThis.S.subs = [];
   if (!globalThis.S.pos) globalThis.S.pos = [];
@@ -555,6 +568,8 @@ function initPwaTrade() {
     if (api && api.refreshPanels && wrap && !wrap.classList.contains('closed')) api.refreshPanels();
     // SRSI 自动交易：每秒按 15m KD 带状态机执行开/平仓
     if (api && api.runSrsiAutoTrade) api.runSrsiAutoTrade();
+    // 自适应组合（默认 disabled → tick no-op；用户显式 enable 后才纸面运行）
+    try { if (globalThis.__adaptivePortfolio && globalThis.__adaptivePortfolio.isEnabled()) globalThis.__adaptivePortfolio.tick(); } catch (e) {}
     // 自动优选引擎：定时 + 无成交双触发重优选（防参数过期）
     if (api && api.maybeAutoOpt) api.maybeAutoOpt();
     // PWA 外壳（KPI / 信号驾驶舱 / 事件流）每秒刷新
@@ -593,7 +608,7 @@ globalThis.pwaSimReset = function pwaSimReset() {
 };
 // 清空全部 PWA 本地持久化（交易对列表 / 模拟设置 / 纸面账户 / K线参数 / 缩放 / 版本标记），用于彻底重置
 globalThis.pwaClearAll = function pwaClearAll() {
-  const keys = ['pwa_syms', 'pwa_sim_settings', 'pwa_paper_state', 'smartTrader_kchart', 'pwa_zoom', 'kchartVer', 'pwa_srsi_opt', 'pwa_srsi_auto', 'pwa_last_sym'];
+  const keys = ['pwa_syms', 'pwa_sim_settings', 'pwa_paper_state', 'smartTrader_kchart', 'pwa_zoom', 'kchartVer', 'pwa_srsi_opt', 'pwa_srsi_auto', 'pwa_last_sym', 'pwa_adaptive_portfolio'];
   keys.forEach(k => { try { localStorage.removeItem(k); } catch (e) {} });
   try { sessionStorage.removeItem('sw_force_clear'); } catch (e) {}
   if (confirm('确定清空所有本地设置并刷新？此操作不可撤销。')) {

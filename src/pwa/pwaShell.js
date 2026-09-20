@@ -14,6 +14,7 @@ import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
+import { renderAdaptivePwa } from '../tech2/adaptivePanel.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -21,6 +22,7 @@ export const PWA_TABS = [
   { id: 'kline', ic: '📈', nm: '盯盘' },
   { id: 'trade', ic: '🧭', nm: '交易' },
   { id: 'bt', ic: '🧪', nm: '回测' },
+  { id: 'portfolio', ic: '⚖', nm: '组合' },
   { id: 'settings', ic: '⚙', nm: '设置' }
 ];
 const TAB_KEY = 'pwa_tab';
@@ -1283,6 +1285,7 @@ export function refreshShell() {
   renderPrice(sym);
   mountBtSection();
   if (_curTab === 'trade') { renderTrade(); renderTrades(); return; }
+  if (_curTab === 'portfolio') { try { renderAdaptivePwa(document.getElementById('pwaAdaptiveBody')); } catch (e) {} return; }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
   const now = Date.now();
   // 基石(Alpha)信号**按币对**取：切币对后不再显示上一个币对的旧值（2026-09-18 修复）
