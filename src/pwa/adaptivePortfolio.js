@@ -85,13 +85,25 @@ const DEFAULT_FETCHERS = { klinesRange: fetchKlinesRange, fundingRate: fetchFund
  * @param {number} [o.capital=1000] 纸面本金
  * @param {object} [o.cfg] { lev, band, feeReserve, dataRefreshMs, d1RefreshMs, fundingRefreshMs, alphaBand, persist, priceSource, fetchers }
  */
-export function createAdaptivePortfolio({ engine, state, symbols = ['BTCUSDT', 'ETHUSDT'], w0 = 0.5, capital = 1000, cfg = {} } = {}) {
+export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 = 0.5, capital = 1000, cfg = {} } = {}) {
   const conf = {
     lev: 3, band: 0.10, feeReserve: 0.004, frac: null,
     dataRefreshMs: 2 * HOUR, d1RefreshMs: 24 * HOUR, fundingRefreshMs: 12 * HOUR, priceRefreshMs: 60e3,
     alphaBand: 0.05, klinesMaxBars: 18000, klinesDays: 740,
     persist: true, ...cfg,
   };
+  // 交易对：默认 BTC/ETH（研究已验证的等权组合）；可由用户增删（非 BTC/ETH 为未验证·仅纸面）。
+  const SYMS_KEY = conf.symbolsKey || 'pwa_adaptive_symbols';
+  const DEFAULT_SYMS = ['BTCUSDT', 'ETHUSDT'];
+  let symbols = (Array.isArray(symbolsIn) && symbolsIn.length) ? symbolsIn.map((s) => String(s).toUpperCase()) : DEFAULT_SYMS.slice();
+  if (conf.persist) {
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const saved = JSON.parse(localStorage.getItem(SYMS_KEY) || 'null');
+        if (Array.isArray(saved) && saved.length) symbols = saved.map((s) => String(s).toUpperCase()).filter(Boolean);
+      }
+    } catch (e) { /* 用默认 */ }
+  }
   const fetchers = { ...DEFAULT_FETCHERS, ...(cfg.fetchers || {}) };
   const priceSource = cfg.priceSource || (() => {
     const host = (typeof globalThis !== 'undefined' && globalThis.S) || null;
@@ -430,6 +442,25 @@ export function createAdaptivePortfolio({ engine, state, symbols = ['BTCUSDT', '
     persist();
   }
 
+  /** 运行时更改交易对列表（会平掉全部持仓并重置账本）。返回是否生效。 */
+  function setSymbols(list) {
+    const clean = [...new Set((list || []).map((s) => String(s).toUpperCase().trim()).filter(Boolean))];
+    if (!clean.length) return false;
+    if (clean.length === symbols.length && clean.every((s, i) => s === symbols[i])) return false;
+    try { (S.pos || []).slice().forEach((p) => { try { engine.exitPosition(p, { reason: '[自适应]交易对变更' }); } catch (e) {} }); } catch (e) {}
+    S.pos = []; S.closed = []; S.realized = 0;
+    if (sub) sub.bal = capital;
+    symbols = clean;
+    Object.keys(perSymbol).forEach((k) => delete perSymbol[k]);
+    symbols.forEach((sym) => { perSymbol[sym] = { sym, volQ: NaN, g: 1, wA: w0, wC: 1 - w0, warming: true, alphaTarget: 0, alphaW: 0, carry: null, bucket: 'na', dataT: 0, d1T: 0, frT: 0, err: null }; });
+    [_h1, _d1, _funding, _premium, _series].forEach((o) => { Object.keys(o).forEach((k) => delete o[k]); });
+    _lastPersistSig = '';
+    try { if (typeof localStorage !== 'undefined') _safeSetItem(SYMS_KEY, JSON.stringify(symbols)); } catch (e) {}
+    recordEvent('symbols_change', { symbols: symbols.slice() });
+    persist();
+    return true;
+  }
+
   function getState() {
     return {
       enabled, capital, w0, symbols, lev: conf.lev, band: conf.band,
@@ -475,6 +506,7 @@ export function createAdaptivePortfolio({ engine, state, symbols = ['BTCUSDT', '
     getStateRef: () => S,
     getSeries,
     getSymbols: () => symbols.slice(),
+    setSymbols,
     recordEvent,
     initIdb,
     _conf: conf,

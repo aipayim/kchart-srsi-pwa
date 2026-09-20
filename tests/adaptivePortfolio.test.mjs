@@ -317,6 +317,26 @@ function makeFetchers({ n = 9000, px = 100, vol = 0.015, seed = 5, fundRate = 0 
   if (savedGMP === undefined) { try { delete globalThis.getMarkPrice; } catch (e) {} } else globalThis.getMarkPrice = savedGMP;
 }
 
+// 3h. setSymbols：运行时改交易对（重建 perSymbol / 平仓 / 幂等 / 事件）
+{
+  const S = makeState(1000);
+  const ap = createAdaptivePortfolio({ state: S, symbols: ['BTCUSDT', 'ETHUSDT'], w0: 0.5, capital: 1000, cfg: { persist: false, priceSource: () => ({ BTCUSDT: { last: 100 }, ETHUSDT: { last: 200 }, SOLUSDT: { last: 50 } }), fetchers: makeFetchers() } });
+  ap.enable();
+  await ap.tick(Date.UTC(2026, 0, 1, 5));
+  ok('setSymbols: 初始列表', ap.getSymbols().join(',') === 'BTCUSDT,ETHUSDT');
+  ok('setSymbols: 初始有仓', S.pos.length > 0);
+  const changed = ap.setSymbols(['BTCUSDT', 'SOLUSDT']);
+  ok('setSymbols: 返回 true', changed === true);
+  ok('setSymbols: getSymbols 更新', ap.getSymbols().join(',') === 'BTCUSDT,SOLUSDT');
+  ok('setSymbols: 平掉旧仓', S.pos.length === 0);
+  const st = ap.getState().perSymbol;
+  ok('setSymbols: perSymbol 重建（SOL 在 / ETH 无）', st.SOLUSDT != null && st.ETHUSDT == null);
+  ok('setSymbols: 幂等（同列表 → false）', ap.setSymbols(['BTCUSDT', 'SOLUSDT']) === false);
+  ok('setSymbols: 空列表 → false', ap.setSymbols([]) === false);
+  ok('setSymbols: 小写/去重归一化', ap.setSymbols(['btcusdt', 'BTCUSDT', 'ethusdt']) === true && ap.getSymbols().join(',') === 'BTCUSDT,ETHUSDT');
+  ok('setSymbols: 事件记录', ap.getEvents().some((e) => e.type === 'symbols_change'));
+}
+
 // 3f. install 挂到 window（模拟）
 {
   const g = globalThis;

@@ -17,6 +17,8 @@ const _hhmm = (ts) => {
   return p(d.getHours()) + ':' + p(d.getMinutes());
 };
 
+const VALIDATED_SYMS = ['BTCUSDT', 'ETHUSDT'];
+
 /** 波动率分位分桶：q 0..1 → 低波(<1/3) / 中波(<2/3) / 高波 / —（非有限）。 */
 export function bucketLabel(q) {
   if (!Number.isFinite(q)) return '—';
@@ -54,6 +56,7 @@ export function eventLabel(e) {
     case 'enable': return { icon: '▶', text: '组合已启用', color: '#2ecc71' };
     case 'disable': return { icon: '⏸', text: '组合已停用', color: '#8899aa' };
     case 'carry_error': return { icon: '⚠', text: `carry 错误：${ev.reason || ''}`, color: '#ff6b6b' };
+    case 'symbols_change': return { icon: '🔧', text: `交易对变更 → ${Array.isArray(ev.symbols) ? ev.symbols.join('/') : '—'}`, color: '#8899aa' };
     default: return { icon: '·', text: ev.type == null ? '—' : String(ev.type), color: '#8899aa' };
   }
 }
@@ -90,6 +93,28 @@ export function buildAdaptiveModel(ap) {
   };
 }
 
+/** 当前主图币对（只读；无 kchartApi 时回退 S.sel）。 */
+function _chartSym() {
+  try {
+    const api = globalThis.kchartApi;
+    const c = (api && api.getConfig) ? api.getConfig() : null;
+    return (c && c.symbol) || (globalThis.S && globalThis.S.sel) || null;
+  } catch (e) { return null; }
+}
+
+/** 主图叠加状态文案（原画在主图左上角的提示现改到本面板，避免遮挡 K 线）。 */
+export function overlayStatusText(m) {
+  if (!m || !m.available) return '主图叠加：组合未初始化';
+  const syms = (m.symbols || []).map((s) => s.sym);
+  const cur = _chartSym();
+  const curIn = !!(cur && syms.indexOf(cur) >= 0);
+  if (!m.enabled) return '主图叠加：未启用（启用后在主图显示 volQ 色带 + w_A 阶梯线）';
+  const loading = syms.length > 0 && (m.symbols || []).every((s) => !s.carry);
+  if (loading) return '主图叠加：数据加载中（首次需拉取 1 年 1h K 线）';
+  if (cur && !curIn) return `主图叠加：当前主图 ${cur} 不在组合内（仅 ${syms.join('/')}）`;
+  return `主图叠加：${cur || '已'}显示 volQ 色带 + w_A 阶梯线`;
+}
+
 /** 顶部指标行：regime 徽章 + 组合权益 + 启用状态 + 启用/重置按钮。 */
 export function adaptiveMetricsHtml(m) {
   if (!m || !m.available) return '<div class="adp-empty">自适应组合未初始化</div>';
@@ -106,7 +131,7 @@ export function adaptiveMetricsHtml(m) {
   const btns = `<button class="adp-btn" onclick="window.adaptiveToggle()">${m.enabled ? '停用' : '启用'}</button>`
     + `<button class="adp-btn adp-btn2" onclick="window.adaptiveReset()">重置</button>`;
   const hint = m.enabled ? '' : '<div class="adp-empty">组合未启用（点启用开始纸面记录）</div>';
-  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}`;
+  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}<div class="adp-ovstatus">${_esc(overlayStatusText(m))}</div>`;
 }
 
 /** 两腿（每币一行）：权重 + carry 腿明细。 */
@@ -143,9 +168,23 @@ export function adaptiveEventsHtml(m) {
   return `<div class="adp-evs">${rows.join('')}</div>`;
 }
 
-/** 整卡 HTML = 指标 + 两腿 + 事件。 */
+/** 交易对增删区（仅完整卡；非 BTC/ETH 标注未验证·仅纸面）。 */
+export function adaptiveSymbolsHtml(m) {
+  if (!m || !m.available) return '';
+  const syms = (m.symbols || []).map((s) => s.sym);
+  const chips = syms.map((sym) => {
+    const unv = VALIDATED_SYMS.indexOf(sym) < 0;
+    return `<span class="adp-sym${unv ? ' unv' : ''}" title="${unv ? '未验证·仅纸面（研究只验证过 BTC/ETH 等权）' : '研究已验证（BTC/ETH 等权）'}">${_esc(sym)}${unv ? ' ⚠' : ''}`
+      + `<button class="adp-sym-x" onclick="window.adaptiveRemoveSymbol('${_esc(sym)}')" title="移除（会平掉该币持仓）">×</button></span>`;
+  }).join('');
+  return `<div class="adp-syms"><div class="adp-syms-h">交易对 <span class="adp-dim">默认 BTC/ETH（研究已验证）；其它为未验证·仅纸面</span></div>`
+    + `<div class="adp-syms-list">${chips}</div>`
+    + `<div class="adp-syms-add"><input id="adpSymInput" type="text" placeholder="如 SOLUSDT" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')window.adaptiveAddSymbol()"><button onclick="window.adaptiveAddSymbol()">添加</button></div></div>`;
+}
+
+/** 整卡 HTML = 指标 + 两腿 + 交易对 + 事件。 */
 export function adaptiveCardHtml(m) {
-  return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveEventsHtml(m);
+  return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m);
 }
 
 /** 紧凑卡（盯盘右栏用）= 指标 + 两腿（不含事件流，事件流在「组合」tab 完整版）。 */

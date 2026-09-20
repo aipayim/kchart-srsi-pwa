@@ -517,6 +517,22 @@ function initAdaptivePortfolio() {
   // 自适应组合 UI 控制（「组合」tab 按钮 onclick 直调 → 必须挂 globalThis）
   globalThis.adaptiveToggle = () => { const ap = globalThis.__adaptivePortfolio; if (!ap) return; if (ap.isEnabled()) ap.disable(); else ap.enable(); };
   globalThis.adaptiveReset = () => { const ap = globalThis.__adaptivePortfolio; if (ap && confirm('重置自适应组合纸面账本？此操作不可撤销。')) ap.reset(); };
+  globalThis.adaptiveAddSymbol = () => {
+    const ap = globalThis.__adaptivePortfolio; if (!ap) return;
+    const el = document.getElementById('adpSymInput');
+    const v = ((el && el.value) || '').toUpperCase().trim(); if (!v) return;
+    const list = ap.getSymbols().slice(); if (list.indexOf(v) < 0) list.push(v);
+    ap.setSymbols(list); if (el) el.value = '';
+    try { refreshShell(); } catch (e) {}
+  };
+  globalThis.adaptiveRemoveSymbol = (sym) => {
+    const ap = globalThis.__adaptivePortfolio; if (!ap) return;
+    const list = ap.getSymbols().filter((s) => s !== sym);
+    if (!list.length) { alert('至少保留一个交易对'); return; }
+    if (!confirm('移除 ' + sym + '？该币持仓会被平掉，账本会重置。')) return;
+    ap.setSymbols(list);
+    try { refreshShell(); } catch (e) {}
+  };
 }
 
 function initPwaTrade() {

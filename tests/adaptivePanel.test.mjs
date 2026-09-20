@@ -4,7 +4,7 @@
 //       renderAdaptivePwa 签名守卫（值未变不重建 DOM）。
 import {
   bucketLabel, eventLabel, buildAdaptiveModel,
-  adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml, adaptiveCompactHtml,
+  adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml, adaptiveCompactHtml, adaptiveSymbolsHtml, overlayStatusText,
   renderAdaptiveFusion, renderAdaptivePwa, renderAdaptiveCompactPwa, resetAdaptivePanelSig,
 } from '../src/tech2/adaptivePanel.js';
 
@@ -155,10 +155,33 @@ console.log('\n[HTML builders]');
   ok('events 含 icon span', has(evs, 'class="adp-ev-i"'));
 
   const card = adaptiveCardHtml(m);
-  ok('card = metrics+legs+events', card === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveEventsHtml(m));
+  ok('card = metrics+legs+symbols+events', card === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m));
+  ok('card 含交易对增删区', has(card, 'adp-syms') && has(card, 'adpSymInput') && has(card, 'window.adaptiveAddSymbol()'));
+  const mSol = buildAdaptiveModel({ getState: () => ({ enabled: true, capital: 1000, equity: 1000, perSymbol: { SOLUSDT: { volQ: 0.5, wA: 0.5, wC: 0.5, bucket: 'mid', carry: null } } }), getEvents: () => [] });
+  ok('非 BTC/ETH 标未验证（unv）', has(adaptiveSymbolsHtml(mSol), 'unv') && has(adaptiveSymbolsHtml(mSol), 'SOLUSDT'));
+  ok('BTC/ETH 不标未验证', !has(adaptiveSymbolsHtml(m), 'unv'));
   const compact = adaptiveCompactHtml(m);
-  ok('compact = metrics+legs（不含事件流）', compact === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m));
-  ok('compact 含两腿但不含事件列表', has(compact, 'Alpha 腿：') && has(compact, 'carry 腿：') && !has(compact, 'adp-evs'));
+  ok('compact = metrics+legs（不含事件流/交易对编辑）', compact === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m));
+  ok('compact 含两腿但不含事件列表/交易对编辑', has(compact, 'Alpha 腿：') && has(compact, 'carry 腿：') && !has(compact, 'adp-evs') && !has(compact, 'adpSymInput'));
+  ok('metrics 含主图叠加状态行', has(adaptiveMetricsHtml(m), '主图叠加：'));
+}
+
+// ================= overlayStatusText（原主图提示现入面板） =================
+console.log('\n[overlayStatusText]');
+{
+  const base = buildAdaptiveModel(mockAp());
+  ok('未初始化', overlayStatusText(null) === '主图叠加：组合未初始化');
+  ok('未启用 → 提示启用', has(overlayStatusText(buildAdaptiveModel(mockAp({ enabled: false }))), '未启用'));
+  ok('启用 → 显示色带/阶梯线说明', has(overlayStatusText(base), 'volQ 色带'));
+  // 当前主图币对不在组合内
+  globalThis.kchartApi = { getConfig: () => ({ symbol: 'SOLUSDT' }) };
+  ok('主图不在组合内 → 明示', has(overlayStatusText(base), '不在组合内') && has(overlayStatusText(base), 'BTCUSDT/ETHUSDT'));
+  globalThis.kchartApi = { getConfig: () => ({ symbol: 'BTCUSDT' }) };
+  ok('主图在组合内 → 已显示', has(overlayStatusText(base), 'BTCUSDT显示') || has(overlayStatusText(base), '已显示'));
+  // 数据加载中：carry 全为 null
+  const loading = buildAdaptiveModel({ getState: () => ({ enabled: true, capital: 1000, equity: 1000, warming: true, symbols: ['BTCUSDT'], perSymbol: { BTCUSDT: { volQ: null, wA: 0.5, wC: 0.5, warming: true, bucket: 'na', carry: null } } }), getEvents: () => [] });
+  ok('数据加载中 → 明示', has(overlayStatusText(loading), '加载中'));
+  delete globalThis.kchartApi;
 }
 
 // ================= renderAdaptiveFusion =================

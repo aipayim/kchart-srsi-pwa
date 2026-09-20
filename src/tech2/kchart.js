@@ -4355,25 +4355,6 @@ function adaptiveEvents(sym) {
     return Array.isArray(evs) ? evs.filter(e => e && e.sym === sym && Number.isFinite(e.ts)) : [];
   } catch (e) { return []; }
 }
-function adaptiveSymbols() {
-  try {
-    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
-    const s = (AP && typeof AP.getSymbols === 'function') ? AP.getSymbols() : null;
-    return Array.isArray(s) && s.length ? s : ['BTCUSDT', 'ETHUSDT'];
-  } catch (e) { return ['BTCUSDT', 'ETHUSDT']; }
-}
-// 开启叠加但无可绘数据时的提示文案（区分「未初始化 / 未启用 / 本币对不在组合内」），否则 null。
-function adaptiveHint(sym) {
-  if (!cfg.adaptiveOverlay) return null;
-  try {
-    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
-    if (!AP || typeof AP.getSeries !== 'function') return '自适应叠加：组合未初始化';
-    if (typeof AP.isEnabled === 'function' && !AP.isEnabled()) return '自适应叠加：组合未启用（到「组合」tab 点「启用」）';
-    const syms = adaptiveSymbols();
-    if (syms.indexOf(sym) < 0) return '自适应叠加：本币对不在组合内（仅 ' + syms.join('/') + '）';
-    return '自适应叠加：数据加载中（首次需拉取 1 年 1h K 线）';
-  } catch (e) { return null; }
-}
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = nativeMain(sym, tf);
@@ -4912,21 +4893,6 @@ function drawMain(ctx, sym, tf, H) {
     ctx.fillStyle = '#a78bfa';
     ctx.fillText(_lbl, PAD_L + 12, PAD_T + 32);
     ctx.restore();
-  } else if (cfg.adaptiveOverlay) {
-    // 开启了叠加但无可绘数据 → 给出明确提示（否则用户会以为「开了却没反应」）
-    const _hint = adaptiveHint(sym);
-    if (_hint) {
-      ctx.save();
-      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-      const _lw = ctx.measureText(_hint).width;
-      ctx.fillStyle = 'rgba(40,30,10,.82)';
-      ctx.fillRect(PAD_L + 6, PAD_T + 20, _lw + 12, 17);
-      ctx.strokeStyle = 'rgba(245,158,11,.6)'; ctx.lineWidth = 1;
-      ctx.strokeRect(PAD_L + 6, PAD_T + 20, _lw + 12, 17);
-      ctx.fillStyle = '#f59e0b';
-      ctx.fillText(_hint, PAD_L + 12, PAD_T + 33);
-      ctx.restore();
-    }
   }
 
   // 标题
