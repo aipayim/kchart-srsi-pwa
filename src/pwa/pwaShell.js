@@ -14,7 +14,7 @@ import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
-import { renderAdaptivePwa } from '../tech2/adaptivePanel.js';
+import { renderAdaptivePwa, renderAdaptiveCompactPwa } from '../tech2/adaptivePanel.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -1304,6 +1304,17 @@ export function refreshShell() {
   renderEngineBar();
   renderRecentSignals();
   renderMaRel();
+  // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
+  try {
+    renderAdaptiveCompactPwa(document.getElementById('pwaAdaptiveCompact'));
+    const _ap = globalThis.__adaptivePortfolio;
+    const _pill = document.getElementById('pwaAdaptivePill');
+    if (_pill && _ap && typeof _ap.getState === 'function') {
+      const _st = _ap.getState();
+      _pill.textContent = _st.enabled ? '● 运行中' : '○ 未启用';
+      _pill.style.color = _st.enabled ? '#2ecc71' : '';
+    }
+  } catch (e) {}
 }
 
 export function initPwaShell() {

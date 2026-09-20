@@ -8,6 +8,7 @@ const _finite = (v) => (Number.isFinite(v) ? v : null);
 const _num = (v, d = 0) => { const n = _finite(v); return n == null ? '—' : n.toFixed(d); };
 const _usd = (v, d = 2) => { const n = _finite(v); return n == null ? '—' : '$' + (Math.abs(n) >= 1000 ? n.toFixed(0) : n.toFixed(d)); };
 const _pct = (v) => { const n = _finite(v); return n == null ? '—' : (n * 100).toFixed(0) + '%'; };
+const _signedPct = (v) => { const n = _finite(v); return n == null ? '—' : (n >= 0 ? '+' : '') + (n * 100).toFixed(0) + '%'; };
 const _qty = (v) => { const n = _finite(v); return n == null ? '—' : n.toFixed(4); };
 const _esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const _hhmm = (ts) => {
@@ -116,10 +117,14 @@ export function adaptiveLegsHtml(m) {
     const c = s.carry || {};
     const bucket = (s.bucket && s.bucket !== 'na') ? bucketText(s.bucket) : bucketLabel(s.volQ);
     const carryTxt = s.carry
-      ? `现货 ${_qty(c.spotQty)} / 永续 ${_qty(c.perpQty)} · 保证金 ${_usd(c.margin)} · 名义 ${_usd(c.notional)} · 资金费 ${_usd(c.fundingCum)} · 再平衡 ${_num(c.rebalCount)}`
-      : '—';
+      ? `carry 腿：现货 ${_qty(c.spotQty)} / 永续 ${_qty(c.perpQty)} · 保证金 ${_usd(c.margin)} · 名义 ${_usd(c.notional)} · 资金费 ${_usd(c.fundingCum)} · 再平衡 ${_num(c.rebalCount)}`
+      : 'carry 腿：—';
+    const at = _finite(s.alphaTarget);
+    const dirTxt = at == null ? '' : (Math.abs(at) < 0.02 ? '（空仓）' : (at > 0 ? '（做多）' : '（做空）'));
+    const alphaTxt = `Alpha 腿：目标 ${_signedPct(s.alphaTarget)}${dirTxt}→ 有效 ${_signedPct(s.alphaW)}（权重 ${_pct(s.wA)}）`;
     return `<div class="adp-leg"><div class="adp-leg-h">${_esc(s.sym)} `
       + `<span class="adp-dim">${bucket} · volQ ${_num(s.volQ, 2)} · g ${_num(s.g, 2)} · w_A ${_pct(s.wA)} · w_C ${_pct(s.wC)}${s.warming ? ' · 预热中' : ''}</span></div>`
+      + `<div class="adp-leg-c adp-leg-alpha">${alphaTxt}</div>`
       + `<div class="adp-leg-c">${carryTxt}</div></div>`;
   });
   return `<div class="adp-legs">${rows.join('')}</div>`;
@@ -143,6 +148,11 @@ export function adaptiveCardHtml(m) {
   return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveEventsHtml(m);
 }
 
+/** 紧凑卡（盯盘右栏用）= 指标 + 两腿（不含事件流，事件流在「组合」tab 完整版）。 */
+export function adaptiveCompactHtml(m) {
+  return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m);
+}
+
 /** 主系统融合页用：读 window.__adaptivePortfolio → 卡片正文 HTML（异常不抛）。 */
 export function renderAdaptiveFusion() {
   try {
@@ -155,7 +165,8 @@ export function renderAdaptiveFusion() {
 }
 
 // ---- PWA DOM 渲染（签名守卫：值未变直接 return，避免每秒重建） ----
-let _sig = null;
+// 完整卡（「组合」tab）与紧凑卡（盯盘右栏）各自独立守卫——否则切 tab 时同模型会让另一容器误判“无变化”而留空。
+const _sigRefFull = { v: null }, _sigRefCompact = { v: null };
 
 function _sigOf(m) {
   if (!m || !m.available) return 'na';
@@ -163,20 +174,26 @@ function _sigOf(m) {
     e: m.enabled ? 1 : 0,
     q: m.equity,
     w: m.warming ? 1 : 0,
-    s: (m.symbols || []).map((s) => [s.sym, s.wA, s.wC, s.carry ? s.carry.notional : null, s.carry ? s.carry.fundingCum : null, s.warming ? 1 : 0]),
+    s: (m.symbols || []).map((s) => [s.sym, s.wA, s.wC, s.alphaTarget, s.alphaW, s.carry ? s.carry.notional : null, s.carry ? s.carry.fundingCum : null, s.warming ? 1 : 0]),
     t: (m.events || []).map((e) => e.ts),
   });
 }
 
 /** 供测试/重置用：清签名守卫。 */
-export function resetAdaptivePanelSig() { _sig = null; }
+export function resetAdaptivePanelSig() { _sigRefFull.v = null; _sigRefCompact.v = null; }
 
-export function renderAdaptivePwa(el) {
+function _renderGuarded(el, ref, htmlFn) {
   if (!el) return;
   let m;
   try { m = buildAdaptiveModel(globalThis.__adaptivePortfolio); } catch (e) { m = { available: false }; }
   const sig = _sigOf(m);
-  if (sig === _sig) return;
-  _sig = sig;
-  try { el.innerHTML = adaptiveCardHtml(m); } catch (e) { el.innerHTML = '<div class="adp-empty">自适应组合渲染失败</div>'; }
+  if (sig === ref.v) return;
+  ref.v = sig;
+  try { el.innerHTML = htmlFn(m); } catch (e) { el.innerHTML = '<div class="adp-empty">自适应组合渲染失败</div>'; }
 }
+
+/** 完整卡（「组合」tab，含事件流对账）。 */
+export function renderAdaptivePwa(el) { _renderGuarded(el, _sigRefFull, adaptiveCardHtml); }
+
+/** 紧凑卡（盯盘右栏，不含事件流）。 */
+export function renderAdaptiveCompactPwa(el) { _renderGuarded(el, _sigRefCompact, adaptiveCompactHtml); }

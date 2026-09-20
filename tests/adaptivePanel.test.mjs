@@ -4,8 +4,8 @@
 //       renderAdaptivePwa 签名守卫（值未变不重建 DOM）。
 import {
   bucketLabel, eventLabel, buildAdaptiveModel,
-  adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml,
-  renderAdaptiveFusion, renderAdaptivePwa, resetAdaptivePanelSig,
+  adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml, adaptiveCompactHtml,
+  renderAdaptiveFusion, renderAdaptivePwa, renderAdaptiveCompactPwa, resetAdaptivePanelSig,
 } from '../src/tech2/adaptivePanel.js';
 
 let passed = 0, failed = 0;
@@ -142,9 +142,11 @@ console.log('\n[HTML builders]');
 
   const legs = adaptiveLegsHtml(m);
   ok('legs 含两币', has(legs, 'BTCUSDT') && has(legs, 'ETHUSDT'));
-  ok('legs 含 carry 明细', has(legs, '现货 0.0012') && has(legs, '永续 -0.0012') && has(legs, '保证金') && has(legs, '资金费') && has(legs, '再平衡 2'));
-  ok('legs 无 carry → —', has(legs, '<div class="adp-leg-c">—</div>'));
+  ok('legs 含 carry 明细', has(legs, 'carry 腿：现货 0.0012') && has(legs, '永续 -0.0012') && has(legs, '保证金') && has(legs, '资金费') && has(legs, '再平衡 2'));
+  ok('legs 无 carry → —', has(legs, 'carry 腿：—'));
   ok('legs 含 w_A/w_C', has(legs, 'w_A 55%') && has(legs, 'w_C 45%'));
+  ok('legs 含 Alpha 腿（目标方向 + 有效仓位）', has(legs, 'Alpha 腿：目标 +30%（做多）→ 有效 +17%'));
+  ok('legs Alpha 空仓标注', has(legs, 'Alpha 腿：目标 +0%（空仓）'));
 
   ok('events 空 → 暂无事件', has(adaptiveEventsHtml({ available: true, events: [] }), '暂无事件'));
   const evs = adaptiveEventsHtml(m);
@@ -154,6 +156,9 @@ console.log('\n[HTML builders]');
 
   const card = adaptiveCardHtml(m);
   ok('card = metrics+legs+events', card === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveEventsHtml(m));
+  const compact = adaptiveCompactHtml(m);
+  ok('compact = metrics+legs（不含事件流）', compact === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m));
+  ok('compact 含两腿但不含事件列表', has(compact, 'Alpha 腿：') && has(compact, 'carry 腿：') && !has(compact, 'adp-evs'));
 }
 
 // ================= renderAdaptiveFusion =================
@@ -192,6 +197,27 @@ console.log('\n[renderAdaptivePwa 签名守卫]');
   const el2 = stubEl();
   renderAdaptivePwa(el2);
   ok('无引擎渲染 → 未初始化提示', has(el2.innerHTML, '未初始化'));
+}
+
+// ================= renderAdaptiveCompactPwa 独立守卫 =================
+console.log('\n[renderAdaptiveCompactPwa 独立守卫]');
+{
+  resetAdaptivePanelSig();
+  const ap = mockAp();
+  globalThis.__adaptivePortfolio = ap;
+  const full = stubEl(), compact = stubEl();
+  // 先渲染完整卡（写 _sigRefFull），再渲染紧凑卡：紧凑卡守卫必须独立，不能因同一模型而跳过
+  renderAdaptivePwa(full);
+  renderAdaptiveCompactPwa(compact);
+  ok('紧凑卡首次渲染不被完整卡守卫误跳过', compact.sets === 1 && has(compact.innerHTML, '低波'));
+  ok('紧凑卡不含事件列表', !has(compact.innerHTML, 'adp-evs'));
+  renderAdaptiveCompactPwa(compact);
+  ok('紧凑卡值未变不重建', compact.sets === 1);
+  ap.__state.equity = 1300;
+  renderAdaptiveCompactPwa(compact);
+  ok('紧凑卡值变化后重建', compact.sets === 2 && has(compact.innerHTML, '1300'));
+  delete globalThis.__adaptivePortfolio;
+  resetAdaptivePanelSig();
 }
 
 console.log('\n[adaptivePanel] ' + passed + ' passed, ' + failed + ' failed');

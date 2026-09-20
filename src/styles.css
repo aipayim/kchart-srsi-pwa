@@ -947,6 +947,7 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .adp-leg{font-size:10px}
 .adp-leg-h{color:var(--text);font-weight:bold;font-size:10px}
 .adp-leg-c{color:var(--text2);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;white-space:normal;word-break:break-word}
+.adp-leg-alpha{color:#a78bfa}
 .adp-evs{margin-top:4px;border-top:1px solid var(--border);padding-top:4px;max-height:150px;overflow:auto}
 .adp-ev{display:flex;gap:5px;align-items:flex-start;font-size:10px;line-height:1.5;padding:1px 0}
 .adp-ev-i{flex:0 0 auto;width:12px;text-align:center}
