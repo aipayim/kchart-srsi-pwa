@@ -463,16 +463,14 @@ function mountBtSection() {
   if (sec) bindBtToggle(sec);
   ensureBtOpen();
 }
-// 搬走后 kchart.js 的原 toggle 处理器按 bar 查不到节点（DOM 已移出）→ 这里补上视觉切换 + 记忆
+// kchart.js 的 .kt-bt-head 监听器已改用 document 查找（搬走后仍有效），故这里只补「已手动操作」记忆，
+// 不再自行 toggle（否则点标题栏会双切换 → 视觉不变）。
 function bindBtToggle(sec) {
-  const tog = sec.querySelector('#ktBtToggle'), body = sec.querySelector('#ktBtBody');
-  if (!tog || !body || tog.__pwaBound) return;
-  tog.__pwaBound = true;
-  tog.addEventListener('click', () => {
+  const head = sec.querySelector('.kt-bt-head');
+  if (!head || head.__pwaBound) return;
+  head.__pwaBound = true;
+  head.addEventListener('click', () => {
     try { localStorage.setItem('pwa_bt_body_touched', '1'); } catch (e) {}
-    const show = body.style.display === 'none';
-    body.style.display = show ? '' : 'none';
-    tog.textContent = show ? '▾' : '▸';
   });
 }
 // 回测设置默认展开（首次）；用户手动收起过则尊重（pwa_bt_body_touched）

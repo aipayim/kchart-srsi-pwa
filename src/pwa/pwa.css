@@ -348,6 +348,8 @@ body.pwa .kchart-maintools{flex-basis:100%;width:100%}
 
 /* ---- 交易条（既有 .kt-* 结构）卡片化换肤 ---- */
 body.pwa #kchartTradeBar{display:flex;flex-direction:column;gap:9px;padding:12px}
+/* 折叠时隐藏交易条（需 ID 选择器才压得过上面的 body.pwa #kchartTradeBar{display:flex}） */
+body.pwa .kchart-discwrap.closed #kchartTradeBar{display:none}
 body.pwa #kchartTradeBar .kt-row{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:11px;color:var(--text)}
 body.pwa #kchartTradeBar .kt-label{color:var(--text2)}
 body.pwa #kchartTradeBar .kt-val{color:var(--accent);font-weight:700;min-width:34px}

@@ -671,6 +671,9 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .kchart-settings-body{padding:8px 10px;display:flex;flex-direction:column;gap:6px}
 .kchart-settings.closed .kchart-settings-body{display:none}
 .kchart-settings.closed .kchart-ovarrow{transform:rotate(-90deg)}
+/* Alpha 实验室折叠：closed 时隐藏内容（与速览/纪律/交易面板一致；主系统+PWA 共用） */
+.kchart-alphawrap.closed .alpha-lab{display:none}
+.kchart-alphawrap.closed .kchart-ovarrow{transform:rotate(-90deg)}
 .kchart-settings .setting-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px}
 .kchart-settings .setting-row label{color:var(--text2)}
 .kchart-settings .setting-row input,.kchart-settings .setting-row select{background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:4px;padding:3px 6px;font-family:inherit;font-size:11px}

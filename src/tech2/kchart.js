@@ -7322,7 +7322,9 @@ function renderQuickTrade() {
     b.querySelector('.kt-bt-head').addEventListener('click', () => {
       _btCfg.collapsed = !_btCfg.collapsed;
       _btCfgSave();
-      const body = b.querySelector('#ktBtBody'), tog = b.querySelector('#ktBtToggle');
+      // PWA：该区被搬出交易条到回测页 → 用 document 查找（原 b.querySelector 会查不到而无效）
+      const body = (typeof document !== 'undefined') ? document.getElementById('ktBtBody') : null;
+      const tog = (typeof document !== 'undefined') ? document.getElementById('ktBtToggle') : null;
       if (body) body.style.display = _btCfg.collapsed ? 'none' : '';
       if (tog) tog.textContent = _btCfg.collapsed ? '▸' : '▾';
     });
