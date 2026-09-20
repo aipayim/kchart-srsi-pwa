@@ -4355,6 +4355,25 @@ function adaptiveEvents(sym) {
     return Array.isArray(evs) ? evs.filter(e => e && e.sym === sym && Number.isFinite(e.ts)) : [];
   } catch (e) { return []; }
 }
+function adaptiveSymbols() {
+  try {
+    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
+    const s = (AP && typeof AP.getSymbols === 'function') ? AP.getSymbols() : null;
+    return Array.isArray(s) && s.length ? s : ['BTCUSDT', 'ETHUSDT'];
+  } catch (e) { return ['BTCUSDT', 'ETHUSDT']; }
+}
+// 开启叠加但无可绘数据时的提示文案（区分「未初始化 / 未启用 / 本币对不在组合内」），否则 null。
+function adaptiveHint(sym) {
+  if (!cfg.adaptiveOverlay) return null;
+  try {
+    const AP = (typeof window !== 'undefined') ? window.__adaptivePortfolio : null;
+    if (!AP || typeof AP.getSeries !== 'function') return '自适应叠加：组合未初始化';
+    if (typeof AP.isEnabled === 'function' && !AP.isEnabled()) return '自适应叠加：组合未启用（到「组合」tab 点「启用」）';
+    const syms = adaptiveSymbols();
+    if (syms.indexOf(sym) < 0) return '自适应叠加：本币对不在组合内（仅 ' + syms.join('/') + '）';
+    return '自适应叠加：数据加载中（首次需拉取 1 年 1h K 线）';
+  } catch (e) { return null; }
+}
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = nativeMain(sym, tf);
@@ -4390,36 +4409,56 @@ function drawMain(ctx, sym, tf, H) {
   if (_adpSeries) {
     const _adAl = adaptiveOverlayAt(_adpSeries, t, start, end);
     const _mb = PAD_T + mainH();
-    // 1) volQ 分位带（整列背景）：low(<1/3) 绿 / mid 灰 / high(>2/3) 红，a≈0.06
+    // 1) volQ 分位带（整列背景）：low(<1/3) 绿 / mid 灰 / high(>2/3) 红，a≈0.09
     for (let k = 0; k < _adAl.volQ.length; k++) {
       const vq = _adAl.volQ[k];
       if (!isFinite(vq)) continue;
       const x = X(start + k);
-      ctx.fillStyle = vq < 1 / 3 ? 'rgba(0,230,118,0.06)' : (vq > 2 / 3 ? 'rgba(255,82,82,0.06)' : 'rgba(139,149,165,0.06)');
+      ctx.fillStyle = vq < 1 / 3 ? 'rgba(0,230,118,0.09)' : (vq > 2 / 3 ? 'rgba(255,82,82,0.09)' : 'rgba(139,149,165,0.09)');
       ctx.fillRect(x - cw / 2, PAD_T, cw, _mb - PAD_T);
     }
-    // 2) w_A 阶梯线 + 极淡面积：wA 映射 [0,0.7] → [mainBottom,PAD_T]（wA 越大面积越高）
+    // 1b) 顶部 regime 色带（5px 实色，远距离一眼可辨：绿=低波 / 灰=中波 / 红=高波）
+    for (let k = 0; k < _adAl.volQ.length; k++) {
+      const vq = _adAl.volQ[k];
+      if (!isFinite(vq)) continue;
+      const x = X(start + k);
+      ctx.fillStyle = vq < 1 / 3 ? 'rgba(0,230,118,0.75)' : (vq > 2 / 3 ? 'rgba(255,82,82,0.75)' : 'rgba(139,149,165,0.55)');
+      ctx.fillRect(x - cw / 2, PAD_T, cw, 5);
+    }
+    // 2) w_A 阶梯线 + 淡面积：wA 映射 [0,0.7] → [mainBottom,PAD_T]（wA 越大面积越高）
     const _WA_MAX = 0.7;
     const _yWA = (w) => _mb - Math.max(0, Math.min(1, w / _WA_MAX)) * (_mb - PAD_T);
-    ctx.fillStyle = 'rgba(34,211,238,0.05)';
+    ctx.fillStyle = 'rgba(34,211,238,0.08)';
     for (let k = 0; k < _adAl.wA.length; k++) {
       const w = _adAl.wA[k];
       if (!isFinite(w)) continue;
       const x = X(start + k), y = _yWA(w);
       ctx.fillRect(x - cw / 2, y, cw, _mb - y);
     }
-    ctx.strokeStyle = 'rgba(34,211,238,0.55)'; ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(34,211,238,0.9)'; ctx.lineWidth = 1.5;
     ctx.beginPath();
-    let _st = false, _py = null;
+    let _st = false, _py = null, _lastW = null, _lastX = null, _lastY = null;
     for (let k = 0; k < _adAl.wA.length; k++) {
       const w = _adAl.wA[k];
       if (!isFinite(w)) { _st = false; _py = null; continue; }
       const x = X(start + k), y = _yWA(w);
       if (!_st) { ctx.moveTo(x, y); _st = true; }
       else { ctx.lineTo(x, _py); ctx.lineTo(x, y); }   // 先水平后垂直 → 阶梯
-      _py = y;
+      _py = y; _lastW = w; _lastX = x; _lastY = y;
     }
     ctx.stroke();
+    // 2b) 右缘 w_A 读数（贴着阶梯线末点，便于直接读当前 Alpha 权重）
+    if (_lastW != null) {
+      const _txt = 'w_A ' + Math.round(_lastW * 100) + '%';
+      ctx.save();
+      ctx.font = 'bold 9px monospace'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      const _tw = ctx.measureText(_txt).width;
+      ctx.fillStyle = 'rgba(16,22,30,.78)';
+      ctx.fillRect(W - PAD_R - _tw - 8, _lastY - 7, _tw + 8, 14);
+      ctx.fillStyle = '#22d3ee';
+      ctx.fillText(_txt, W - PAD_R - 4, _lastY);
+      ctx.restore();
+    }
   }
 
   ctx.save();
@@ -4852,7 +4891,7 @@ function drawMain(ctx, sym, tf, H) {
         _seen.add(idx);
         const x = X(idx);
         ctx.strokeStyle = _evCol[e.type] || '#8899aa';
-        ctx.beginPath(); ctx.moveTo(x, PAD_T + 3); ctx.lineTo(x, PAD_T + 9); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(x, PAD_T + 8); ctx.lineTo(x, PAD_T + 14); ctx.stroke();
       }
       ctx.restore();
     }
@@ -4873,6 +4912,21 @@ function drawMain(ctx, sym, tf, H) {
     ctx.fillStyle = '#a78bfa';
     ctx.fillText(_lbl, PAD_L + 12, PAD_T + 32);
     ctx.restore();
+  } else if (cfg.adaptiveOverlay) {
+    // 开启了叠加但无可绘数据 → 给出明确提示（否则用户会以为「开了却没反应」）
+    const _hint = adaptiveHint(sym);
+    if (_hint) {
+      ctx.save();
+      ctx.font = 'bold 10px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+      const _lw = ctx.measureText(_hint).width;
+      ctx.fillStyle = 'rgba(40,30,10,.82)';
+      ctx.fillRect(PAD_L + 6, PAD_T + 20, _lw + 12, 17);
+      ctx.strokeStyle = 'rgba(245,158,11,.6)'; ctx.lineWidth = 1;
+      ctx.strokeRect(PAD_L + 6, PAD_T + 20, _lw + 12, 17);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillText(_hint, PAD_L + 12, PAD_T + 33);
+      ctx.restore();
+    }
   }
 
   // 标题
