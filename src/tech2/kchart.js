@@ -3637,10 +3637,10 @@ export function legendItems() {
     { icon: '◆', color: '#22d3ee', label: 'α多', title: 'Alpha 基石实盘 加多/减空（调仓）' },
     { icon: '◆', color: '#f59e0b', label: 'α空', title: 'Alpha 基石实盘 加空/减多（调仓）' },
     { icon: '◇', color: '#8899aa', label: 'α平', title: 'Alpha 基石实盘 平仓' },
-    { icon: '●', color: '#2ecc71', label: '机会多', title: '15m SRSI 看多机会：K 跌入超卖区（穿越下带）' },
-    { icon: '●', color: '#ff6b6b', label: '机会空', title: '15m SRSI 看空机会：K 升入超买区（穿越上带）' },
-    { icon: '◆', color: '#00E676', label: '金钩', title: '金钩：低位金叉 + 突破超卖线（看多；同根同侧与机会点重叠时只显示钩）' },
-    { icon: '◆', color: '#FF5252', label: '死钩', title: '死钩：高位死叉 + 跌破超买线（看空；同根同侧与机会点重叠时只显示钩）' },
+    { icon: '●', color: '#2ecc71', label: '机会多', title: '15m SRSI 看多机会：K 跌入超卖区（穿越下带）· 仅信号非成交，历史命中≈随机' },
+    { icon: '●', color: '#ff6b6b', label: '机会空', title: '15m SRSI 看空机会：K 升入超买区（穿越上带）· 仅信号非成交，历史命中≈随机' },
+    { icon: '◆', color: '#00E676', label: '金钩', title: '金钩：低位金叉 + 突破超卖线（看多；同根同侧与机会点重叠时只显示钩）· 仅信号非成交，历史命中≈随机（钩比穿越更差）' },
+    { icon: '◆', color: '#FF5252', label: '死钩', title: '死钩：高位死叉 + 跌破超买线（看空；同根同侧与机会点重叠时只显示钩）· 仅信号非成交，历史命中≈随机（钩比穿越更差）' },
   ];
 }
 export function renderLegendHtml() {
@@ -6166,7 +6166,8 @@ export function markHitsInWindow(t0, t1, { alphaMarks = [], srsiTrades = [], opp
   }
   for (const op of opportunities) {
     if (!op || !inWin(op.t)) continue;
-    hits.push(op.label);
+    // 机会点/钩为「仅信号·非成交」，历史命中≈随机（审计结论）→ hover 显式提示
+    hits.push(op.label + '（≈随机）');
   }
   return hits;
 }

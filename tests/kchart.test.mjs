@@ -3772,7 +3772,7 @@ console.log('\n[kchart: 机会点 srsiOpportunityMarks / 标记行 markHitsInWin
   ok('标记行：α平仓', r1[1] === '◆α平仓(基石)');
   ok('标记行：▲SRSI开多(自动)', r1[2] === '▲SRSI开多(自动)');
   ok('标记行：●SRSI平仓(自动)', r1[3] === '●SRSI平仓(自动)');
-  ok('标记行：机会点原样透传', r1[4] === '●机会 金钩·看多');
+  ok('标记行：机会点带≈随机提示', r1[4] === '●机会 金钩·看多（≈随机）');
   ok('标记行：顺序 α → SRSI → 机会', r1[0].startsWith('◆') && r1[2].startsWith('▲') && r1[4].startsWith('●机会'));
   ok('标记行：空输入 → []', markHitsInWindow(0, 1, {}).length === 0);
   ok('标记行：undefined 列表 → []', markHitsInWindow(0, 1).length === 0);
@@ -3936,6 +3936,10 @@ console.log('\n[kchart: pulseAlpha / withAlpha / buildMarkList / markFxXY / acti
   ok('legendItems 含机会多/机会空（旧硬编码漏了）', L.some(x => x.label === '机会多') && L.some(x => x.label === '机会空'));
   ok('legendItems 含 SRSI 平仓与 α 平仓', L.some(x => x.label === 'SRSI平仓') && L.some(x => x.label === 'α平'));
   ok('legendItems 每项有 icon/color/label/title', L.every(x => x.icon && x.color && x.label && x.title));
+  // v1.6.39：机会点/钩（仅信号非成交）在 title 上标注「历史命中≈随机」
+  ok('legendItems 机会多/空 title 含≈随机', ['机会多', '机会空'].every(lb => { const it = L.find(x => x.label === lb); return it && it.title.includes('仅信号非成交') && it.title.includes('≈随机'); }));
+  ok('legendItems 金钩/死钩 title 含≈随机且钩更差', ['金钩', '死钩'].every(lb => { const it = L.find(x => x.label === lb); return it && it.title.includes('≈随机') && it.title.includes('钩比穿越更差'); }));
+  ok('legendItems 成交类 title 不加≈随机', L.filter(x => ['SRSI开多', 'α多', 'α平'].indexOf(x.label) >= 0).every(x => !x.title.includes('≈随机')));
   const LH = renderLegendHtml();
   ok('renderLegendHtml 含全部 label 与 title', L.every(x => LH.includes(x.label) && LH.includes(x.title)));
   ok('renderLegendHtml 输出 <i> 标签', (LH.match(/<i /g) || []).length === 10);

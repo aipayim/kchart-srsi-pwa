@@ -23,10 +23,10 @@ export const SIGNAL_KINDS = {
   'srsi-close': { label: '卫星·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '●' },
   'srsi-preview': { label: '卫星·预演将破带', side: null, severity: 'preview', color: '#FFB300', icon: '◌' },
   // v1.6.25：主图「机会点 / 钩」也入流（与主图标记一一对应）
-  'srsi-cross-buy': { label: '卫星·机会·跌入超卖（看多）', side: 'long', severity: 'signal', color: '#2ecc71', icon: '●' },
-  'srsi-cross-sell': { label: '卫星·机会·升入超买（看空）', side: 'short', severity: 'signal', color: '#ff6b6b', icon: '●' },
-  'srsi-hook-gold': { label: '卫星·金钩（看多）', side: 'long', severity: 'signal', color: '#00E676', icon: '◆' },
-  'srsi-hook-death': { label: '卫星·死钩（看空）', side: 'short', severity: 'signal', color: '#FF5252', icon: '◆' },
+  'srsi-cross-buy': { label: '卫星·机会·跌入超卖（看多·历史≈随机）', side: 'long', severity: 'signal', color: '#2ecc71', icon: '●' },
+  'srsi-cross-sell': { label: '卫星·机会·升入超买（看空·历史≈随机）', side: 'short', severity: 'signal', color: '#ff6b6b', icon: '●' },
+  'srsi-hook-gold': { label: '卫星·金钩（看多·历史≈随机）', side: 'long', severity: 'signal', color: '#00E676', icon: '◆' },
+  'srsi-hook-death': { label: '卫星·死钩（看空·历史≈随机）', side: 'short', severity: 'signal', color: '#FF5252', icon: '◆' },
   'alpha-rebal': { label: '基石·调仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
   'alpha-open': { label: '基石·开仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
   'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '◇' }
