@@ -13,7 +13,7 @@ import { THRESH } from '../engine/thresholds.js';
 import { pushSignalEvent } from './signalAlerts.js';
 import { buildMaRelation, MA_REL_DEFAULTS } from '../engine/maRelation.js';
 import { buildChanlun } from '../engine/chanlun.js';
-import { chanlunWindowItems, chanlunReadout, chanDelayInfo, CHAN_LAYERS, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
+import { chanlunWindowItems, chanlunReadout, chanDelayInfo, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from './chanlunPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
@@ -1458,12 +1458,7 @@ function renderMainTools() {
       const b = e.target && e.target.closest ? e.target.closest('button[data-ch]') : null;
       if (!b) return;
       const k = b.getAttribute('data-ch');
-      if (k === 'showBi') cfg.chanShowBi = !cfg.chanShowBi;
-      else if (k === 'showSeg') cfg.chanShowSeg = !cfg.chanShowSeg;
-      else if (k === 'showZs') cfg.chanShowZs = !cfg.chanShowZs;
-      else if (k === 'showDiv') cfg.chanShowDiv = !cfg.chanShowDiv;
-      else if (k === 'showBsp') cfg.chanShowBsp = !cfg.chanShowBsp;
-      else if (k === 'showTrend') cfg.chanShowTrend = !cfg.chanShowTrend;
+      if (CHAN_LAYERS.some((L) => L.key === k)) { const key = chanCfgKey(k); cfg[key] = !cfg[key]; }
       else if (k === 'bimode') cfg.chanBiMode = cfg.chanBiMode === 'new' ? 'old' : 'new';
       else if (k === 'zsgate') cfg.chanZsGate = cfg.chanZsGate === 'first3' ? 'all' : 'first3';
       else if (k === 'useseg') cfg.chanUseSegForZs = !cfg.chanUseSegForZs;
@@ -3936,8 +3931,9 @@ function chanChipHtml() {
   const chip = `<span id="chanChip" title="缠论结构层（默认关，纯显示不接自动交易）：笔/线段/中枢矩形/背驰/三类买卖点/走势类型 —— ⚠ ${CHAN_DISCLAIMER}。⚠ ${CHAN_MULTI_NOTE}" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.chanOn ? '#a78bfa' : 'var(--border)'};background:${cfg.chanOn ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.chanOn ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">🧩 缠论${cfg.chanOn ? ' ✓' : ''}</span>`;
   if (!cfg.chanOn) return chip;
   const b = (k, label, on, title) => `<button data-ch="${k}" class="${on ? 'on' : ''}" title="${title}">${label}</button>`;
+  // CHAN_LAYERS.key（showBi…）= 引擎侧命名；cfg 字段带 chan 前缀（chanShowBi…）——必须映射，否则按钮永远不点亮
   return chip + `<span id="chanOpts" class="mt-chan">` +
-    CHAN_LAYERS.map((L) => b(L.key, L.label, !!cfg[L.key], L.title)).join('') +
+    CHAN_LAYERS.map((L) => b(L.key, L.label, !!cfg[chanCfgKey(L.key)], L.title)).join('') +
     b('bimode', cfg.chanBiMode === 'old' ? '老笔' : '新笔', true, '笔的定义：新笔=端点距离≥4 / 老笔=≥5（原著未统一）') +
     b('zsgate', cfg.chanZsGate === 'all' ? '中枢全部' : '中枢前三段', true, '中枢区间口径：前三段固定(first3) / 全部重叠段(all)') +
     b('useseg', '用线段', !!cfg.chanUseSegForZs, '用线段构造中枢（原著第83课称线段中枢更稳定；但线段为多解层）') +
@@ -5914,6 +5910,8 @@ function setSigOverlay(on) {
 // 自适应组合主图叠加总开关（默认开；未启用组合时 getSeries 返回 null → 零绘制）
 export function setAdaptiveOverlay(on) {
   cfg.adaptiveOverlay = !!on; persist();
+  // PWA：立即刷新右栏（关闭时「自适应组合」卡消失）
+  try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e0) {}
   const c = typeof document !== 'undefined' ? document.getElementById('adaptiveChip') : null;
   if (c) {
     c.style.border = cfg.adaptiveOverlay ? '1px solid #a78bfa' : '1px solid var(--border)';

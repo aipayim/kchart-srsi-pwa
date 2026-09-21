@@ -27,6 +27,13 @@ export const CHAN_LAYERS = [
   { key: 'showTrend', label: '走势', title: '走势类型（多解层·继承中枢口径）：1 个中枢=盘整；≥2 个同向不重叠中枢=上涨/下跌' },
 ];
 
+// CHAN_LAYERS.key（引擎侧命名 showBi/showSeg…）→ kchart cfg 字段名（chanShowBi/chanShowSeg…）。
+// 必须显式映射：曾因直接读 cfg[L.key]（= cfg.showBi 不存在）导致药丸按钮永远不点亮。
+export function chanCfgKey(layerKey) {
+  const k = String(layerKey || '');
+  return 'chan' + k.charAt(0).toUpperCase() + k.slice(1);
+}
+
 const num = (v) => typeof v === 'number' && Number.isFinite(v);
 const arr = (v) => (Array.isArray(v) ? v : []);
 
@@ -57,6 +64,9 @@ const BSP_META = {
 export function chanBspMeta(kind) {
   return BSP_META[kind] || { name: kind ? String(kind) : '?', icon: '◇', side: 'long' };
 }
+
+// 各层在 cfg 中的实际开关字段名（供 UI 读取/切换，与 CHAN_LAYERS 顺序一致）
+export const CHAN_LAYER_CFG_KEYS = CHAN_LAYERS.map((L) => chanCfgKey(L.key));
 
 // 单笔的起止价（makeBi 只存 high/low + dir，这里还原 y0→y1 方向）
 function biPrices(bi) {

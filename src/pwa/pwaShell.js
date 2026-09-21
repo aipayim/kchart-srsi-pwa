@@ -1346,6 +1346,9 @@ export function refreshShell() {
   renderMaRel();
   renderChan();
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
+  // 主图工具栏「自适应」药丸关闭时，整卡隐藏（与「均线关系」「缠论」一致）
+  const _adpCard = $('pwaAdaptiveCard');
+  if (_adpCard) _adpCard.style.display = (cfg && cfg.adaptiveOverlay === false) ? 'none' : '';
   try {
     renderAdaptiveCompactPwa(document.getElementById('pwaAdaptiveCompact'));
     const _ap = globalThis.__adaptivePortfolio;

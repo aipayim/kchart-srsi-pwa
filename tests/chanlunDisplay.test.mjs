@@ -5,7 +5,7 @@
 import { buildChanlun, normalizeBars } from '../src/engine/chanlun.js';
 import {
   chanlunWindowItems, chanlunReadout, chanDelayInfo, chanSignalDelayText, chanBspMeta,
-  CHAN_LAYERS, CHAN_DISCLAIMER, CHAN_MULTI_NOTE,
+  CHAN_LAYERS, chanCfgKey, CHAN_LAYER_CFG_KEYS, CHAN_DISCLAIMER, CHAN_MULTI_NOTE,
 } from '../src/engine/chanlunDisplay.js';
 import { chanlunReadoutHtml, renderChanlunInto } from '../src/tech2/chanlunPanel.js';
 
@@ -53,6 +53,25 @@ const chan = buildChanlun(bars, { on: true });
   ok('chanBspMeta: 1b=一买/看多', chanBspMeta('1b').name === '一买' && chanBspMeta('1b').side === 'long');
   ok('chanBspMeta: 3s=三卖/看空', chanBspMeta('3s').name === '三卖' && chanBspMeta('3s').side === 'short');
   ok('chanBspMeta: 未知 kind 回退不抛', chanBspMeta('xx').name === 'xx' && chanBspMeta(undefined).icon === '◇');
+}
+
+// ---------- 0b. chanCfgKey / CHAN_LAYER_CFG_KEYS（回归：药丸按钮必须点亮） ----------
+{
+  ok('chanCfgKey: showBi → chanShowBi', chanCfgKey('showBi') === 'chanShowBi');
+  ok('chanCfgKey: showSeg/showZs/showDiv/showBsp/showTrend',
+    chanCfgKey('showSeg') === 'chanShowSeg' && chanCfgKey('showZs') === 'chanShowZs' &&
+    chanCfgKey('showDiv') === 'chanShowDiv' && chanCfgKey('showBsp') === 'chanShowBsp' &&
+    chanCfgKey('showTrend') === 'chanShowTrend');
+  ok('chanCfgKey: 非法输入不抛', chanCfgKey('') === 'chan' && chanCfgKey(null) === 'chan');
+  ok('CHAN_LAYER_CFG_KEYS: 6 项且与层一一对应',
+    CHAN_LAYER_CFG_KEYS.length === 6 && CHAN_LAYERS.every((L, i) => CHAN_LAYER_CFG_KEYS[i] === chanCfgKey(L.key)));
+  // 模拟 kchart 默认 cfg：用正确字段名读 → 按钮点亮；用引擎字段名直读（旧 bug）→ undefined（永远熄灭）
+  const cfgLike = { chanShowBi: true, chanShowSeg: false, chanShowZs: true, chanShowDiv: true, chanShowBsp: true, chanShowTrend: true };
+  ok('按钮点亮判定: 用 chanCfgKey 读取正确',
+    CHAN_LAYER_CFG_KEYS.every((k) => typeof cfgLike[k] === 'boolean') &&
+    !!cfgLike[chanCfgKey('showBi')] === true && !!cfgLike[chanCfgKey('showSeg')] === false);
+  ok('按钮点亮判定: 旧写法 cfg[L.key] 恒为 undefined（复现 bug）',
+    CHAN_LAYERS.every((L) => cfgLike[L.key] === undefined));
 }
 
 // ---------- 1. chanlunWindowItems ----------
