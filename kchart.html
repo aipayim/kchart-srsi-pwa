@@ -6,6 +6,14 @@
   <meta name="theme-color" content="#070b14">
   <link rel="icon" type="image/png" href="./favicon.png">
   <title>智能交易驾驶舱 · SRSI</title>
+  <script>
+  /* 防「模块未加载完成就被点击」：内联 onclick 的目标先给空实现，kchartApp.js 加载后会覆盖为真实实现。
+     否则会抛 Uncaught TypeError: window.kToggleOverview is not a function，让用户误以为页面卡死。 */
+  (function () {
+    ['kToggleOverview','kToggleDisc','kToggleTradePanel','kToggleRuleMonitor','setKPreset','pwaClearAll','pwaSimReset']
+      .forEach(function (k) { if (typeof window[k] !== 'function') window[k] = function () {}; });
+  })();
+  </script>
   <style>
     /* 关键首屏兜底（完整样式见 src/pwa/pwa.css，由模块注入） */
     html,body{margin:0;padding:0;background:#070b14;color:#e6f1ff}
@@ -357,6 +365,24 @@
     function clr(){ try{ localStorage.removeItem('pwa_binance_proxy'); inp.value=''; reload(); }catch(e){} }
     document.getElementById('pwaSrcSave').addEventListener('click',save);
     document.getElementById('pwaSrcClear').addEventListener('click',clr);
+  })();
+  </script>
+  <!-- 脚本未加载完成时的兜底提示（防「点击无反应/报错」被误认为卡死） -->
+  <div id="pwaBootWarn" hidden style="position:fixed;left:0;right:0;top:0;z-index:9999;background:linear-gradient(180deg,#7f1d1d,#5a1414);color:#ffe4e4;font:12px/1.5 system-ui,sans-serif;padding:9px 12px calc(9px + env(safe-area-inset-top));text-align:center;box-shadow:0 4px 18px rgba(0,0,0,.5)">
+    ⏳ 页面脚本尚未加载完成（网络较慢或缓存异常）。若长时间无响应，请
+    <button type="button" onclick="location.reload()" style="margin-left:6px;padding:3px 12px;border:0;border-radius:5px;background:#fff;color:#7f1d1d;font:12px system-ui;font-weight:700;cursor:pointer">重新加载</button>
+  </div>
+  <script>
+  /* 兜底：kchartApi 就绪后自动隐藏；超过 8s 仍无则显示提示 */
+  (function () {
+    function check() {
+      var b = document.getElementById('pwaBootWarn');
+      if (!b) return;
+      if (window.kchartApi) { b.hidden = true; return; }
+      b.hidden = false;
+    }
+    setTimeout(check, 8000);
+    setTimeout(check, 20000);
   })();
   </script>
   <script type="module" src="/src/pwa/kchartApp.js"></script>
