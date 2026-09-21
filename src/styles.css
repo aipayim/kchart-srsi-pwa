@@ -341,6 +341,16 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
   border:1px solid var(--border);background:var(--card2);color:var(--text2)}
 .mt-marel button.on{border-color:#f59e0b;background:rgba(245,158,11,.16);color:#f59e0b}
 .mt-marel button:hover{color:#f59e0b;border-color:#f59e0b}
+/* v1.6.45：缠论结构层参数行 + 解读面板（药丸内小按钮） */
+.mt-chan{display:inline-flex;gap:3px;margin-left:6px;flex-wrap:wrap;align-items:center}
+.mt-chan button{font:10px/1 inherit;padding:2px 6px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card2);color:var(--text2)}
+.mt-chan button.on{border-color:#a78bfa;background:rgba(167,139,250,.16);color:#a78bfa}
+.mt-chan button:hover{color:#a78bfa;border-color:#a78bfa}
+.chan-panel{padding:4px 2px}
+.chan-disc{font-size:10px;line-height:1.5;color:#ffd740;background:rgba(255,215,64,.08);border:1px solid rgba(255,215,64,.35);border-radius:5px;padding:4px 6px;margin-bottom:5px}
+.chan-concl{font-size:10.5px;font-weight:600;color:var(--text,#c8d4e0);margin-top:6px;padding-top:5px;border-top:1px dashed var(--border,#2a3140)}
+.chan-note{font-size:9px;line-height:1.5;color:var(--text2,#8b95a5);margin-top:4px;opacity:.85}
 .kchart-ovwrap{margin-bottom:6px}
 .kchart-ovhead{font-size:9px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 4px;border-bottom:1px solid var(--border);display:inline-flex;align-items:center;gap:4px}
 .kchart-ovhead:hover{color:var(--accent)}

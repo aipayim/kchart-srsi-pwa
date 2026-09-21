@@ -11,6 +11,8 @@ import {
 import { getLastRuleSnapshot, getCockpitCtx } from '../tech2/ruleMonitor.js';
 import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
+import { chanlunReadout, CHAN_DISCLAIMER } from '../engine/chanlunDisplay.js';
+import { renderChanlunInto } from '../tech2/chanlunPanel.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
@@ -1132,6 +1134,46 @@ function renderMaRel() {
   }
 }
 
+// v1.6.45：缠论结构解读（PWA 右栏；主系统用 kchartApi.renderChanPanel，共用 chanlunPanel 渲染器）
+function renderChan() {
+  const card = $('pwaChanCard');
+  if (!card) return;
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  const on = !!(cfg && cfg.chanOn);
+  card.style.display = on ? '' : 'none';
+  if (!on) return;
+  let data = null;
+  try { data = api.__chanData ? api.__chanData() : null; } catch (e) { data = null; }
+  const box = $('pwaChan');
+  const pill = $('pwaChanPill');
+  const foot = $('pwaChanFoot');
+  if (!box) return;
+  // 实时价（ticker，每 5s）——「距中枢上/下沿 %」随行情更新，而非只跟 K 线收盘
+  let livePx = null;
+  try { const Sp = globalThis.S; const pp = Sp && Sp.prices && Sp.prices[cfg.symbol]; livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null; } catch (e) { livePx = null; }
+  let ro = null;
+  try {
+    ro = chanlunReadout(data, {
+      livePrice: livePx,
+      showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
+      showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp, showTrend: !!cfg.chanShowTrend,
+    });
+  } catch (e) { ro = null; }
+  if (!ro) return;
+  const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
+  if (pill) {
+    pill.textContent = ro.ok ? (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : '震荡') : '—';
+    pill.style.color = toneCol;
+  }
+  renderChanlunInto(box, ro);
+  if (foot) {
+    const st = ro.stats || {};
+    const t = ro.ok ? ('笔 ' + st.nBis + ' · 线段 ' + st.nSegs + ' · 中枢 ' + st.nCenters + ' · 买卖点 ' + st.nSignals + '（可见 ' + st.visible + '/待定 ' + st.pending + '）') : CHAN_DISCLAIMER;
+    if (foot.__t !== t) { foot.__t = t; foot.textContent = t; }
+  }
+}
+
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
@@ -1302,6 +1344,7 @@ export function refreshShell() {
   renderEngineBar();
   renderRecentSignals();
   renderMaRel();
+  renderChan();
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
   try {
     renderAdaptiveCompactPwa(document.getElementById('pwaAdaptiveCompact'));

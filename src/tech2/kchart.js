@@ -12,6 +12,9 @@ import { KLINE_TF, KLINE_MINUTES, KLINE_INTERVAL, resample } from '../engine/tim
 import { THRESH } from '../engine/thresholds.js';
 import { pushSignalEvent } from './signalAlerts.js';
 import { buildMaRelation, MA_REL_DEFAULTS } from '../engine/maRelation.js';
+import { buildChanlun } from '../engine/chanlun.js';
+import { chanlunWindowItems, chanlunReadout, chanDelayInfo, CHAN_LAYERS, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
+import { renderChanlunInto } from './chanlunPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
@@ -670,6 +673,19 @@ export function defaultKConfig() {
     maRelAllowShort: true,     // 是否允许做空信号
     maRelL3: true,             // L3：4H MA20 突破
     maRelShowInfo: true,       // 右上角状态/距离信息表
+    // v1.6.45：缠论结构层（默认关；纯显示层，不接任何自动交易；上层为多解层）
+    chanOn: false,             // 总开关（主图工具面板药丸）
+    chanShowBi: true,          // 笔（确定性层）
+    chanShowSeg: true,         // 线段（多解层·1+1简化）
+    chanShowZs: true,          // 中枢矩形（多解层）
+    chanShowDiv: true,         // 背驰标记（多解层）
+    chanShowBsp: true,         // 三类买卖点标记（多解层·依赖上层）
+    chanShowTrend: true,       // 走势类型（面板/信息表）
+    chanShowInfo: true,        // 主图右上角结构信息表
+    chanBiMode: 'new',         // 'new' | 'old' 笔定义（端点最小距离 4/5）
+    chanZsGate: 'first3',      // 'first3' | 'all' 中枢区间口径
+    chanDivMeasure: 'macd',    // 'macd' | 'slope' 背驰度量
+    chanUseSegForZs: false,    // 用线段构造中枢
     srsi,
     srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
     srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
@@ -836,6 +852,13 @@ function normalizeCfg(c) {
   if (!c.ruleHudPos || typeof c.ruleHudPos !== 'object' || typeof c.ruleHudPos.x !== 'number' || typeof c.ruleHudPos.y !== 'number') c.ruleHudPos = null; // v1.5.52：HUD 位置（保留对象或 null）
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
   if (typeof c.adaptiveOverlay !== 'boolean') c.adaptiveOverlay = true; // 自适应组合主图叠加（默认开，未启用组合时零绘制）
+  // ---- 缠论结构层（默认关；各层显示开关默认开，但总开关关时零开销）----
+  if (typeof c.chanOn !== 'boolean') c.chanOn = false;
+  ['chanShowBi', 'chanShowSeg', 'chanShowZs', 'chanShowDiv', 'chanShowBsp', 'chanShowTrend', 'chanShowInfo'].forEach((k) => { if (typeof c[k] !== 'boolean') c[k] = true; });
+  if (c.chanBiMode !== 'new' && c.chanBiMode !== 'old') c.chanBiMode = 'new';
+  if (c.chanZsGate !== 'first3' && c.chanZsGate !== 'all') c.chanZsGate = 'first3';
+  if (c.chanDivMeasure !== 'macd' && c.chanDivMeasure !== 'slope') c.chanDivMeasure = 'macd';
+  if (typeof c.chanUseSegForZs !== 'boolean') c.chanUseSegForZs = false;
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
   if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
@@ -1391,7 +1414,7 @@ function renderMainTools() {
     `<button data-mr="short" class="${cfg.maRelAllowShort ? 'on' : ''}" title="是否允许做空信号">做空</button>` +
     `<button data-mr="l3" class="${cfg.maRelL3 ? 'on' : ''}" title="L3：收盘上/下穿 4H MA20">L3</button>` +
     `<button data-mr="info" class="${cfg.maRelShowInfo ? 'on' : ''}" title="右上角状态/距离信息表">信息表</button>` +
-    `</span>` : ''}<span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
+    `</span>` : ''}${chanChipHtml()}<span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
@@ -1424,6 +1447,34 @@ function renderMainTools() {
       try { persist(); } catch (e2) {}
       _mtSig = '';   // 强制重建药丸行（参数态变化）
       renderMainTools(); renderKChart();
+    });
+  }
+  // v1.6.45：缠论结构层开关 + 选择点参数行
+  const cc = el.querySelector('#chanChip');
+  if (cc) cc.addEventListener('click', () => setChan(!cfg.chanOn));
+  const co = el.querySelector('#chanOpts');
+  if (co) {
+    co.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('button[data-ch]') : null;
+      if (!b) return;
+      const k = b.getAttribute('data-ch');
+      if (k === 'showBi') cfg.chanShowBi = !cfg.chanShowBi;
+      else if (k === 'showSeg') cfg.chanShowSeg = !cfg.chanShowSeg;
+      else if (k === 'showZs') cfg.chanShowZs = !cfg.chanShowZs;
+      else if (k === 'showDiv') cfg.chanShowDiv = !cfg.chanShowDiv;
+      else if (k === 'showBsp') cfg.chanShowBsp = !cfg.chanShowBsp;
+      else if (k === 'showTrend') cfg.chanShowTrend = !cfg.chanShowTrend;
+      else if (k === 'bimode') cfg.chanBiMode = cfg.chanBiMode === 'new' ? 'old' : 'new';
+      else if (k === 'zsgate') cfg.chanZsGate = cfg.chanZsGate === 'first3' ? 'all' : 'first3';
+      else if (k === 'useseg') cfg.chanUseSegForZs = !cfg.chanUseSegForZs;
+      else if (k === 'divm') cfg.chanDivMeasure = cfg.chanDivMeasure === 'macd' ? 'slope' : 'macd';
+      else if (k === 'info') cfg.chanShowInfo = !cfg.chanShowInfo;
+      _chanCache = { key: '', data: null };
+      try { persist(); } catch (e2) {}
+      _mtSig = '';   // 强制重建药丸行（参数态变化）
+      renderMainTools(); renderKChart();
+      try { renderChanPanel(); } catch (e3) {}
+      try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e4) {}
     });
   }
 }
@@ -3835,6 +3886,218 @@ function drawMaRelation(ctx) {
   }
 }
 
+// ============================================================
+// v1.6.45：缠论结构层（默认关，纯显示，不接自动交易）
+// 引擎：src/engine/chanlun.js（纯函数）；显示模型：src/engine/chanlunDisplay.js。
+// ⚠ 仅结构描述 · 无统计优势（实时口径 6.7 年回测为负）；上层为多解层（见 CHAN_MULTI_NOTE）。
+// ============================================================
+let _chanCache = { key: '', data: null };
+const CHAN_COLOR = {
+  bi: '#58a6ff', biFinal: '#7c4dff',
+  seg: '#f59e0b',
+  zsFill: 'rgba(124,77,255,.10)', zsLine: 'rgba(124,77,255,.6)', zsLinePend: 'rgba(124,77,255,.32)',
+  divTop: '#ff6b6b', divBot: '#2ecc71',
+  long: '#2ecc71', short: '#ff6b6b',
+};
+
+// 按需构建（缓存：仅当 symbol/周期/根数/末根时间/选择点参数变化才重算；与主图 nativeMain 同源保证索引对齐）
+function chanData() {
+  if (!cfg.chanOn) return null;
+  const sym = cfg.symbol, tf = cfg.mainTF;
+  const d = nativeMain(sym, tf);
+  const c = (d.c || []).map(Number);
+  if (c.length < 30) return null;
+  const t = d.t || [];
+  const key = [sym, tf, c.length, t.length ? t[t.length - 1] : 0,
+    cfg.chanBiMode, cfg.chanZsGate, cfg.chanDivMeasure, cfg.chanUseSegForZs ? 1 : 0].join('|');
+  if (_chanCache.key === key && _chanCache.data) return _chanCache.data;
+  let data = null;
+  try {
+    data = buildChanlun({
+      opens: (d.o || []).map(Number), highs: (d.h || []).map(Number), lows: (d.l || []).map(Number),
+      closes: c, vols: (d.v || []).map(Number), times: t,
+    }, {
+      on: true,
+      showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
+      showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp, showTrend: !!cfg.chanShowTrend,
+      biMode: cfg.chanBiMode, zsGate: cfg.chanZsGate, divMeasure: cfg.chanDivMeasure,
+      useSegForZs: !!cfg.chanUseSegForZs,
+    });
+  } catch (e) { data = null; }
+  _chanCache = { key, data };
+  return data;
+}
+export function chanInfo() {
+  try { const d = chanData(); return d ? { ok: d.ok, meta: d.meta, trend: d.trend } : null; } catch (e) { return null; }
+}
+
+// 缠论结构层：药丸 + 参数行（主图工具栏内联，仿 maRelChip）
+function chanChipHtml() {
+  const chip = `<span id="chanChip" title="缠论结构层（默认关，纯显示不接自动交易）：笔/线段/中枢矩形/背驰/三类买卖点/走势类型 —— ⚠ ${CHAN_DISCLAIMER}。⚠ ${CHAN_MULTI_NOTE}" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.chanOn ? '#a78bfa' : 'var(--border)'};background:${cfg.chanOn ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.chanOn ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">🧩 缠论${cfg.chanOn ? ' ✓' : ''}</span>`;
+  if (!cfg.chanOn) return chip;
+  const b = (k, label, on, title) => `<button data-ch="${k}" class="${on ? 'on' : ''}" title="${title}">${label}</button>`;
+  return chip + `<span id="chanOpts" class="mt-chan">` +
+    CHAN_LAYERS.map((L) => b(L.key, L.label, !!cfg[L.key], L.title)).join('') +
+    b('bimode', cfg.chanBiMode === 'old' ? '老笔' : '新笔', true, '笔的定义：新笔=端点距离≥4 / 老笔=≥5（原著未统一）') +
+    b('zsgate', cfg.chanZsGate === 'all' ? '中枢全部' : '中枢前三段', true, '中枢区间口径：前三段固定(first3) / 全部重叠段(all)') +
+    b('useseg', '用线段', !!cfg.chanUseSegForZs, '用线段构造中枢（原著第83课称线段中枢更稳定；但线段为多解层）') +
+    b('divm', cfg.chanDivMeasure === 'slope' ? '背驰斜率' : '背驰MACD', true, '背驰度量：MACD柱面积(第24课口径) / 幅度时间斜率') +
+    b('info', '信息表', !!cfg.chanShowInfo, '主图右上角结构信息表') +
+    `</span>`;
+}
+
+// 画在主图上（蜡烛之上、标记之下）：中枢矩形 → 笔 → 线段 → 背驰 → 买卖点
+function drawChanlun(ctx) {
+  const g = _mainGeom;
+  const ch = chanData();
+  if (!g || !ch || !ch.ok) return;
+  const { lo, hi, start, end, xStep } = g;
+  const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * mainH();
+  const items = chanlunWindowItems(ch, {
+    start, end,
+    showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
+    showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp,
+  });
+  ctx.save();
+  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, mainH()); ctx.clip();
+
+  // 1) 中枢矩形（最底层，低透明度不遮蜡烛）
+  if (cfg.chanShowZs) {
+    for (const z of items.centers) {
+      const x0 = X(Math.max(z.i0, start)), x1 = X(Math.min(z.i1, end - 1));
+      const yA = Y(z.zg), yB = Y(z.zd);
+      const top = Math.min(yA, yB), hgt = Math.max(1, Math.abs(yB - yA)), wid = Math.max(1, x1 - x0);
+      ctx.fillStyle = CHAN_COLOR.zsFill;
+      ctx.fillRect(x0, top, wid, hgt);
+      ctx.strokeStyle = z.final ? CHAN_COLOR.zsLine : CHAN_COLOR.zsLinePend;
+      ctx.lineWidth = 1; ctx.setLineDash(z.final ? [] : [4, 3]);
+      ctx.strokeRect(x0, top, wid, hgt);
+      ctx.setLineDash([]);
+      if (wid > 26) {
+        ctx.fillStyle = 'rgba(190,170,255,.95)';
+        ctx.font = '8px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+        ctx.fillText('中枢 ' + fmt(z.zd) + '–' + fmt(z.zg), x0 + 3, top + 9);
+      }
+    }
+  }
+  // 2) 笔（折线；未定稿用虚线区分）
+  if (cfg.chanShowBi) {
+    for (const bi of items.bis) {
+      ctx.strokeStyle = bi.final ? CHAN_COLOR.biFinal : CHAN_COLOR.bi;
+      ctx.lineWidth = bi.final ? 1.3 : 1;
+      ctx.setLineDash(bi.final ? [] : [3, 2]);
+      ctx.beginPath(); ctx.moveTo(X(bi.i0), Y(bi.y0)); ctx.lineTo(X(bi.i1), Y(bi.y1)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = bi.final ? CHAN_COLOR.biFinal : CHAN_COLOR.bi;
+      ctx.beginPath(); ctx.arc(X(bi.i1), Y(bi.y1), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // 3) 线段（粗线，画在笔之上）
+  if (cfg.chanShowSeg) {
+    for (const sg of items.segs) {
+      ctx.strokeStyle = sg.final ? CHAN_COLOR.seg : 'rgba(245,158,11,.5)';
+      ctx.lineWidth = 2.0;
+      ctx.setLineDash(sg.final ? [] : [6, 3]);
+      ctx.beginPath(); ctx.moveTo(X(sg.i0), Y(sg.y0)); ctx.lineTo(X(sg.i1), Y(sg.y1)); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = sg.final ? CHAN_COLOR.seg : 'rgba(245,158,11,.5)';
+      ctx.fillRect(X(sg.i1) - 2, Y(sg.y1) - 2, 4, 4);
+    }
+  }
+  // 4) 背驰标记（菱形）
+  if (cfg.chanShowDiv) {
+    for (const d of items.divs) {
+      const x = X(d.idx), y = Y(d.price);
+      const top = d.kind === 'top';
+      const col = top ? CHAN_COLOR.divTop : CHAN_COLOR.divBot;
+      const yy = y + (top ? -14 : 14);
+      ctx.fillStyle = col; ctx.globalAlpha = d.final ? 1 : 0.6;
+      ctx.beginPath();
+      ctx.moveTo(x, yy - 5); ctx.lineTo(x + 5, yy); ctx.lineTo(x, yy + 5); ctx.lineTo(x - 5, yy); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.font = '8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(top ? '顶背驰' : '底背驰', x, yy + (top ? -10 : 10));
+    }
+  }
+  // 5) 三类买卖点标记（圆点 + 名称）
+  if (cfg.chanShowBsp) {
+    for (const s of items.bsps) {
+      const x = X(s.idx), y = Y(s.price);
+      const long = s.side === 'long';
+      const col = long ? CHAN_COLOR.long : CHAN_COLOR.short;
+      const yy = y + (long ? 16 : -16);
+      ctx.fillStyle = col; ctx.globalAlpha = s.final ? 1 : 0.55;
+      ctx.beginPath(); ctx.arc(x, yy, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.font = 'bold 8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(s.name, x, yy + (long ? 11 : -11));
+    }
+  }
+  ctx.restore();
+
+  // 6) 右上角结构信息表（若均线关系信息表同时开启则下移避让）
+  if (cfg.chanShowInfo) drawChanInfoTable(ctx, ch);
+}
+
+function drawChanInfoTable(ctx, ch) {
+  const d = chanDelayInfo(ch);
+  const tr = ch.trend || {};
+  const zs = ch.centers || [];
+  const z = zs.length ? zs[zs.length - 1] : null;
+  const px = (ch.bars && ch.bars.c && ch.bars.c.length) ? ch.bars.c[ch.bars.c.length - 1] : null;
+  let pos = '—';
+  if (z && Number.isFinite(px)) pos = px > z.zg ? '中枢上方' : px < z.zd ? '中枢下方' : '中枢内';
+  const up = tr.dir > 0, down = tr.dir < 0;
+  const rows = [
+    { t: '缠论 · ' + (tr.label || '—'), c: up ? '#2ecc71' : down ? '#ff6b6b' : '#f59e0b', b: true },
+    { t: '笔 ' + (ch.bis.length) + ' · 线段 ' + (ch.segs.length) + ' · 中枢 ' + zs.length, c: '#c8d4e0' },
+    { t: '中枢 ' + (z ? fmt(z.zd) + '–' + fmt(z.zg) + ' · 价在' + pos : '无'), c: '#c8d4e0' },
+    { t: '买卖点 ' + ch.signals.length + '（可见 ' + d.visible + ' / 待定 ' + d.pending + '）' + (d.medianLag != null ? ' · 中位延迟 ' + d.medianLag + ' 根' : ''), c: '#58a6ff' },
+    { t: '⚠ ' + CHAN_DISCLAIMER, c: '#ffd740' },
+  ];
+  ctx.save();
+  ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  let wMax = 0; for (const r of rows) wMax = Math.max(wMax, ctx.measureText(r.t).width);
+  const bw = wMax + 14, bh = rows.length * 12 + 8;
+  const bx = W - PAD_R - bw - 2;
+  const by = PAD_T + 2 + ((cfg.maRelOn && cfg.maRelShowInfo) ? 60 : 0);
+  ctx.fillStyle = 'rgba(16,22,30,.82)';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.strokeRect(bx, by, bw, bh);
+  rows.forEach((r, k) => {
+    ctx.font = (r.b ? 'bold ' : '') + '9px sans-serif';
+    ctx.fillStyle = r.c;
+    ctx.fillText(r.t, bx + 7, by + 15 + k * 12);
+  });
+  ctx.restore();
+}
+
+// 主系统「缠论结构解读」面板（PWA 用 pwaShell.renderChan；共用 chanlunPanel 渲染器）
+export function renderChanPanel() {
+  const wrap = typeof document !== 'undefined' ? document.getElementById('kchartChanWrap') : null;
+  const box = typeof document !== 'undefined' ? document.getElementById('kchartChan') : null;
+  if (!wrap && !box) return;
+  if (!cfg.chanOn) { if (wrap) wrap.style.display = 'none'; return; }
+  if (wrap) wrap.style.display = '';
+  if (!box) return;
+  let livePx = null;
+  try {
+    const Sp = window.S;
+    const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
+    livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null;
+  } catch (e) { livePx = null; }
+  let ro = null;
+  try {
+    ro = chanlunReadout(chanData(), {
+      livePrice: livePx,
+      showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
+      showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp, showTrend: !!cfg.chanShowTrend,
+    });
+  } catch (e) { ro = null; }
+  renderChanlunInto(box, ro);
+}
+
 // 标记清单（实时聚合；与 buildMarkList 的纯逻辑同源）
 export function mainMarkList(sym) {
   const alphaLive = !!(typeof window !== 'undefined' && window.__alphaLab && window.__alphaLab.isLive && window.__alphaLab.isLive());
@@ -4113,6 +4376,8 @@ export function renderKChart() {
   if (!mainOk) { drawEmpty(ctx, H, '等待 K 线数据（' + tf + '）...'); return; }
   // v1.6.30：价格-均线关系盯盘辅助层（画在蜡烛之上、标记之下）
   try { if (cfg.maRelOn) drawMaRelation(ctx); } catch (e) {}
+  // v1.6.45：缠论结构层（画在蜡烛之上、标记之下）
+  try { if (cfg.chanOn) drawChanlun(ctx); } catch (e) {}
 
   // 子图
   const subList = buildSubList();
@@ -4155,6 +4420,7 @@ export function renderKChart() {
   const hz = updateHorizonState(sym, allPriceMap, capMin);
   renderSrsiOverview(hz, capMin);
   renderTradeDiscipline(hz, capMin);
+  try { renderChanPanel(); } catch (e) {}
   updateRuleMonitorTick(); // 规则监测：影子计算 + 信号簿边沿检测（内2s节流）+ 面板渲染（签名守卫）
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 悬浮卡（动力卡 + 规则监测）
   renderMainTools(); // 同步主图叠加药丸的 K/D 背景色（受签名守卫保护，无变化不重建）
@@ -4178,6 +4444,7 @@ export function refreshPanels() {
   const hz = updateHorizonState(cfg.symbol, allPriceMap, capMin);
   if (ov) renderSrsiOverview(hz, capMin);
   if (box) renderTradeDiscipline(hz, capMin);
+  try { renderChanPanel(); } catch (e) {}
   updateRuleMonitorTick(); // 规则监测：主系统/PWA 每秒 tick 走这里（renderKChart 不每秒重绘）
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 悬浮卡
 }
@@ -6739,6 +7006,10 @@ export const kchartApi = {
   maRelInfo,
   setMaRel,
   __maRelData: () => maRelData(),
+  chanInfo,
+  setChan,
+  __chanData: () => chanData(),
+  renderChanPanel,
   mainMarkList,
   buildMarkList,
   marksToSignalEvents,
@@ -7851,6 +8122,19 @@ export function setMaRel(on) {
   _mtSig = '';
   renderMainTools();
   renderKChart();
+}
+
+// v1.6.45：缠论结构层开关（纯显示，不接自动交易）
+export function setChan(on) {
+  cfg.chanOn = !!on;
+  _chanCache = { key: '', data: null };
+  try { persist(); } catch (e) {}
+  _mtSig = '';
+  renderMainTools();
+  renderKChart();
+  try { renderChanPanel(); } catch (e) {}
+  // PWA：立即刷新右栏卡片（否则要等下一次 1s tick）；主系统无此钩子则跳过
+  try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e2) {}
 }
 
 export function setSrsiAutoMode(mode) {
