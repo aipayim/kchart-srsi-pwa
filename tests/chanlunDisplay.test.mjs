@@ -4,7 +4,7 @@
 //       / chanlunReadoutHtml / renderChanlunInto（签名守卫）。
 import { buildChanlun, normalizeBars } from '../src/engine/chanlun.js';
 import {
-  chanlunWindowItems, chanlunReadout, chanDelayInfo, chanSignalDelayText, chanBspMeta,
+  chanlunWindowItems, chanlunReadout, chanDelayInfo, chanSignalDelayText, chanBspMeta, chanProjectLive,
   CHAN_LAYERS, chanCfgKey, CHAN_LAYER_CFG_KEYS, CHAN_DISCLAIMER, CHAN_MULTI_NOTE,
 } from '../src/engine/chanlunDisplay.js';
 import { chanlunReadoutHtml, renderChanlunInto } from '../src/tech2/chanlunPanel.js';
@@ -162,6 +162,40 @@ const chan = buildChanlun(bars, { on: true });
     ro.stats.nBis === chan.bis.length && ro.stats.nSegs === chan.segs.length &&
     ro.stats.nCenters === chan.centers.length && ro.stats.nSignals === chan.signals.length);
   ok('解读: stats 可见+待定 = 信号总数', ro.stats.visible + ro.stats.pending === ro.stats.nSignals);
+}
+
+// ---------- 2b. chanProjectLive（「若此刻收盘」预演） ----------
+{
+  ok('预演: null 输入安全', chanProjectLive(null).ok === false && chanProjectLive(null).label.length > 0);
+
+  const lastClose = chan.bars.c[chan.bars.c.length - 1];
+  const same = chanProjectLive(chan, { livePrice: lastClose });
+  ok('预演: 实时价=末根收盘 → ok', same.ok === true);
+  ok('预演: 有进行中腿（from/to/dir/pct）',
+    !!same.leg && Number.isFinite(same.leg.from) && same.leg.to === lastClose &&
+    (same.leg.dir === 'up' || same.leg.dir === 'down') && (same.leg.pct === null || Number.isFinite(same.leg.pct)));
+  ok('预演: label 非空且含关键词', typeof same.label === 'string' && same.label.length > 0 && /成新笔|成立新笔|具备成为|结构不变|就位/.test(same.label));
+  ok('预演: needBars 为 null 或 ≥0', same.needBars === null || same.needBars >= 0);
+  ok('预演: changed 为布尔', typeof same.changed === 'boolean');
+  ok('预演: potentialFractal ∈ null/top/bottom',
+    same.potentialFractal === null || same.potentialFractal === 'top' || same.potentialFractal === 'bottom');
+  ok('预演: changed === !!potentialFractal', same.changed === !!same.potentialFractal);
+  ok('预演: wouldBi 为布尔且需 needBars=0', typeof same.wouldBi === 'boolean' && (!same.wouldBi || same.needBars === 0));
+
+  const up = chanProjectLive(chan, { livePrice: lastClose * 1.2 });
+  ok('预演: 大涨 → ok + 进行中腿向上 + to=实时价', up.ok === true && up.leg && up.leg.dir === 'up' && up.leg.to === lastClose * 1.2);
+  ok('预演: 大涨后潜在分型（若存在）应为 top 或结构不变', up.potentialFractal === 'top' || !up.changed);
+
+  const dn = chanProjectLive(chan, { livePrice: lastClose * 0.8 });
+  ok('预演: 大跌 → ok + 腿向下', dn.ok === true && dn.leg.dir === 'down');
+  ok('预演: 大跌后潜在分型（若存在）应为 bottom 或结构不变', dn.potentialFractal === 'bottom' || !dn.changed);
+
+  // 面板接入：传 projection → 多一行「预演 · 若此刻收盘」
+  const roWithProj = chanlunReadout(chan, { livePrice: lastClose, projection: up });
+  ok('解读: 传 projection → 多一行预演（共 8 行）', roWithProj.rows.length === 8);
+  ok('解读: 预演行含「预演 · 若此刻收盘」', roWithProj.rows.some((r) => r.label.indexOf('预演 · 若此刻收盘') === 0));
+  ok('解读: 预演行 detail = label', roWithProj.rows.some((r) => r.label.indexOf('预演') === 0 && r.detail === up.label));
+  ok('解读: projection.ok=false → 不加行（7 行）', chanlunReadout(chan, { projection: { ok: false } }).rows.length === 7);
 }
 
 // ---------- 3. chanDelayInfo / chanSignalDelayText ----------

@@ -13,7 +13,7 @@ import { THRESH } from '../engine/thresholds.js';
 import { pushSignalEvent } from './signalAlerts.js';
 import { buildMaRelation, MA_REL_DEFAULTS } from '../engine/maRelation.js';
 import { buildChanlun } from '../engine/chanlun.js';
-import { chanlunWindowItems, chanlunReadout, chanDelayInfo, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
+import { chanlunWindowItems, chanlunReadout, chanDelayInfo, chanProjectLive, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from './chanlunPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
@@ -3926,6 +3926,33 @@ export function chanInfo() {
   try { const d = chanData(); return d ? { ok: d.ok, meta: d.meta, trend: d.trend } : null; } catch (e) { return null; }
 }
 
+// 实时价（ticker 优先，回退末根收盘）——供「进行中腿」与「若此刻收盘预演」
+function chanLivePrice() {
+  try {
+    const Sp = window.S;
+    const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
+    if (pp && Number.isFinite(pp.last)) return pp.last;
+  } catch (e) {}
+  const d = nativeMain(cfg.symbol, cfg.mainTF);
+  const c = d.c || [];
+  return c.length ? Number(c[c.length - 1]) : null;
+}
+
+// 「若此刻收盘」预演（带缓存：仅 sym/tf/根数/末根时间/实时价/笔型 变化才重算）
+let _chanProjCache = { key: '', proj: null };
+function chanProjection(livePx) {
+  const ch = chanData();
+  if (!ch || !ch.ok) return null;
+  const b = ch.bars || {};
+  const key = [cfg.symbol, cfg.mainTF, b.n, (b.t && b.t.length) ? b.t[b.t.length - 1] : 0,
+    Number.isFinite(livePx) ? Math.round(livePx * 1e4) : -1, cfg.chanBiMode].join('|');
+  if (_chanProjCache.key === key) return _chanProjCache.proj;
+  let proj = null;
+  try { proj = chanProjectLive(ch, { livePrice: livePx, biMode: cfg.chanBiMode }); } catch (e) { proj = null; }
+  _chanProjCache = { key, proj };
+  return proj;
+}
+
 // 缠论结构层：药丸 + 参数行（主图工具栏内联，仿 maRelChip）
 function chanChipHtml() {
   const chip = `<span id="chanChip" title="缠论结构层（默认关，纯显示不接自动交易）：笔/线段/中枢矩形/背驰/三类买卖点/走势类型 —— ⚠ ${CHAN_DISCLAIMER}。⚠ ${CHAN_MULTI_NOTE}" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.chanOn ? '#a78bfa' : 'var(--border)'};background:${cfg.chanOn ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.chanOn ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">🧩 缠论${cfg.chanOn ? ' ✓' : ''}</span>`;
@@ -3955,6 +3982,8 @@ function drawChanlun(ctx) {
     showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
     showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp,
   });
+  const proj = chanProjection(chanLivePrice());
+  const atLatest = end >= (g.c ? g.c.length : 0);   // 仅在看最新时画「进行中腿」
   ctx.save();
   ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, mainH()); ctx.clip();
 
@@ -3987,6 +4016,24 @@ function drawChanlun(ctx) {
       ctx.setLineDash([]);
       ctx.fillStyle = bi.final ? CHAN_COLOR.biFinal : CHAN_COLOR.bi;
       ctx.beginPath(); ctx.arc(X(bi.i1), Y(bi.y1), 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  // 2.5) 进行中腿（最后确认分型 → 当前价；未成笔·待确认）——让图连到最新价，但绝不预测未来
+  if (cfg.chanShowBi && atLatest && proj && proj.ok && proj.leg) {
+    const curLast = (ch.bis && ch.bis.length) ? ch.bis[ch.bis.length - 1] : null;
+    const i0 = curLast ? curLast.endIdx : null;
+    const i1 = end - 1;
+    if (i0 != null && i0 >= start && i0 < i1) {
+      const up = proj.leg.dir === 'up';
+      const x0 = X(i0), x1 = X(i1), y0 = Y(proj.leg.from), y1 = Y(proj.leg.to);
+      ctx.strokeStyle = up ? 'rgba(46,204,113,.8)' : 'rgba(255,107,107,.8)';
+      ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = up ? '#2ecc71' : '#ff6b6b';
+      ctx.beginPath(); ctx.arc(x1, y1, 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '8px sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+      ctx.fillText('未成笔', x1 - 4, y1 + (up ? 9 : -9));
     }
   }
   // 3) 线段（粗线，画在笔之上）
@@ -4033,10 +4080,10 @@ function drawChanlun(ctx) {
   ctx.restore();
 
   // 6) 右上角结构信息表（若均线关系信息表同时开启则下移避让）
-  if (cfg.chanShowInfo) drawChanInfoTable(ctx, ch);
+  if (cfg.chanShowInfo) drawChanInfoTable(ctx, ch, proj);
 }
 
-function drawChanInfoTable(ctx, ch) {
+function drawChanInfoTable(ctx, ch, proj) {
   const d = chanDelayInfo(ch);
   const tr = ch.trend || {};
   const zs = ch.centers || [];
@@ -4052,6 +4099,7 @@ function drawChanInfoTable(ctx, ch) {
     { t: '买卖点 ' + ch.signals.length + '（可见 ' + d.visible + ' / 待定 ' + d.pending + '）' + (d.medianLag != null ? ' · 中位延迟 ' + d.medianLag + ' 根' : ''), c: '#58a6ff' },
     { t: '⚠ ' + CHAN_DISCLAIMER, c: '#ffd740' },
   ];
+  if (proj && proj.ok) rows.splice(rows.length - 1, 0, { t: '⚡ 预演 ' + String(proj.label || '').slice(0, 34), c: proj.changed ? '#ffd740' : '#8b95a5' });
   ctx.save();
   ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
   let wMax = 0; for (const r of rows) wMax = Math.max(wMax, ctx.measureText(r.t).width);
@@ -4087,6 +4135,7 @@ export function renderChanPanel() {
   try {
     ro = chanlunReadout(chanData(), {
       livePrice: livePx,
+      projection: chanProjection(livePx),
       showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
       showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp, showTrend: !!cfg.chanShowTrend,
     });
@@ -7007,6 +7056,7 @@ export const kchartApi = {
   chanInfo,
   setChan,
   __chanData: () => chanData(),
+  __chanProjection: (livePx) => chanProjection(livePx),
   renderChanPanel,
   mainMarkList,
   buildMarkList,

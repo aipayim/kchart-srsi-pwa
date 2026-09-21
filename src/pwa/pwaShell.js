@@ -1152,10 +1152,12 @@ function renderChan() {
   // 实时价（ticker，每 5s）——「距中枢上/下沿 %」随行情更新，而非只跟 K 线收盘
   let livePx = null;
   try { const Sp = globalThis.S; const pp = Sp && Sp.prices && Sp.prices[cfg.symbol]; livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null; } catch (e) { livePx = null; }
+  let proj = null;
+  try { proj = api.__chanProjection ? api.__chanProjection(livePx) : null; } catch (e) { proj = null; }
   let ro = null;
   try {
     ro = chanlunReadout(data, {
-      livePrice: livePx,
+      livePrice: livePx, projection: proj,
       showBi: !!cfg.chanShowBi, showSeg: !!cfg.chanShowSeg, showZs: !!cfg.chanShowZs,
       showDiv: !!cfg.chanShowDiv, showBsp: !!cfg.chanShowBsp, showTrend: !!cfg.chanShowTrend,
     });

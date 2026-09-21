@@ -163,7 +163,7 @@ export function chanlunWindowItems(chan, opts = {}) {
 export function chanlunReadout(chan, opts = {}) {
   const o = {
     showBi: true, showSeg: true, showZs: true, showDiv: true, showBsp: true, showTrend: true,
-    livePrice: null,
+    livePrice: null, projection: null,
     ...opts,
   };
   const base = {
@@ -292,6 +292,17 @@ export function chanlunReadout(chan, opts = {}) {
     });
   }
 
+  // —— 「若此刻收盘」预演（只描述已发生数据的即时推断，不预测未来）——
+  const proj = o.projection;
+  if (proj && proj.ok) {
+    const ch2 = proj.changed;
+    rows.push({
+      icon: '⚡', color: ch2 ? '#ffd740' : '#8b95a5',
+      label: '预演 · 若此刻收盘' + (ch2 ? '（结构会变）' : '（结构不变）'),
+      detail: proj.label || '',
+    });
+  }
+
   // —— 延迟状态（本模块的核心诚实项）——
   const delay = chanDelayInfo(chan);
   rows.push({
@@ -334,6 +345,80 @@ export function chanSignalDelayText(s) {
     return '延迟：实时可检测后 ' + det + ' 根才定稿' + (labelLag != null ? '（标注点后 ' + labelLag + ' 根）' : '');
   }
   return '延迟：' + (labelLag != null ? labelLag + ' 根后定稿' : '已定稿');
+}
+
+// ---------------------------------------------------------------------------
+// 3. 「若此刻收盘」预演（纯函数）
+//    输入当前 buildChanlun 结果 + 实时价，报告：
+//      · leg        进行中腿（最后确认笔端点 → 实时价，未成笔）
+//      · potentialFractal  进行中（最后一根合并）bar 是否已具备成为顶/底分型的条件
+//                          （顶=比左邻更高且低点也更高；底=镜像）—— 只差「下一根反向」确认
+//      · needBars   距「成笔」最小距离还差几根合并K线
+//      · wouldBi    若该潜在分型被确认，是否会立即成新笔（类型相反 + 距离够）
+//    ⚠️ 分型/笔必须靠右侧 K 线才能确认，所以这里只陈述「已发生数据 + 当前价」的
+//       条件式推断（“若下一根反向则……”），不预测未来、不做前视。
+// ---------------------------------------------------------------------------
+export function chanProjectLive(chan, opts = {}) {
+  const out = {
+    ok: false, leg: null, needBars: null,
+    potentialFractal: null, wouldBi: false, changed: false, label: '数据不足',
+  };
+  if (!chan || !chan.ok) return out;
+  const b = chan.bars || {};
+  const n = num(b.n) ? b.n : 0;
+  if (n < 10) return out;
+  const last = n - 1;
+  const livePx = num(opts.livePrice) ? opts.livePrice : (num(b.c[last]) ? b.c[last] : null);
+  if (!num(livePx)) return out;
+  const biMode = opts.biMode || (chan.cfg && chan.cfg.biMode) || 'new';
+  const minDist = biMode === 'old' ? 5 : 4;
+  out.ok = true;
+
+  const curBis = arr(chan.bis), merged = arr(chan.merged);
+  const curLast = curBis.length ? curBis[curBis.length - 1] : null;
+  const mLast = merged.length ? merged[merged.length - 1] : null;
+  const mPrev = merged.length > 1 ? merged[merged.length - 2] : null;
+
+  // 进行中腿：最后确认笔端点 → 实时价
+  if (curLast) {
+    const from = curLast.dir === 'up' ? curLast.high : curLast.low;
+    const dir = livePx >= from ? 'up' : 'down';
+    out.leg = { dir, from, to: livePx, pct: num(from) && from !== 0 ? (livePx - from) / from * 100 : null };
+  }
+
+  // 进行中合并 bar 用实时价更新高低（最后一根合并 bar 的右端即进行中原始 bar）
+  let mh = mLast ? mLast.h : null, ml = mLast ? mLast.l : null;
+  if (mLast && num(mh) && num(ml)) { mh = Math.max(mh, livePx); ml = Math.min(ml, livePx); }
+  if (mPrev && num(mh) && num(ml) && num(mPrev.h) && num(mPrev.l)) {
+    if (mh > mPrev.h && ml > mPrev.l) out.potentialFractal = 'top';
+    else if (ml < mPrev.l && mh < mPrev.h) out.potentialFractal = 'bottom';
+  }
+
+  // 距「成笔」最小距离还差几根合并K线
+  if (curLast && num(curLast.endMi) && merged.length) {
+    out.needBars = Math.max(0, minDist - ((merged.length - 1) - curLast.endMi));
+  }
+  // 若潜在分型被确认 → 是否立即成新笔（与末笔端点类型相反 + 距离够）
+  if (out.potentialFractal && curLast) {
+    const opposite = (out.potentialFractal === 'top' && curLast.endType === 'bottom') ||
+      (out.potentialFractal === 'bottom' && curLast.endType === 'top');
+    out.wouldBi = opposite && out.needBars === 0;
+  }
+  out.changed = !!out.potentialFractal;
+
+  const legTxt = out.leg ? ('进行中腿 ' + (out.leg.dir === 'up' ? '向上' : '向下') + ' ' + fmtPct(out.leg.pct)) : '';
+  const needTxt = out.needBars != null ? ('距成笔约再 ' + out.needBars + ' 根合并K线') : '';
+  if (out.wouldBi) {
+    out.label = '潜在' + (out.potentialFractal === 'top' ? '顶' : '底') + '分型已就位 · 下一根反向确认即成立新笔';
+  } else if (out.potentialFractal) {
+    out.label = '进行中 bar 具备成为' + (out.potentialFractal === 'top' ? '顶' : '底') + '分型的条件（需下一根反向确认）' +
+      (needTxt ? ' · ' + needTxt : '');
+  } else if (out.leg) {
+    out.label = '结构不变（' + legTxt + (needTxt ? ' · ' + needTxt : '') + '）';
+  } else {
+    out.label = 'K 线不足以成笔';
+  }
+  return out;
 }
 
 // 全序列延迟统计（可见/待定稿/中位延迟）
