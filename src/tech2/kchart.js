@@ -15,6 +15,8 @@ import { buildMaRelation, MA_REL_DEFAULTS } from '../engine/maRelation.js';
 import { buildChanlun } from '../engine/chanlun.js';
 import { chanlunWindowItems, chanlunReadout, chanDelayInfo, chanProjectLive, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from './chanlunPanel.js';
+import { buildMaRibbonBox, maRibbonBoxReadout, RB_MA_PRESETS, RB_DISCLAIMER, RB_NO_TRADE } from '../engine/maRibbonBox.js';
+import { renderMaRibbonBoxInto } from './maRibbonBoxPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
 import { liquidationPrice } from '../engine/liquidation.js';
@@ -686,6 +688,16 @@ export function defaultKConfig() {
     chanZsGate: 'first3',      // 'first3' | 'all' 中枢区间口径
     chanDivMeasure: 'macd',    // 'macd' | 'slope' 背驰度量
     chanUseSegForZs: false,    // 用线段构造中枢
+    // v1.6.49：多均线带 + 箱体（「截图风格」盯盘辅助层，默认关；总开关关时零开销）
+    rbOn: false,               // 总开关（主图工具面板药丸）
+    rbMaType: 'sma',           // 'sma' | 'ema'（截图无法判断原指标类型）
+    rbPeriods: [10, 20, 50, 100, 200],  // 均线带周期（白/银/蓝/红/橙）
+    rbBoxTol: 4.0,             // 箱体高度上限 %
+    rbBoxLookback: 200,        // 箱体搜索窗口（根）
+    rbPullbackPeriod: 50,      // 只有回踩到 period ≥ 该值的均线才算有效回踩
+    rbDepthAtr: 1.0,           // 回撤深度下限（×ATR）
+    rbDots: true,              // 金色圆点标记（该动手）
+    rbShowInfo: true,          // 主图右上角信息表
     srsi,
     srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
     srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
@@ -859,6 +871,16 @@ function normalizeCfg(c) {
   if (c.chanZsGate !== 'first3' && c.chanZsGate !== 'all') c.chanZsGate = 'first3';
   if (c.chanDivMeasure !== 'macd' && c.chanDivMeasure !== 'slope') c.chanDivMeasure = 'macd';
   if (typeof c.chanUseSegForZs !== 'boolean') c.chanUseSegForZs = false;
+  // ---- 多均线带 + 箱体（默认关；总开关关时零开销）----
+  if (typeof c.rbOn !== 'boolean') c.rbOn = false;
+  if (c.rbMaType !== 'sma' && c.rbMaType !== 'ema') c.rbMaType = 'sma';
+  if (!Array.isArray(c.rbPeriods) || !c.rbPeriods.length || c.rbPeriods.some((p) => typeof p !== 'number' || !(p >= 2 && p <= 400))) c.rbPeriods = RB_MA_PRESETS[0].periods.slice();
+  if (typeof c.rbBoxTol !== 'number' || !(c.rbBoxTol >= 0.5 && c.rbBoxTol <= 20)) c.rbBoxTol = 4.0;
+  if (typeof c.rbBoxLookback !== 'number' || !(c.rbBoxLookback >= 30 && c.rbBoxLookback <= 500)) c.rbBoxLookback = 200;
+  if (typeof c.rbPullbackPeriod !== 'number' || !(c.rbPullbackPeriod >= 2 && c.rbPullbackPeriod <= 400)) c.rbPullbackPeriod = 50;
+  if (typeof c.rbDepthAtr !== 'number' || !(c.rbDepthAtr >= 0 && c.rbDepthAtr <= 10)) c.rbDepthAtr = 1.0;
+  if (typeof c.rbDots !== 'boolean') c.rbDots = true;
+  if (typeof c.rbShowInfo !== 'boolean') c.rbShowInfo = true;
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
   if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
@@ -1414,7 +1436,7 @@ function renderMainTools() {
     `<button data-mr="short" class="${cfg.maRelAllowShort ? 'on' : ''}" title="是否允许做空信号">做空</button>` +
     `<button data-mr="l3" class="${cfg.maRelL3 ? 'on' : ''}" title="L3：收盘上/下穿 4H MA20">L3</button>` +
     `<button data-mr="info" class="${cfg.maRelShowInfo ? 'on' : ''}" title="右上角状态/距离信息表">信息表</button>` +
-    `</span>` : ''}${chanChipHtml()}<span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
+    `</span>` : ''}${rbChipHtml()}${chanChipHtml()}<span class="mt-legend" title="主图信号标记说明（与卡头图例同源）：▲/▼/●=SRSI 自动真实开多/开空/平仓；◆/◇=Alpha 基石实盘调仓/平仓；●=15m SRSI 机会（跌入超卖看多/升入超买看空，非成交）；◆=金钩/死钩（权重大于机会点，同根同侧重叠时只显示钩）。鼠标悬停任意 K 线，浮层会列出该根命中的全部标记含义">${renderLegendHtml()}<span id="sigMarkCount" style="margin-left:6px;color:var(--text2);font-family:var(--mono,monospace)"></span></span>`;
   el.querySelectorAll('.chip').forEach(c => {
     c.addEventListener('click', () => toggleOvQuickTf(c.getAttribute('data-tf')));
   });
@@ -1447,6 +1469,37 @@ function renderMainTools() {
       try { persist(); } catch (e2) {}
       _mtSig = '';   // 强制重建药丸行（参数态变化）
       renderMainTools(); renderKChart();
+    });
+  }
+  // v1.6.49：多均线带 + 箱体层开关 + 参数行
+  const rbc = el.querySelector('#rbChip');
+  if (rbc) rbc.addEventListener('click', () => setRb(!cfg.rbOn));
+  const rbo = el.querySelector('#rbOpts');
+  if (rbo) {
+    rbo.addEventListener('click', (e) => {
+      const b = e.target && e.target.closest ? e.target.closest('button[data-rb]') : null;
+      if (!b) return;
+      const k = b.getAttribute('data-rb');
+      if (k === 'type') cfg.rbMaType = String(cfg.rbMaType) === 'ema' ? 'sma' : 'ema';
+      else if (k === 'preset') {
+        const i = RB_MA_PRESETS.findIndex((p) => p.periods.join('/') === (cfg.rbPeriods || []).join('/'));
+        cfg.rbPeriods = RB_MA_PRESETS[(i + 1) % RB_MA_PRESETS.length].periods.slice();
+      } else if (k === 'tol') {
+        const opts = [2.5, 4, 6, 8];
+        const i = opts.indexOf(cfg.rbBoxTol);
+        cfg.rbBoxTol = opts[(i + 1) % opts.length];
+      } else if (k === 'pull') {
+        const opts = [20, 50, 100];
+        const i = opts.indexOf(cfg.rbPullbackPeriod);
+        cfg.rbPullbackPeriod = opts[(i + 1) % opts.length];
+      } else if (k === 'dots') cfg.rbDots = !cfg.rbDots;
+      else if (k === 'info') cfg.rbShowInfo = !cfg.rbShowInfo;
+      _rbCache = { key: '', data: null };
+      try { persist(); } catch (e2) {}
+      _mtSig = '';
+      renderMainTools(); renderKChart();
+      try { renderRbPanel(); } catch (e3) {}
+      try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e4) {}
     });
   }
   // v1.6.45：缠论结构层开关 + 选择点参数行
@@ -3882,6 +3935,201 @@ function drawMaRelation(ctx) {
 }
 
 // ============================================================
+// v1.6.49：多均线带 + 箱体（「截图风格」盯盘辅助层，默认关，纯显示）
+// 来源：用户提供的 TradingView 截图（2026-09-23，5 张唯一图）反推的**行为级**模型：
+//   多条均线带（白/银/蓝/红/橙）+ 箱体（区间）检测 + 突破标记 + 「突破后回踩均线接货」+ 金色圆点。
+// 计算全在 engine/maRibbonBox.js（纯函数，严格无前视；见该模块头的防前视与重绘声明）。
+// ⚠ 原指标名称/参数/是否重绘未知；同族（均线回踩）已审计**无统计优势**
+//   （BTC 15m 因果修正 41.8% vs 随机同方向基线 44.7%，AGENTS §5.58）
+//   ⇒ 只做盯盘辅助显示层，**不接自动交易、不配资金**。
+// ⚠ 箱体随新 bar 重选（跨调用会移动/消失）→ 禁止用于回测/因子消融。
+// ============================================================
+let _rbCache = { key: '', data: null };
+
+// 按需构建（带缓存：仅当 symbol/周期/根数/末根时间/关键参数变化才重算）
+function rbData() {
+  if (!cfg.rbOn) return null;
+  const sym = cfg.symbol, tf = cfg.mainTF;
+  const d = getTFData(sym, tf);
+  const c = (d.c || []).map(Number);
+  if (c.length < 30) return null;
+  const key = [sym, tf, c.length, d.t && d.t.length ? d.t[d.t.length - 1] : 0,
+    cfg.rbMaType, (cfg.rbPeriods || []).join(','), cfg.rbBoxTol, cfg.rbBoxLookback,
+    cfg.rbPullbackPeriod, cfg.rbDepthAtr].join('|');
+  if (_rbCache.key === key && _rbCache.data) return _rbCache.data;
+  const atr = atrClose(c, 14);
+  let data = null;
+  try {
+    data = buildMaRibbonBox({
+      closes: c, highs: (d.h || []).map(Number), lows: (d.l || []).map(Number),
+      opens: (d.o || []).map(Number), vols: (d.v || []).map(Number), atr, times: d.t || [],
+    }, {
+      maType: cfg.rbMaType, periods: cfg.rbPeriods, lookback: cfg.rbBoxLookback,
+      tolPct: cfg.rbBoxTol, pullbackMinPeriod: cfg.rbPullbackPeriod, minDepthAtr: cfg.rbDepthAtr,
+    });
+  } catch (e) { data = null; }
+  _rbCache = { key, data };
+  return data;
+}
+export function rbInfo() { try { const d = rbData(); return d ? d.info : null; } catch (e) { return null; } }
+
+// 信息表行（纯函数，便于单测/复用）
+export function rbInfoRows(m) {
+  if (!m || !m.ok) return [];
+  const rows = [];
+  const dir = m.order.dir;
+  rows.push({
+    t: '均线带 ' + (dir > 0 ? '多头' : dir < 0 ? '空头' : '纠缠') + ' · ' + (m.info ? m.info.periods.join('/') : ''),
+    c: dir > 0 ? '#2ecc71' : dir < 0 ? '#ff6b6b' : '#f59e0b', b: true,
+  });
+  const bx = m.box;
+  if (bx && bx.ok) {
+    const st = { 'breakout-up': '已上破', 'breakout-down': '已下破', inside: '箱体内', above: '箱体上方', below: '箱体下方' }[bx.state] || bx.state;
+    rows.push({ t: '箱体 ' + fmt(bx.bottom) + '–' + fmt(bx.top) + ' · ' + bx.heightPct.toFixed(2) + '% · ' + st, c: '#d37b4d' });
+  } else {
+    rows.push({ t: '箱体 未检出（趋势中或数据不足）', c: 'rgba(160,175,190,.85)' });
+  }
+  const known = (m.dist || []).filter((d) => d.pct != null && isFinite(d.pct));
+  if (known.length) {
+    const near = known.reduce((a, b) => (Math.abs(b.pct) < Math.abs(a.pct) ? b : a));
+    const slow = known[known.length - 1];
+    rows.push({ t: '距 ' + near.label + ' ' + (near.pct >= 0 ? '+' : '') + near.pct.toFixed(2) + '% · 距 ' + slow.label + ' ' + (slow.pct >= 0 ? '+' : '') + slow.pct.toFixed(2) + '%', c: '#c8d4e0' });
+  }
+  const sig = (m.signals || []).length ? m.signals[m.signals.length - 1] : null;
+  rows.push({
+    t: sig ? ('最近 ' + sig.type + ' ' + (sig.side === 'long' ? '看多' : '看空') + ' @' + fmt(sig.price)) : '最近 无回踩信号',
+    c: sig ? (sig.invalidIdx != null ? '#8899aa' : (sig.side === 'long' ? '#2ecc71' : '#ff6b6b')) : 'rgba(160,175,190,.85)',
+  });
+  rows.push({ t: '⚠ 行为级近似 · 无统计优势 · 仅盯盘辅助', c: '#ffd740' });
+  return rows;
+}
+
+// 画在主图上：箱体矩形（橙，仿截图）→ 均线带 → 金点（最后一层）
+function drawMaRibbonBox(ctx) {
+  const g = _mainGeom;
+  const m = rbData();
+  if (!g || !m || !m.ok) return;
+  const { lo, hi, start, end, xStep, h, l } = g;
+  const X = (i) => PAD_L + (i - start) * xStep + xStep / 2;
+  const Y = (v) => PAD_T + (hi - v) / (hi - lo) * mainH();
+  const inWin = (i) => i >= start && i < end;
+  const clip = () => { ctx.beginPath(); ctx.rect(PAD_L, PAD_T, W - PAD_L - PAD_R, mainH()); ctx.clip(); };
+
+  // 1) 箱体（橙色边框 + 半透明填充，与截图同款）
+  const bx = m.box;
+  if (bx && bx.ok) {
+    const i0 = Math.max(bx.i0, start);
+    const i1 = Math.min(bx.boxEndIdx != null ? bx.boxEndIdx : bx.i1, end - 1);
+    if (i1 >= i0) {
+      const x0 = X(i0) - xStep / 2, x1 = X(i1) + xStep / 2;
+      const yT = Y(bx.top), yB = Y(bx.bottom);
+      ctx.save(); clip();
+      ctx.fillStyle = 'rgba(211,123,77,.10)';
+      ctx.fillRect(x0, Math.min(yT, yB), Math.max(1, x1 - x0), Math.max(1, Math.abs(yB - yT)));
+      ctx.strokeStyle = '#d37b4d'; ctx.lineWidth = 1.4;
+      ctx.strokeRect(x0, Math.min(yT, yB), Math.max(1, x1 - x0), Math.max(1, Math.abs(yB - yT)));
+      ctx.fillStyle = 'rgba(211,123,77,.95)'; ctx.font = '8px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText('箱体 ' + fmt(bx.bottom) + '–' + fmt(bx.top) + ' · ' + bx.heightPct.toFixed(1) + '%', x0 + 3, Math.min(yT, yB) - 3);
+      ctx.restore();
+    }
+  }
+
+  // 2) 均线带（截图配色：白/银灰/蓝/红/橙）
+  ctx.save(); clip();
+  for (const ma of m.ribbon) {
+    ctx.strokeStyle = ma.color; ctx.lineWidth = ma.width; ctx.setLineDash([]);
+    ctx.beginPath();
+    let started = false;
+    for (let i = Math.max(0, start); i < end; i++) {
+      const v = ma.values[i];
+      if (v == null || !Number.isFinite(v)) { started = false; continue; }
+      const x = X(i), y = Y(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // 3) 金色圆点（该动手标记；单色金，方向由画在 K 线上方/下方区分，与截图一致）
+  if (cfg.rbDots) {
+    const dots = m.dots.filter((d) => inWin(d.i));
+    ctx.save(); clip();
+    for (const d of dots) {
+      const x = X(d.i);
+      const long = d.side === 'long';
+      const y = Y(long ? l[d.i] : h[d.i]) + (long ? 13 : -13);
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#f0b90b'; ctx.globalAlpha = .92; ctx.fill(); ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(20,20,20,.55)'; ctx.lineWidth = 1; ctx.stroke();
+    }
+    // 只给最近 3 个金点写小字说明（避免图面过密；与截图「无文字」的观感折中）
+    ctx.font = '8px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    for (const d of dots.slice(-3)) {
+      const x = X(d.i), long = d.side === 'long';
+      const y = Y(long ? l[d.i] : h[d.i]) + (long ? 24 : -20);
+      ctx.fillStyle = 'rgba(240,185,11,.95)';
+      ctx.fillText(d.kind === 'breakout' ? '突破' : String(d.label || '').replace(/·.*/, ''), x, y);
+    }
+    ctx.restore();
+  }
+
+  // 4) 右上角信息表（与 maRel / chan 信息表错开：各让 60px）
+  if (cfg.rbShowInfo) {
+    const rows = rbInfoRows(m);
+    ctx.save();
+    ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    let wMax = 0; for (const r of rows) wMax = Math.max(wMax, ctx.measureText(r.t).width);
+    const bw = wMax + 14, bh = rows.length * 12 + 8;
+    const bx2 = W - PAD_R - bw - 2;
+    const by = PAD_T + 2 + ((cfg.maRelOn && cfg.maRelShowInfo) ? 60 : 0) + ((cfg.chanOn && cfg.chanShowInfo) ? 60 : 0);
+    ctx.fillStyle = 'rgba(16,22,30,.82)';
+    ctx.fillRect(bx2, by, bw, bh);
+    ctx.strokeStyle = 'rgba(255,255,255,.14)'; ctx.strokeRect(bx2, by, bw, bh);
+    rows.forEach((r, k) => {
+      ctx.font = (r.b ? 'bold ' : '') + '9px sans-serif';
+      ctx.fillStyle = r.c;
+      ctx.fillText(r.t, bx2 + 7, by + 15 + k * 12);
+    });
+    ctx.restore();
+  }
+}
+
+// 多均线带 + 箱体：药丸 + 参数行（仿 maRelChip / chanChipHtml）
+function rbChipHtml() {
+  const chip = `<span id="rbChip" title="多均线带 + 箱体（「截图风格」盯盘辅助层，默认关，纯显示不接自动交易）：均线带 + 横盘箱体（上下沿/高度/突破）+ 「突破后回踩均线接货」信号 + 金色圆点标记。⚠ ${RB_DISCLAIMER}；⚠ ${RB_NO_TRADE}" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.rbOn ? '#d37b4d' : 'var(--border)'};background:${cfg.rbOn ? 'rgba(211,123,77,.15)' : 'var(--card2)'};color:${cfg.rbOn ? '#d37b4d' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📊 均线带·箱体${cfg.rbOn ? ' ✓' : ''}</span>`;
+  if (!cfg.rbOn) return chip;
+  const b = (k, label, on, title) => `<button data-rb="${k}" class="${on ? 'on' : ''}" title="${title}">${label}</button>`;
+  const preset = RB_MA_PRESETS.find((p) => p.periods.join('/') === (cfg.rbPeriods || []).join('/')) || RB_MA_PRESETS[0];
+  return chip + `<span id="rbOpts" class="mt-marel">` +
+    b('type', String(cfg.rbMaType || 'sma').toUpperCase(), true, '均线类型（SMA/EMA）——截图无法判断原指标用哪种，可切换') +
+    b('preset', preset.periods.join('/'), true, '均线组预设（点一下循环切换）——截图无法确定原指标周期，这里是行为级近似') +
+    b('tol', '箱体' + cfg.rbBoxTol + '%', true, '箱体高度上限（%）：越小箱体越紧、越难出现（点一下循环 2.5/4/6/8）') +
+    b('pull', '回踩≥MA' + cfg.rbPullbackPeriod, true, '只有回踩到 period ≥ 该值的均线才算有效回踩（MA10/MA20 贴着价格不算），点一下循环 20/50/100') +
+    b('dots', '金点', !!cfg.rbDots, '金色圆点标记（该动手）：突破点 + 回踩确认点；方向由画在 K 线上/下方区分') +
+    b('info', '信息表', !!cfg.rbShowInfo, '主图右上角箱体/均线带信息表') +
+    `</span>`;
+}
+
+// 主系统「均线带·箱体」解读面板（PWA 用 pwaShell.renderRb；共用 maRibbonBoxPanel 渲染器）
+export function renderRbPanel() {
+  const wrap = typeof document !== 'undefined' ? document.getElementById('kchartRbWrap') : null;
+  const box = typeof document !== 'undefined' ? document.getElementById('kchartRb') : null;
+  if (!wrap && !box) return;
+  if (!cfg.rbOn) { if (wrap) wrap.style.display = 'none'; return; }
+  if (wrap) wrap.style.display = '';
+  if (!box) return;
+  let livePx = null;
+  try {
+    const Sp = window.S;
+    const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
+    livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null;
+  } catch (e) { livePx = null; }
+  let ro = null;
+  try { ro = maRibbonBoxReadout(rbData(), { livePrice: livePx }); } catch (e) { ro = null; }
+  renderMaRibbonBoxInto(box, ro);
+}
+
+// ============================================================
 // v1.6.45：缠论结构层（默认关，纯显示，不接自动交易）
 // 引擎：src/engine/chanlun.js（纯函数）；显示模型：src/engine/chanlunDisplay.js。
 // ⚠ 仅结构描述 · 无统计优势（实时口径 6.7 年回测为负）；上层为多解层（见 CHAN_MULTI_NOTE）。
@@ -4421,6 +4669,8 @@ export function renderKChart() {
   if (!mainOk) { drawEmpty(ctx, H, '等待 K 线数据（' + tf + '）...'); return; }
   // v1.6.30：价格-均线关系盯盘辅助层（画在蜡烛之上、标记之下）
   try { if (cfg.maRelOn) drawMaRelation(ctx); } catch (e) {}
+  // v1.6.49：多均线带 + 箱体（画在蜡烛之上、缠论之前）
+  try { if (cfg.rbOn) drawMaRibbonBox(ctx); } catch (e) {}
   // v1.6.45：缠论结构层（画在蜡烛之上、标记之下）
   try { if (cfg.chanOn) drawChanlun(ctx); } catch (e) {}
 
@@ -4465,6 +4715,7 @@ export function renderKChart() {
   const hz = updateHorizonState(sym, allPriceMap, capMin);
   renderSrsiOverview(hz, capMin);
   renderTradeDiscipline(hz, capMin);
+  try { renderRbPanel(); } catch (e) {}
   try { renderChanPanel(); } catch (e) {}
   updateRuleMonitorTick(); // 规则监测：影子计算 + 信号簿边沿检测（内2s节流）+ 面板渲染（签名守卫）
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 悬浮卡（动力卡 + 规则监测）
@@ -4489,6 +4740,7 @@ export function refreshPanels() {
   const hz = updateHorizonState(cfg.symbol, allPriceMap, capMin);
   if (ov) renderSrsiOverview(hz, capMin);
   if (box) renderTradeDiscipline(hz, capMin);
+  try { renderRbPanel(); } catch (e) {}
   try { renderChanPanel(); } catch (e) {}
   updateRuleMonitorTick(); // 规则监测：主系统/PWA 每秒 tick 走这里（renderKChart 不每秒重绘）
   try { renderDiscHud(); } catch (e) {} // v1.5.52：HUD 悬浮卡
@@ -7055,6 +7307,11 @@ export const kchartApi = {
   __maRelData: () => maRelData(),
   chanInfo,
   setChan,
+  rbInfo,
+  setRb,
+  rbInfoRows,
+  __rbData: () => rbData(),
+  renderRbPanel,
   __chanData: () => chanData(),
   __chanProjection: (livePx) => chanProjection(livePx),
   renderChanPanel,
@@ -8170,6 +8427,19 @@ export function setMaRel(on) {
   _mtSig = '';
   renderMainTools();
   renderKChart();
+}
+
+// v1.6.49：多均线带 + 箱体层开关（纯显示，不接自动交易）
+export function setRb(on) {
+  cfg.rbOn = !!on;
+  _rbCache = { key: '', data: null };
+  try { persist(); } catch (e) {}
+  _mtSig = '';
+  renderMainTools();
+  renderKChart();
+  try { renderRbPanel(); } catch (e) {}
+  // PWA：立即刷新右栏卡片（否则要等下一次 1s tick）；主系统无此钩子则跳过
+  try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e2) {}
 }
 
 // v1.6.45：缠论结构层开关（纯显示，不接自动交易）

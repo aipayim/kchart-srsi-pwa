@@ -204,6 +204,10 @@
         <div class="kchart-ovhead" onclick="window.kToggleDisc()">📋 交易纪律分析 <span class="kchart-ovarrow">▾</span></div>
         <div id="kchartDisc" class="kchart-disc"></div>
       </div>
+      <div class="kchart-discwrap closed" id="kchartRbWrap" style="display:none">
+        <div class="kchart-ovhead" onclick="document.getElementById('kchartRbWrap').classList.toggle('closed')">📊 均线带·箱体解读（行为级近似 · 未验证 · 不接自动交易）<span class="kchart-ovarrow">▾</span></div>
+        <div id="kchartRb" class="chan-panel"></div>
+      </div>
       <div class="kchart-tradebar" id="kchartTradeBar"></div>
       <div class="kchart-box">
         <canvas id="kchartCanvas"></canvas>

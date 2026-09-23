@@ -35,11 +35,11 @@ public/pwa-512.png
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,chanlun,chanlunDisplay}.js
+src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,pwaShell.js,signalSounds.js,pwa.css}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,chanlunPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs}
+src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,chanlunPanel}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```
@@ -104,15 +104,21 @@ git push origin main
 站点由 **Cloudflare Pages** 项目 `srsi-pwa` 托管，自定义域名 `srsi.openapi.im`（CNAME → `srsi-pwa.pages.dev`）。
 
 ```bash
-cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版
-
-# 凭证从本地 pat.txt 读取（详见第 6 节，勿硬编码）
-export CLOUDFLARE_API_TOKEN="$(grep -m1 '^Token:' /mnt/d/TEST/app/app29-openapi/pat.txt | sed 's/^Token://')"
-export CLOUDFLARE_ACCOUNT_ID="766d2b730eb31ff7aac0210a1808ad7f"
-
-npx wrangler pages deploy dist --project-name=srsi-pwa --branch main --commit-dirty=true
+# ⚠️ 必须整条 && 链执行：先 cd 到本仓库并打印 pwd + ls dist/assets（防错门），再注入凭证部署。
+# 历史事故：曾多次在主仓 cwd 误部署未脱敏产物 → 必须有防错门。
+cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版 && pwd && ls dist/assets \
+  && [ -f package.json ] \
+  && ! ls dist/assets/main-*.js >/dev/null 2>&1 \
+  && ls dist/assets/kchart-*.js >/dev/null 2>&1 \
+  && echo SANITIZED_CHECK_OK \
+  && TOKEN=$(sed -n '6p' /mnt/d/TEST/app/app29-openapi/pat.txt | sed 's/^Token://' | tr -d '\r') \
+  && CLOUDFLARE_API_TOKEN="$TOKEN" CLOUDFLARE_ACCOUNT_ID=766d2b730eb31ff7aac0210a1808ad7f CI=1 \
+     npx wrangler pages deploy dist --project-name srsi-pwa --branch main
 ```
 
+- **⚠️ 凭证取第 6 行**：`pat.txt` 第 1 行是 GitHub PAT、第 6 行才是 Cloudflare token。用 `grep -m1 '^Token:'` 在部分环境下会取错（或取到非 ASCII 内容）→ `Authentication error [code:10000]` / ByteString 错。务必用 `sed -n '6p' ... | sed 's/^Token://' | tr -d '\r'`。
+- **禁止 `--commit-dirty`**：`pat.txt` 含中文，`cat` 整文件作 token 或该标志会引发 wrangler 的 `Authorization` 头 ByteString 错误。
+- **防错门（SANITIZED_CHECK_OK）**：脱敏版 dist 只有 `kchart-*.{js,css}`，**不含 `main-*.js`**；若出现 `main-*.js` 说明当前 cwd 是主仓（未脱敏）→ 拒绝部署。
 - 部署后 `https://srsi.openapi.im/kchart` 即为最新版；根路径 `/` 经 `public/_redirects` 302 跳转到 `/kchart.html`。
 - **⚠️ 分支必须是 `main`**：自定义域 `srsi.openapi.im` **只服务 Production 部署**，而 Cloudflare Pages 把 `main` 分支视为 Production。用 `--branch production`（或其它名）部署只会产生 **Preview** 部署，自定义域**不会更新**，线上仍显示旧版。务必 `--branch main`。
 - 首次/罕见情况下 wrangler 上传较慢会超时，重试一次即可；**不要用 `--yes`**（该子命令不识别此标志，会打印用法）。

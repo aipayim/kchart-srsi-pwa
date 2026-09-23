@@ -13,6 +13,8 @@ import { maRelReadout as buildMaRelReadout } from '../engine/maRelation.js';
 import { maRelGaugeModel, drawMaRelGauge } from '../tech2/maRelGauge.js';
 import { chanlunReadout, CHAN_DISCLAIMER } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from '../tech2/chanlunPanel.js';
+import { maRibbonBoxReadout, RB_DISCLAIMER } from '../engine/maRibbonBox.js';
+import { renderMaRibbonBoxInto } from '../tech2/maRibbonBoxPanel.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
@@ -1176,6 +1178,46 @@ function renderChan() {
   }
 }
 
+// v1.6.49：多均线带 + 箱体（PWA 右栏；主系统用 kchartApi.renderRbPanel，共用 maRibbonBoxPanel 渲染器）
+function renderRb() {
+  const card = $('pwaRbCard');
+  if (!card) return;
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  const on = !!(cfg && cfg.rbOn);
+  card.style.display = on ? '' : 'none';
+  if (!on) return;
+  let data = null;
+  try { data = api.__rbData ? api.__rbData() : null; } catch (e) { data = null; }
+  const box = $('pwaRb');
+  const pill = $('pwaRbPill');
+  const foot = $('pwaRbFoot');
+  if (!box) return;
+  if (!data || !data.ok) {
+    if (box.__sig !== 'nodata') { box.__sig = 'nodata'; box.innerHTML = '<div class="sig-alert-empty">⏳ 正在计算均线带/箱体…（需本周期 K 线就绪）</div>'; }
+    if (pill) pill.textContent = '—';
+    if (foot) foot.textContent = '';
+    return;
+  }
+  // 实时价（ticker，每 5s）——「距均线 %」随行情更新，而非只跟 K 线收盘
+  let livePx = null;
+  try { const Sp = globalThis.S; const pp = Sp && Sp.prices && Sp.prices[cfg.symbol]; livePx = (pp && Number.isFinite(pp.last)) ? pp.last : null; } catch (e) { livePx = null; }
+  let ro = null;
+  try { ro = maRibbonBoxReadout(data, { livePrice: livePx }); } catch (e) { ro = null; }
+  if (!ro) return;
+  const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
+  if (pill) {
+    pill.textContent = ro.ok ? (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : '震荡') : '—';
+    pill.style.color = toneCol;
+  }
+  renderMaRibbonBoxInto(box, ro);
+  if (foot) {
+    const bx = (data.box && data.box.ok) ? data.box : null;
+    const t = ro.ok ? ('箱体 ' + (bx ? (fmtPx(bx.bottom) + '–' + fmtPx(bx.top) + ' · ' + bx.heightPct.toFixed(2) + '%') : '未检出') + ' · 金点 ' + (data.dots || []).length) : RB_DISCLAIMER;
+    if (foot.__t !== t) { foot.__t = t; foot.textContent = t; }
+  }
+}
+
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
@@ -1347,6 +1389,7 @@ export function refreshShell() {
   renderRecentSignals();
   renderMaRel();
   renderChan();
+  renderRb();
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
   // 主图工具栏「自适应」药丸关闭时，整卡隐藏（与「均线关系」「缠论」一致）
   const _adpCard = $('pwaAdaptiveCard');
