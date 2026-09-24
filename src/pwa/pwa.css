@@ -721,3 +721,29 @@ body.pwa.kfs #kfsBar button{background:var(--card2);border:1px solid var(--borde
 body.pwa.kfs #kfsBar button:hover{border-color:var(--accent);color:var(--accent)}
 body.pwa.kfs #kfsBar .pwa-kfs-hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width:640px){body.pwa.kfs #kfsBar .pwa-kfs-hint{display:none}}
+
+/* ===== v1.6.50：工具一览（Tool Board）===== */
+.tb-board{display:flex;flex-direction:column;gap:4px}
+.tb-row{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:7px;align-items:center;
+  padding:5px 8px;border-radius:7px;background:var(--card2);border-left:3px solid var(--border)}
+.tb-row.tb-long{border-left-color:var(--green)}
+.tb-row.tb-short{border-left-color:var(--red)}
+.tb-row.tb-flat{border-left-color:#f59e0b}
+.tb-row.tb-none{border-left-color:#4a5568}
+.tb-name{font-size:11px;font-weight:700;white-space:nowrap}
+.tb-tf{font-size:9px;color:var(--text2);font-family:var(--mono);padding:1px 5px;border-radius:5px;background:rgba(255,255,255,.05);white-space:nowrap}
+.tb-tf.tb-tf-on{color:var(--accent);background:rgba(34,211,238,.12)}
+.tb-concl{font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tb-dir{font-size:10px;font-weight:800;white-space:nowrap;font-family:var(--mono)}
+.tb-row.tb-long .tb-dir{color:var(--green)}
+.tb-row.tb-short .tb-dir{color:var(--red)}
+.tb-row.tb-flat .tb-dir{color:#f59e0b}
+.tb-row.tb-none .tb-dir{color:#6B7688}
+.tb-rel{display:flex;gap:7px;align-items:center;margin-top:7px;padding-top:7px;border-top:1px dashed var(--border);font-size:10.5px}
+.tb-rel-k{color:var(--text2);font-size:9px;text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+.tb-rel-v b{font-weight:800;margin-right:2px}
+.tb-c-long{color:var(--green)}
+.tb-c-short{color:var(--red)}
+.tb-c-flat{color:#f59e0b}
+.tb-conflicts{margin-top:5px;font-size:10px;color:#f59e0b;line-height:1.5}
+.tb-note{margin-top:6px;font-size:9px;color:var(--text2);opacity:.8;line-height:1.5}

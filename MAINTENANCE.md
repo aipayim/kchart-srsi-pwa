@@ -38,8 +38,8 @@ scripts/verify-pwa-data.mjs
 src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath}.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
 src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,chanlunPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```

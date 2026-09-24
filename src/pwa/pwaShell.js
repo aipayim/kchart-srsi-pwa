@@ -18,7 +18,8 @@ import { renderMaRibbonBoxInto } from '../tech2/maRibbonBoxPanel.js';
 import { horizonTrend, macroTrend, blockReasonText, blockGuideText } from '../tech2/kchart.js';
 import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, fmtSignalTime, kindMeta, signalEventKey, signalLine, sideOf, LIVE_ONLY_SIGNAL_KINDS } from '../tech2/signalAlerts.js';
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
-import { renderAdaptivePwa, renderAdaptiveCompactPwa } from '../tech2/adaptivePanel.js';
+import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
+import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -1066,6 +1067,7 @@ export function installSignalAlertSink() {
   });
 }
 let _maRelGaugeModel = null;
+let _lastReadouts = { maRel: null, chan: null, rb: null };   // v1.6.50：供工具一览原样引用各面板结论
 function renderMaRel() {
   const card = $('pwaMaRelCard');
   if (!card) return;
@@ -1073,6 +1075,7 @@ function renderMaRel() {
   const cfg = api && api.getConfig ? api.getConfig() : null;
   const on = !!(cfg && cfg.maRelOn);
   card.style.display = on ? '' : 'none';
+  _lastReadouts.maRel = null;
   if (!on) return;
   let data = null;
   try { data = api.__maRelData ? api.__maRelData() : null; } catch (e) { data = null; }
@@ -1092,6 +1095,7 @@ function renderMaRel() {
   let ro = null;
   try { ro = buildMaRelReadout(data, { livePrice: livePx }); } catch (e) { ro = null; }
   if (!ro) return;
+  _lastReadouts.maRel = ro;
   // v1.6.34：仪表盘模型（动画由共用 RAF 绘制）
   try {
     const gm = maRelGaugeModel(data, { livePrice: livePx });
@@ -1144,6 +1148,7 @@ function renderChan() {
   const cfg = api && api.getConfig ? api.getConfig() : null;
   const on = !!(cfg && cfg.chanOn);
   card.style.display = on ? '' : 'none';
+  _lastReadouts.chan = null;
   if (!on) return;
   let data = null;
   try { data = api.__chanData ? api.__chanData() : null; } catch (e) { data = null; }
@@ -1165,6 +1170,7 @@ function renderChan() {
     });
   } catch (e) { ro = null; }
   if (!ro) return;
+  _lastReadouts.chan = ro;
   const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
   if (pill) {
     pill.textContent = ro.ok ? (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : '震荡') : '—';
@@ -1186,6 +1192,7 @@ function renderRb() {
   const cfg = api && api.getConfig ? api.getConfig() : null;
   const on = !!(cfg && cfg.rbOn);
   card.style.display = on ? '' : 'none';
+  _lastReadouts.rb = null;
   if (!on) return;
   let data = null;
   try { data = api.__rbData ? api.__rbData() : null; } catch (e) { data = null; }
@@ -1205,6 +1212,7 @@ function renderRb() {
   let ro = null;
   try { ro = maRibbonBoxReadout(data, { livePrice: livePx }); } catch (e) { ro = null; }
   if (!ro) return;
+  _lastReadouts.rb = ro;
   const toneCol = ro.tone === 'bull' ? '#2ecc71' : ro.tone === 'bear' ? '#ff6b6b' : ro.tone === 'range' ? '#f59e0b' : '#8b95a5';
   if (pill) {
     pill.textContent = ro.ok ? (ro.tone === 'bull' ? '偏多' : ro.tone === 'bear' ? '偏空' : '震荡') : '—';
@@ -1216,6 +1224,60 @@ function renderRb() {
     const t = ro.ok ? ('箱体 ' + (bx ? (fmtPx(bx.bottom) + '–' + fmtPx(bx.top) + ' · ' + bx.heightPct.toFixed(2) + '%') : '未检出') + ' · 金点 ' + (data.dots || []).length) : RB_DISCLAIMER;
     if (foot.__t !== t) { foot.__t = t; foot.textContent = t; }
   }
+}
+
+// v1.6.50：工具一览（Tool Board）—— 只列已开启工具，各工具结论原样引用、互不融合（见 toolBoard.js 注释）
+function renderToolBoard(snap) {
+  const card = $('pwaToolBoardCard');
+  if (!card) return;   // 主系统 index.html 无此卡 → no-op（零回归）
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  if (!cfg) return;
+  const sym = cfg.symbol;
+  const alphaSig = (globalThis.__alphaSignalsBySym || {})[sym] || null;
+  let adaptiveSym = null;
+  try {
+    const m = buildAdaptiveModel(globalThis.__adaptivePortfolio);
+    if (m && m.available) {
+      if (!m.enabled) adaptiveSym = { enabled: false };
+      else {
+        const s = (m.symbols || []).find(x => x.sym === sym) || (m.symbols || [])[0] || null;
+        adaptiveSym = s ? { enabled: true, bucket: s.bucket, wA: s.wA, wC: s.wC, alphaW: s.alphaW } : { enabled: false };
+      }
+    }
+  } catch (e) { adaptiveSym = null; }
+  const model = buildToolBoardModel({
+    cfg, alphaSig, adaptive: adaptiveSym, srsi: snap, mainTF: cfg.mainTF,
+    maRel: _lastReadouts.maRel, chan: _lastReadouts.chan, rb: _lastReadouts.rb
+  });
+  const tfBtn = $('pwaToolBoardTf');
+  if (tfBtn) {
+    const on = !!cfg.toolBoardTfOnly;
+    tfBtn.textContent = on ? '周期 ✓' : '周期';
+    tfBtn.classList.toggle('on', on);
+    tfBtn.title = on ? '只看与主图周期（' + cfg.mainTF + '）一致的工具 · 点击关闭' : '只看与主图周期一致的工具（当前：全部）';
+  }
+  const hasRows = model.rows.length > 0;
+  card.style.display = hasRows ? '' : 'none';
+  if (!hasRows) return;
+  const box = $('pwaToolBoard');
+  if (!box) return;
+  const html = renderToolBoardHtml(model);
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+}
+
+// 工具一览「周期过滤」开关（addEventListener，避免 onclick 直调 → 无需双绑 window）
+function bindToolBoard() {
+  const btn = $('pwaToolBoardTf');
+  if (!btn || btn.__bound) return;
+  btn.__bound = true;
+  btn.addEventListener('click', () => {
+    const api = globalThis.kchartApi;
+    const cfg = api && api.getConfig ? api.getConfig() : null;
+    const next = !(cfg && cfg.toolBoardTfOnly);
+    if (api && api.setToolBoardTfOnly) api.setToolBoardTfOnly(next);
+    else { try { if (cfg) cfg.toolBoardTfOnly = next; } catch (e) {} renderToolBoard(); }
+  });
 }
 
 function renderRecentSignals() {
@@ -1390,6 +1452,7 @@ export function refreshShell() {
   renderMaRel();
   renderChan();
   renderRb();
+  renderToolBoard(snap);
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
   // 主图工具栏「自适应」药丸关闭时，整卡隐藏（与「均线关系」「缠论」一致）
   const _adpCard = $('pwaAdaptiveCard');
@@ -1420,6 +1483,7 @@ export function initPwaShell() {
   bindStorageCard();
   bindCockpitAcc();
   bindEngine();
+  bindToolBoard();
   applyPhoneDefaults();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}

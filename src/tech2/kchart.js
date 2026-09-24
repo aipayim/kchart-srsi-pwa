@@ -721,6 +721,7 @@ export function defaultKConfig() {
     ruleHudPos: null,           // v1.5.52：HUD 拖动后位置 {x,y}（相对 .kchart-box px；null=CSS 默认）
     sigOverlay: true,           // GOAL13：主图实盘信号层（Alpha/SRSI 信号映射，总开关）
     adaptiveOverlay: true,      // 自适应组合主图叠加（volQ 分位带 + w_A 阶梯线 + 组合事件标记；未启用组合时零绘制）
+    toolBoardTfOnly: false,     // v1.6.50：工具一览「只看与主图周期一致的工具」过滤（PWA；默认关）
     btStrategy: 'alpha',        // GOAL12：回测策略选择（alpha=基石第一/默认；srsi；combo）
     srsiAutoApplyBt: false,     // GOAL9：应用回测参数（勾选后回测完成自动把参数快照应用到实盘自动交易）
     srsiAutoMode: 'follow',     // 本位：follow=跟随快捷交易(开空U本位/开多币本位) / usdt / coin
@@ -864,6 +865,7 @@ function normalizeCfg(c) {
   if (!c.ruleHudPos || typeof c.ruleHudPos !== 'object' || typeof c.ruleHudPos.x !== 'number' || typeof c.ruleHudPos.y !== 'number') c.ruleHudPos = null; // v1.5.52：HUD 位置（保留对象或 null）
   if (typeof c.sigOverlay !== 'boolean') c.sigOverlay = true; // GOAL13：主图实盘信号层总开关
   if (typeof c.adaptiveOverlay !== 'boolean') c.adaptiveOverlay = true; // 自适应组合主图叠加（默认开，未启用组合时零绘制）
+  if (typeof c.toolBoardTfOnly !== 'boolean') c.toolBoardTfOnly = false; // v1.6.50：工具一览周期过滤（默认关）
   // ---- 缠论结构层（默认关；各层显示开关默认开，但总开关关时零开销）----
   if (typeof c.chanOn !== 'boolean') c.chanOn = false;
   ['chanShowBi', 'chanShowSeg', 'chanShowZs', 'chanShowDiv', 'chanShowBsp', 'chanShowTrend', 'chanShowInfo'].forEach((k) => { if (typeof c[k] !== 'boolean') c[k] = true; });
@@ -6209,6 +6211,11 @@ function setSigOverlay(on) {
   else { renderKChart(); renderMainTools(); }
 }
 // 自适应组合主图叠加总开关（默认开；未启用组合时 getSeries 返回 null → 零绘制）
+// v1.6.50：工具一览「只看与主图周期一致的工具」过滤开关（PWA；纯显示，零行为变化）
+export function setToolBoardTfOnly(on) {
+  cfg.toolBoardTfOnly = !!on; try { persist(); } catch (e) {}
+  try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e0) {}
+}
 export function setAdaptiveOverlay(on) {
   cfg.adaptiveOverlay = !!on; persist();
   // PWA：立即刷新右栏（关闭时「自适应组合」卡消失）
@@ -7248,6 +7255,7 @@ export const kchartApi = {
   kToggleTradePanel,
   setSigOverlay,
   setAdaptiveOverlay,
+  setToolBoardTfOnly,
   adaptiveOverlayAt,
   setMainTF: (tf) => setMainTF(tf),
   setKlineSel: (tf, on) => setKlineSel(tf, on),
@@ -7396,6 +7404,7 @@ export const kchartApi = {
 if (typeof window !== 'undefined') window.kchartApi = kchartApi;
 // GOAL13 红线：onclick 直调必须同时绑 kchartApi + window
 if (typeof window !== 'undefined') window.setAdaptiveOverlay = (on) => setAdaptiveOverlay(on);
+if (typeof window !== 'undefined') window.setToolBoardTfOnly = (on) => setToolBoardTfOnly(on);
 
 // ===================== 快捷合约交易（纸面）=====================
 // 方向定死：空=U本位 / 多=币本位；平仓利润的 50% 自动再投到另一资产。
