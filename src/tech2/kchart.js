@@ -16,6 +16,7 @@ import { buildChanlun } from '../engine/chanlun.js';
 import { chanlunWindowItems, chanlunReadout, chanDelayInfo, chanProjectLive, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from './chanlunPanel.js';
 import { buildMaRibbonBox, maRibbonBoxReadout, RB_MA_PRESETS, RB_DISCLAIMER, RB_NO_TRADE } from '../engine/maRibbonBox.js';
+import { liqGrid, topZones } from '../engine/liqHeatmapVol.js';
 import { renderMaRibbonBoxInto } from './maRibbonBoxPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
@@ -698,6 +699,10 @@ export function defaultKConfig() {
     rbDepthAtr: 1.0,           // 回撤深度下限（×ATR）
     rbDots: true,              // 金色圆点标记（该动手）
     rbShowInfo: true,          // 主图右上角信息表
+    // v1.6.51：清算热图（成交量代理 OI，默认关；纯显示层，不接任何交易/资金）
+    liqOn: false,              // 总开关（主图工具面板药丸）
+    liqWin: 240,               // 建模窗口根数（含可见窗口之前的历史）
+    liqAlpha: 0.55,            // 热力网格最大不透明度
     srsi,
     srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
     srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
@@ -883,6 +888,10 @@ function normalizeCfg(c) {
   if (typeof c.rbDepthAtr !== 'number' || !(c.rbDepthAtr >= 0 && c.rbDepthAtr <= 10)) c.rbDepthAtr = 1.0;
   if (typeof c.rbDots !== 'boolean') c.rbDots = true;
   if (typeof c.rbShowInfo !== 'boolean') c.rbShowInfo = true;
+  // ---- 清算热图（成交量代理 OI；默认关，总开关关时零计算/零绘制）----
+  if (typeof c.liqOn !== 'boolean') c.liqOn = false;
+  if (typeof c.liqWin !== 'number' || !(c.liqWin >= 60 && c.liqWin <= 1000)) c.liqWin = 240;
+  if (typeof c.liqAlpha !== 'number' || !(c.liqAlpha >= 0.1 && c.liqAlpha <= 1)) c.liqAlpha = 0.55;
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
   if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
@@ -1395,7 +1404,7 @@ function renderMainTools() {
   const el = typeof document !== 'undefined' ? document.getElementById('kchartMainTools') : null;
   if (!el) return;
   const sym = cfg.symbol;
-  let cheap = sym + '|rm' + (cfg.ruleMonitorOpen ? 1 : 0) + '|';
+  let cheap = sym + '|rm' + (cfg.ruleMonitorOpen ? 1 : 0) + '|lq' + (cfg.liqOn ? 1 : 0) + '|';
   const chips = KLINE_TF.map(tf => {
     const overlay = !!(cfg.overlayTfs && cfg.overlayTfs[tf]);
     const aux = !!(cfg.srsiAux && cfg.srsiAux[tf]);
@@ -1429,7 +1438,7 @@ function renderMainTools() {
     }
     return `<span class="${cls}" data-tf="${ch.tf}" style="--c:${col};background:${bg}" title="${title}">${label}</span>`;
   }).join('');
-  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span id="adaptiveChip" title="自适应组合主图叠加（默认开）：volQ 分位带（绿低/灰中/红高）+ w_A 阶梯线 + 组合事件标记；需先在 console 启用 window.__adaptivePortfolio（未启用时零绘制）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--border)'};background:${cfg.adaptiveOverlay ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">自适应${cfg.adaptiveOverlay ? ' ✓' : ''}</span><span id="maRelChip" title="价格-均线关系盯盘辅助层（默认关，纯显示不接自动交易）：本周期 MA20/60(+MA120) · 日线 MA20/50/200 · 周线 MA20/200 · VWAP；右上角 BULL/BEAR/RANGE 状态 + 均线密集/乖离提示；回踩站上(L1)/密集突破(L2)/4H MA20 突破(L3) 信号 + 结构防守位 + 1R/2R 参考线 + 失效叉" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.maRelOn ? '#f59e0b' : 'var(--border)'};background:${cfg.maRelOn ? 'rgba(245,158,11,.15)' : 'var(--card2)'};color:${cfg.maRelOn ? '#f59e0b' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📐 均线关系${cfg.maRelOn ? ' ✓' : ''}</span>${cfg.maRelOn ? `<span id="maRelOpts" class="mt-marel">` +
+  el.innerHTML = html + `<span class="mt-alpha${cfg.alphaSignalOn ? ' on' : ''}" id="alphaChip" title="主图叠加 Alpha(combo) 买卖信号翻转标记 ▲买/▼卖 + 当前仓位角标（PWA Alpha 实验室同源）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.alphaSignalOn ? '#2ecc71' : 'var(--border)'};background:${cfg.alphaSignalOn ? 'rgba(46,204,113,.15)' : 'var(--card2)'};color:${cfg.alphaSignalOn ? '#2ecc71' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">α 信号${cfg.alphaSignalOn ? ' ✓' : ''}</span><span id="sigOverlayChip" title="GOAL13：主图实盘信号层——勾选的策略（Alpha基石实盘/SRSI自动/应用回测参数）的成交信号映射到主图，与真实交易一一对应" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.sigOverlay ? '#22d3ee' : 'var(--border)'};background:${cfg.sigOverlay ? 'rgba(34,211,238,.15)' : 'var(--card2)'};color:${cfg.sigOverlay ? '#22d3ee' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实盘信号${cfg.sigOverlay ? ' ✓' : ''}</span><span id="rmChip" title="规则监测 HUD（v1.5.58）：点击在主图上方展开/收起实时监测仪表盘——11 规则链影子计算/预测危险/带态/统计与参数版本，不影响 K 线取值" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--border)'};background:${cfg.ruleMonitorOpen ? 'rgba(88,166,255,.15)' : 'var(--card2)'};color:${cfg.ruleMonitorOpen ? '#58a6ff' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">实时监测${cfg.ruleMonitorOpen ? ' ✓' : ''}</span><span id="adaptiveChip" title="自适应组合主图叠加（默认开）：volQ 分位带（绿低/灰中/红高）+ w_A 阶梯线 + 组合事件标记；需先在 console 启用 window.__adaptivePortfolio（未启用时零绘制）" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--border)'};background:${cfg.adaptiveOverlay ? 'rgba(167,139,250,.15)' : 'var(--card2)'};color:${cfg.adaptiveOverlay ? '#a78bfa' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">自适应${cfg.adaptiveOverlay ? ' ✓' : ''}</span><span id="liqChip" title="清算热图（成交量代理 OI，默认关，纯显示不接任何交易/资金）：用窗口内成交量按 6 个杠杆档折算清算价堆积成对数价格×时间热力网格；左上/右侧给出当前价上方与下方最近的清算密集区。⚠ 模型估算·未通过交易性验证·仅供参考" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.liqOn ? '#e879f9' : 'var(--border)'};background:${cfg.liqOn ? 'rgba(232,121,249,.15)' : 'var(--card2)'};color:${cfg.liqOn ? '#e879f9' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">🧨 清算热图${cfg.liqOn ? ' ✓' : ''}</span><span id="maRelChip" title="价格-均线关系盯盘辅助层（默认关，纯显示不接自动交易）：本周期 MA20/60(+MA120) · 日线 MA20/50/200 · 周线 MA20/200 · VWAP；右上角 BULL/BEAR/RANGE 状态 + 均线密集/乖离提示；回踩站上(L1)/密集突破(L2)/4H MA20 突破(L3) 信号 + 结构防守位 + 1R/2R 参考线 + 失效叉" style="margin-left:6px;padding:2px 8px;border-radius:10px;border:1px solid ${cfg.maRelOn ? '#f59e0b' : 'var(--border)'};background:${cfg.maRelOn ? 'rgba(245,158,11,.15)' : 'var(--card2)'};color:${cfg.maRelOn ? '#f59e0b' : 'var(--text2)'};font-size:11px;cursor:pointer;user-select:none;white-space:nowrap">📐 均线关系${cfg.maRelOn ? ' ✓' : ''}</span>${cfg.maRelOn ? `<span id="maRelOpts" class="mt-marel">` +
     `<button data-mr="type" title="均线类型（SMA/EMA）">${cfg.maRelType.toUpperCase()}</button>` +
     `<button data-mr="slow" class="${cfg.maRelShowSlow ? 'on' : ''}" title="本周期 MA120">MA120</button>` +
     `<button data-mr="daily" class="${cfg.maRelShowDaily ? 'on' : ''}" title="日线 MA20/50/200">日线</button>` +
@@ -1450,6 +1459,8 @@ function renderMainTools() {
   if (rc) rc.addEventListener('click', () => kToggleRuleMonitor());
   const adc = el.querySelector('#adaptiveChip');
   if (adc) adc.addEventListener('click', () => setAdaptiveOverlay(!cfg.adaptiveOverlay));
+  const lqc = el.querySelector('#liqChip');
+  if (lqc) lqc.addEventListener('click', () => setLiqOn(!cfg.liqOn));
   // v1.6.30：价格-均线关系盯盘辅助层开关 + 参数行
   const mc = el.querySelector('#maRelChip');
   if (mc) mc.addEventListener('click', () => setMaRel(!cfg.maRelOn));
@@ -4675,6 +4686,8 @@ export function renderKChart() {
   try { if (cfg.rbOn) drawMaRibbonBox(ctx); } catch (e) {}
   // v1.6.45：缠论结构层（画在蜡烛之上、标记之下）
   try { if (cfg.chanOn) drawChanlun(ctx); } catch (e) {}
+  // v1.6.51：清算热图信息块（画在蜡烛之上）
+  try { if (cfg.liqOn) drawLiqInfoBlock(ctx); } catch (e) {}
 
   // 子图
   const subList = buildSubList();
@@ -4921,6 +4934,131 @@ function adaptiveEvents(sym) {
     return Array.isArray(evs) ? evs.filter(e => e && e.sym === sym && Number.isFinite(e.ts)) : [];
   } catch (e) { return []; }
 }
+// ============================================================
+// v1.6.51：清算热图（**成交量代理 OI**，纯显示层，默认关；不接任何交易/资金）
+// 数据：S.klines*（OHLCV+t）现成，**零新增网络请求**。模型见 engine/liqHeatmapVol.js 头注释。
+// 红线：不改任何交易逻辑；cfg.liqOn=false 时零计算、零绘制。
+// ============================================================
+let _liqCache = { key: '', res: null };
+let _liqLast = null;
+
+const _VIRIDIS = [[68, 1, 84], [72, 40, 120], [62, 74, 137], [49, 104, 142], [38, 130, 142], [31, 158, 137], [53, 183, 121], [109, 205, 89], [180, 222, 44], [253, 231, 37]];
+function viridisColor(t) {
+  const x = Math.max(0, Math.min(1, isFinite(t) ? t : 0)) * (_VIRIDIS.length - 1);
+  const i = Math.min(_VIRIDIS.length - 2, Math.floor(x)), f = x - i;
+  const a = _VIRIDIS[i], b = _VIRIDIS[i + 1];
+  return [Math.round(a[0] + (b[0] - a[0]) * f), Math.round(a[1] + (b[1] - a[1]) * f), Math.round(a[2] + (b[2] - a[2]) * f)];
+}
+
+// 构建/缓存（键含 sym/tf/窗口起止/根数）——同一根 bar 内多次渲染不重算；关闭时绝不调用
+function liqData(sym, tf, start, end) {
+  if (!cfg.liqOn) return null;
+  const win = Math.max(30, Math.min(1000, Math.round(cfg.liqWin) || 240));
+  const d = getTFData(sym, tf);
+  const n = (d.c && d.c.length) || 0;
+  if (n < 20) return null;
+  const mStart = Math.max(0, end - win);
+  const mEnd = end;
+  const key = [sym, tf, mStart, mEnd, win, cfg.liqAlpha].join('|');
+  if (_liqCache.key === key && _liqCache.res) return _liqCache.res;
+  let res = null;
+  try {
+    const bars = {
+      o: d.o.slice(mStart, mEnd), h: d.h.slice(mStart, mEnd), l: d.l.slice(mStart, mEnd),
+      c: d.c.slice(mStart, mEnd), v: d.v.slice(mStart, mEnd), t: (d.t || []).slice(mStart, mEnd),
+    };
+    res = liqGrid(bars, {});
+    if (res) res.mStart = mStart;
+    // 显示参考量级：非零格的 95 分位（maxV 常被现价附近单格主导 → 线性归一化会让其它带几乎透明）
+    if (res && res.grid) {
+      const nz = [];
+      for (let q = 0; q < res.grid.length; q++) { const v = res.grid[q]; if (v > 0) nz.push(v); }
+      res.refV = nz.length ? (nz.sort((a, b) => a - b)[Math.min(nz.length - 1, Math.floor(nz.length * 0.95))] || res.maxV) : res.maxV;
+    }
+  } catch (e) { res = null; }
+  _liqCache = { key, res };
+  _liqLast = res;
+  return res;
+}
+
+// 主图背景热力网格（**在画蜡烛之前调用**）；0 = 不画（不把背景涂成深紫以免盖住 K 线）
+function drawLiqHeatmap(ctx, g) {
+  if (!cfg.liqOn) return;
+  const res = liqData(cfg.symbol, cfg.mainTF, g.start, g.end);
+  if (!res || !res.cols || !(res.maxV > 0)) return;
+  const bins = res.bins, grid = res.grid, maxV = res.maxV, ratio = res.ratio;
+  const refV = (res.refV > 0 ? res.refV : maxV);   // 95 分位归一化（显示层）
+  const Y = (v) => PAD_T + (g.hi - v) / (g.hi - g.lo) * mainH();
+  const X = (i) => PAD_L + (i - g.start) * g.xStep + g.xStep / 2;
+  const cwD = Math.max(1, g.cw);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(PAD_L, PAD_T, g.plotW, mainH()); ctx.clip();
+  for (let k = 0; k < res.cols; k++) {
+    const i = res.mStart + k;
+    if (i < g.start || i >= g.end) continue;
+    const x = X(i) - cwD / 2;
+    const rowBase = k * bins;
+    let binLo = res.pLo;
+    for (let b = 0; b < bins; b++) {
+      const val = grid[rowBase + b];
+      const binHi = binLo * ratio;
+      if (val > 0) {
+        const frac = Math.min(1, val / refV);
+        const a = cfg.liqAlpha * Math.min(1, Math.pow(frac, 0.55));
+        if (a > 0.02) {
+          const col = viridisColor(frac);
+          ctx.fillStyle = 'rgba(' + col[0] + ',' + col[1] + ',' + col[2] + ',' + a.toFixed(3) + ')';
+          ctx.fillRect(x, Y(binHi), cwD, Math.max(1, Y(binLo) - Y(binHi)));
+        }
+      }
+      binLo = binHi;
+    }
+  }
+  ctx.restore();
+}
+
+// 信息块（画在蜡烛/均线之上；右上角，与 maRel/chan/rb 信息表用同一套 60px 让位逻辑错开）
+function drawLiqInfoBlock(ctx) {
+  if (!cfg.liqOn) return;
+  const res = _liqLast;
+  if (!res || !res.cols || !(res.maxV > 0)) return;
+  const sym = cfg.symbol, tf = cfg.mainTF;
+  let price = null;
+  try {
+    const Sp = window.S; const pp = Sp && Sp.prices && Sp.prices[sym];
+    if (pp && isFinite(pp.last) && pp.last > 0) price = pp.last;
+  } catch (e) { price = null; }
+  if (!(price > 0)) { try { const c = getTFData(sym, tf).c; price = c.length ? c[c.length - 1] : null; } catch (e) { price = null; } }
+  const z = topZones(res, res.cols - 1, price, 2);
+  const rng = (x) => fmt(x.lo) + '–' + fmt(x.hi);
+  const rows = [{ t: '清算热图 · 成交量代理 OI', c: '#e879f9', b: true }];
+  const up0 = z.above[0], dn0 = z.below[0];
+  rows.push(up0
+    ? { t: '上方 ' + rng(up0) + ' · ' + up0.score + '分 · ' + (up0.distPct >= 0 ? '+' : '') + up0.distPct.toFixed(2) + '%', c: '#ff8fa3' }
+    : { t: '上方 无密集区', c: 'rgba(160,175,190,.7)' });
+  rows.push(dn0
+    ? { t: '下方 ' + rng(dn0) + ' · ' + dn0.score + '分 · ' + dn0.distPct.toFixed(2) + '%', c: '#8be9fd' }
+    : { t: '下方 无密集区', c: 'rgba(160,175,190,.7)' });
+  if (z.above[1]) rows.push({ t: '上方次 ' + rng(z.above[1]) + ' · ' + z.above[1].score + '分', c: 'rgba(200,212,224,.82)' });
+  if (z.below[1]) rows.push({ t: '下方次 ' + rng(z.below[1]) + ' · ' + z.below[1].score + '分', c: 'rgba(200,212,224,.82)' });
+  rows.push({ t: '模型估算 · 未通过交易性验证 · 仅供参考', c: '#ffd740' });
+  ctx.save();
+  ctx.font = '9px sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  let wMax = 0; for (const r of rows) wMax = Math.max(wMax, ctx.measureText(r.t).width);
+  const bw = wMax + 14, bh = rows.length * 12 + 8;
+  const off = ((cfg.maRelOn && cfg.maRelShowInfo) ? 60 : 0) + ((cfg.chanOn && cfg.chanShowInfo) ? 60 : 0) + ((cfg.rbOn && cfg.rbShowInfo) ? 60 : 0);
+  const bx = W - PAD_R - bw - 2, by = PAD_T + 2 + off;
+  ctx.fillStyle = 'rgba(16,22,30,.84)';
+  ctx.fillRect(bx, by, bw, bh);
+  ctx.strokeStyle = 'rgba(232,121,249,.35)'; ctx.strokeRect(bx, by, bw, bh);
+  rows.forEach((r, k) => {
+    ctx.font = (r.b ? 'bold ' : '') + '9px sans-serif';
+    ctx.fillStyle = r.c;
+    ctx.fillText(r.t, bx + 7, by + 15 + k * 12);
+  });
+  ctx.restore();
+}
+
 function drawMain(ctx, sym, tf, H) {
   const S = window.S;
   const { o, h, l, c, t } = nativeMain(sym, tf);
@@ -4950,6 +5088,9 @@ function drawMain(ctx, sym, tf, H) {
 
   // 网格
   drawGrid(ctx, PAD_L, PAD_T, plotW, mainH(), 5, (p) => { const v = hi - (p / 100) * (hi - lo); return fmt(v); });
+
+  // v1.6.51：清算热图（背景层，画在蜡烛之前；默认关 → 零绘制/零计算）
+  try { if (cfg.liqOn) drawLiqHeatmap(ctx, { start, end, xStep, cw, plotW, lo, hi }); } catch (e) {}
 
   // 自适应组合叠加（背景层，画在蜡烛之前）：volQ 分位带 + w_A 阶梯线/面积。
   // 绘制顺序决策：先于蜡烛 clip/蜡烛循环 → 蜡烛体/影线完整盖住背景，不重叠蜡烛。
@@ -7312,6 +7453,9 @@ export const kchartApi = {
   srsiOpportunityMarks,
   maRelInfo,
   setMaRel,
+  setLiqOn,
+  liqInfo,
+  __liqGrid,
   __maRelData: () => maRelData(),
   chanInfo,
   setChan,
@@ -7405,6 +7549,7 @@ if (typeof window !== 'undefined') window.kchartApi = kchartApi;
 // GOAL13 红线：onclick 直调必须同时绑 kchartApi + window
 if (typeof window !== 'undefined') window.setAdaptiveOverlay = (on) => setAdaptiveOverlay(on);
 if (typeof window !== 'undefined') window.setToolBoardTfOnly = (on) => setToolBoardTfOnly(on);
+if (typeof window !== 'undefined') window.kchartSetLiqOn = (on) => setLiqOn(on);   // v1.6.51：清算热图开关（HTML onclick 直调，GOAL13 红线双绑）
 
 // ===================== 快捷合约交易（纸面）=====================
 // 方向定死：空=U本位 / 多=币本位；平仓利润的 50% 自动再投到另一资产。
@@ -8463,6 +8608,38 @@ export function setChan(on) {
   // PWA：立即刷新右栏卡片（否则要等下一次 1s tick）；主系统无此钩子则跳过
   try { if (globalThis.pwaShellRefresh) globalThis.pwaShellRefresh(); } catch (e2) {}
 }
+
+// v1.6.51：清算热图开关（成交量代理 OI，纯显示，不接任何交易/资金）
+export function setLiqOn(on) {
+  cfg.liqOn = !!on;
+  _liqCache = { key: '', res: null };
+  if (!cfg.liqOn) _liqLast = null;   // 关闭即清空，确保零绘制/零残留
+  try { persist(); } catch (e) {}
+  _mtSig = '';
+  renderMainTools();
+  renderKChart();
+}
+
+// 供诊断/验证：当前清算热图信息（未开启或未算出则 null）
+export function liqInfo() {
+  const res = _liqLast;
+  if (!res || !res.cols) return null;
+  let price = null;
+  try {
+    const Sp = typeof window !== 'undefined' ? window.S : null;
+    const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
+    if (pp && isFinite(pp.last) && pp.last > 0) price = pp.last;
+  } catch (e) { price = null; }
+  return {
+    sym: cfg.symbol, tf: cfg.mainTF, on: !!cfg.liqOn, win: cfg.liqWin, alpha: cfg.liqAlpha,
+    cols: res.cols, bins: res.bins, pLo: res.pLo, pHi: res.pHi, maxV: res.maxV, mStart: res.mStart,
+    sideRatio: res.sideRatio, decayBars: res.decayBars,
+    zones: topZones(res, res.cols - 1, price, 2),
+  };
+}
+
+// 供诊断/验证：原始网格结果（Float32Array grid）
+export function __liqGrid() { return _liqLast; }
 
 export function setSrsiAutoMode(mode) {
   if (['follow', 'usdt', 'coin'].indexOf(mode) < 0) return;

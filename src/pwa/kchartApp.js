@@ -137,6 +137,7 @@ globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
 globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
 globalThis.kSetSrsiLead = (tf, on) => api.setSrsiLead(tf, on);
 globalThis.kSetChan = (on) => api.setChan(on);   // v1.6.45：缠论结构层开关（纯显示）
+globalThis.kchartSetLiqOn = (on) => api.setLiqOn(on);   // v1.6.51：清算热图开关（成交量代理 OI，纯显示）
 globalThis.startSignalEngine = () => globalThis.__pwaShell && globalThis.__pwaShell.startSignalEngine
   ? globalThis.__pwaShell.startSignalEngine() : null;
 globalThis.kToggleOverview = () => api.toggleOverview();

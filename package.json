@@ -1,6 +1,6 @@
 {
   "name": "smart-trader",
-  "version": "1.6.50",
+  "version": "1.6.51",
   "description": "智能交易系统 v1.0 - 纸面交易引擎（双所行情 + 事件溯源持久化 + 可验证一致性）",
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
     "build": "node scripts/gen-version.mjs && node scripts/gen-icon.mjs && vite build",
     "pwa:icons": "node scripts/gen-icon.mjs",
     "preview": "vite preview",
-    "test": "node tests/disciplineAnalysis.test.mjs && node tests/kchart.test.mjs && node tests/signalCockpit.test.mjs && node tests/signalAlerts.test.mjs && node tests/signalSounds.test.mjs && node tests/pwaAlphaCore.test.mjs && node tests/maRelation.test.mjs && node tests/maRelGauge.test.mjs && node tests/adaptivePortfolio.test.mjs && node tests/adaptivePanel.test.mjs && node tests/consistency.test.mjs && node tests/chanlun.test.mjs && node tests/chanlunDisplay.test.mjs && node tests/maRibbonBox.test.mjs && node tests/toolBoard.test.mjs"
+    "test": "node tests/disciplineAnalysis.test.mjs && node tests/kchart.test.mjs && node tests/signalCockpit.test.mjs && node tests/signalAlerts.test.mjs && node tests/signalSounds.test.mjs && node tests/pwaAlphaCore.test.mjs && node tests/maRelation.test.mjs && node tests/maRelGauge.test.mjs && node tests/adaptivePortfolio.test.mjs && node tests/adaptivePanel.test.mjs && node tests/consistency.test.mjs && node tests/chanlun.test.mjs && node tests/chanlunDisplay.test.mjs && node tests/maRibbonBox.test.mjs && node tests/toolBoard.test.mjs && node tests/liqHeatmapVol.test.mjs"
   },
   "devDependencies": {
     "playwright": "^1.62.1",
