@@ -964,6 +964,7 @@ function readSessionBackup() {
 // smartTrader_kchart（由主系统 index.html 与 PWA 共用），会被同源主系统/另一标签的 persist() 覆盖，
 // 导致刷新/切币后丢失。PWA 模式(_pwaMode)下改存到 PWA 私有键（结构按币对），启动时优先读取，
 // 彻底消除跨实例覆盖。主系统不启用 _pwaMode，行为完全不变。
+const _tsevLogLast = new Map();   // sym → 上次打印的因子表内容（仅变化时打日志，避免刷屏）
 const PWA_SRSI_OPT_KEY = 'pwa_srsi_opt';       // { [sym]: { srsiByTf, srsiOptSource, srsiOptPreview } }
 const PWA_SRSI_AUTO_KEY = 'pwa_srsi_auto';     // { [sym]: { srsiAuto* 全部字段 } }
 const PWA_LAST_SYM_KEY = 'pwa_last_sym';       // 上次真正使用的币对（PWA 启动恢复用）
@@ -1905,9 +1906,11 @@ export function renderTradeDiscipline(hz, capMin) {
             .map(d => `${d.key.replace(/\|/g, '·')} p${d.p} n${d.n} w${d.w > 0 ? '+' : ''}${d.w}`);
           if (learned.length) {
             dbgTxt = `<br><span class="disc-tsev-debug">本机因子明细: ${learned.join(' | ')}</span>`;
-            if (!window.__tsevDbgT || Date.now() - window.__tsevDbgT > 15000) {
-              window.__tsevDbgT = Date.now();
-              console.log('[TSEV因子表]', sym, dbg.filter(d => d.passed).map(d => `${d.key} p=${d.p} n=${d.n} w=${d.w}`).join(' | '));
+            // 日志：仅当**因子表内容变化**（或显式 window.__tsevLog=true）时打一次，不再节流刷屏
+            const line = dbg.filter(d => d.passed).map(d => `${d.key} p=${d.p} n=${d.n} w=${d.w}`).join(' | ');
+            if (line && (globalThis.__tsevLog === true || _tsevLogLast.get(sym) !== line)) {
+              _tsevLogLast.set(sym, line);
+              console.log('[TSEV因子表]', sym, line);
             }
           }
         }

@@ -1040,6 +1040,7 @@ function alertSound(kind, severity) {
   const ctx = ensureAudioCtx();
   if (!ctx) return false;
   const id = resolveSound(kind, severity, readSoundMap());
+  if (id === 'silent') return false;   // 静音是映射表的**正常选择**（预演默认 silent），不是失败 → 不打 warn
   const ok = playSound(ctx, id);
   if (!ok) { try { console.warn('[SOUND] 未播放', kind, id, 'ctx=' + ctx.state); } catch (e) {} }
   return ok;
