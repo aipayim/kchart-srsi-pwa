@@ -2,7 +2,7 @@
 // 覆盖：空/单根/NaN 输入安全；清算价公式（多/空各杠杆）；扫价清除方向（下跌清多头/上涨清空头，清掉的量确实消失）；
 //       指数衰减单调；因果性（同坐标轴下截断输入，前面列逐位不变）；topZones（score∈[0,100]、lo<hi、=桶边界）；
 //       确定性（两次结果逐位相同）；不改输入；sideRatio/levs/colStep；fmtLiqUsd 边界。
-import { LH_DEF, volCohorts, liqGrid, zonesAtCol, topZones, fmtLiqUsd } from '../src/engine/liqHeatmapVol.js';
+import { LH_DEF, volCohorts, liqGrid, zonesAtCol, topZones, fmtLiqUsd, radarModel, fmtLiqRange, clampCardPos } from '../src/engine/liqHeatmapVol.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; console.log('ok:', name); } else { failed++; console.log('FAIL:', name); } }
@@ -81,13 +81,20 @@ const DOW = { h: 125, l: 75, c: 100, v: 1 };   // 宽幅单根，E=(125+75+100)/
     const bL = binOf(res, pL), bS = binOf(res, pS);
     if (!(res.long[bL] > 0)) allLong = false;
     if (!(res.short[bS] > 0)) allShort = false;
-    // 质量 = v · 侧占比(0.5) · w_L（单根、无衰减）
-    if (!near(res.long[bL], 0.5 * LH_DEF.wL[L], 1e-5)) allMass = false;
-    if (!near(res.short[bS], 0.5 * LH_DEF.wL[L], 1e-5)) allMass = false;
+    // 质量 = v(=1) · 典型价 E(=100) · 侧占比(0.5) · w_L（单根、无衰减）
+    // 注意：v 是**基础币成交量**，须 ×典型价换算成 USDT 名义（否则卡片会把 BTC 数量显示成 "$73"）
+    if (!near(res.long[bL], 1 * E * 0.5 * LH_DEF.wL[L], 1e-4)) allMass = false;
+    if (!near(res.short[bS], 1 * E * 0.5 * LH_DEF.wL[L], 1e-4)) allMass = false;
   }
   ok('多头清算价公式命中（各杠杆）', allLong);
   ok('空头清算价公式命中（各杠杆）', allShort);
-  ok('建仓质量 = v·侧占比·w_L（单根）', allMass);
+  ok('建仓质量 = v·典型价·侧占比·w_L（USDT 名义，单根）', allMass);
+  // 显式：mass 必须是 USDT 量级，而不是基础币数量（宽幅 bar 才能让清算档落在价格轴内）
+  {
+    const volBtc = 100, price = 100000;
+    const gg = liqGrid({ h: [price * 1.2], l: [price * 0.8], c: [price], v: [volBtc] }, { sideRatio: 0.5, range: [price * 0.6, price * 1.4] });
+    ok('mass 为 USDT 名义（100 币 @100000 → 量级 ≫ 1e5，不是 100）', gg.maxV > 1e5);
+  }
 
   // 自定义杠杆档
   const r1lev = liqGrid(bars, { levs: [10], sideRatio: 0.5 });
@@ -255,6 +262,82 @@ const DOW = { h: 125, l: 75, c: 100, v: 1 };   // 宽幅单根，E=(125+75+100)/
   ok('fmtLiqUsd(1.2e6) → $1.20M', fmtLiqUsd(1.2e6) === '$1.20M');
   ok('fmtLiqUsd(1.2e9) → $1.20B', fmtLiqUsd(1.2e9) === '$1.20B');
   ok('fmtLiqUsd(-5000) → -$5.0K', fmtLiqUsd(-5000) === '-$5.0K');
+}
+
+// ============ 10) radarModel（清算雷达数据源） ============
+// 手工构造可控网格：bins=10，pLo=100 / pHi=200（ratio=2^(1/10)），单列 col=0
+const RB = 2 ** (1 / 10);
+function mkRes(gridVals, cols = 1, bins = 10, pLo = 100, pHi = 200) {
+  return {
+    cols, bins, pLo, pHi,
+    ratio: Math.exp((Math.log(pHi) - Math.log(pLo)) / bins),
+    grid: Float32Array.from(gridVals),
+    maxV: Math.max(0, ...gridVals),
+  };
+}
+const bucketMid = (b) => Math.sqrt(100 * RB ** b * 100 * RB ** (b + 1));
+{
+  // 档位：b0=5（下方） b2=3（下方） b5=8（上方） b9=2（上方）；price=130
+  const res = mkRes([5, 0, 3, 0, 0, 8, 0, 0, 0, 2]);
+  const r = radarModel(res, 0, 130, { n: 3 });
+  ok('radarModel 返回 price', r.price === 130);
+  ok('radarModel 分组：up 2 条 / down 2 条', r.up.length === 2 && r.down.length === 2);
+  ok('radarModel 按 mass 降序 + rank 1..n', r.up[0].mass === 8 && r.up[0].rank === 1 && r.up[1].rank === 2);
+  ok('radarModel 上方第一条 = b5（质量最大）', near(r.up[0].lo, 100 * RB ** 5) && near(r.up[0].hi, 100 * RB ** 6));
+  ok('radarModel 下方第一条 = b0（质量 5 > 3）', r.down[0].mass === 5 && r.down[0].rank === 1);
+  ok('radarModel nearest 标记 = 组内距离最近（上方 b5 / 下方 b2）', r.up[0].nearest === true && r.up[1].nearest === false && r.down[0].nearest === false && r.down[1].nearest === true);
+  ok('radarModel nearUp = 距离最近（b5）', r.nearUp && r.nearUp.mass === 8);
+  ok('radarModel nearDown = 距离最近（b2，不是 mass 最大的 b0）', r.nearDown && r.nearDown.mass === 3 && near(r.nearDown.lo, 100 * RB ** 2));
+  ok('radarModel distPct 符号：上方为正 / 下方为负', r.up[0].distPct > 0 && r.down[0].distPct < 0);
+  ok('radarModel distPct 数值 = (中点-价)/价*100', near(r.up[0].distPct, (bucketMid(5) - 130) / 130 * 100, 1e-9));
+  ok('radarModel maxMass/totalMass', r.maxMass === 8 && near(r.totalMass, 18, 1e-9));
+  ok('radarModel score ∈ [0,100] 且相对 maxV', r.up[0].score === 100 && r.down[0].score === Math.round(5 / 8 * 100));
+  ok('radarModel score 下限（小质量不为负）', r.down[1].score >= 0 && r.down[1].score <= 100);
+  // n=1 时 near 仍独立于前 n 条
+  const r1 = radarModel(res, 0, 130, { n: 1 });
+  ok('radarModel n=1 → up/down 各 1 条', r1.up.length === 1 && r1.down.length === 1);
+  ok('radarModel n=1 时 nearDown 仍为距离最近的 b2', r1.nearDown && r1.nearDown.mass === 3);
+  ok('radarModel 默认 n=3', radarModel(res, 0, 130).up.length === 2);   // 仅 2 个上方档位
+  // 空 / 越界 / 非法价
+  const e0 = radarModel(null, 0, 130);
+  ok('radarModel(null) → 空结构', e0.up.length === 0 && e0.down.length === 0 && e0.nearUp === null && e0.nearDown === null && e0.maxMass === 0 && e0.totalMass === 0);
+  const e1 = radarModel(res, 5, 130);
+  ok('radarModel col 越界 → 空结构', e1.up.length === 0 && e1.down.length === 0 && e1.nearUp === null);
+  const e2 = radarModel(res, -1, 130);
+  ok('radarModel col=-1 → 空结构', e2.up.length === 0 && e2.nearUp === null);
+  const e3 = radarModel(res, 0, 0);
+  ok('radarModel price=0 → 空结构', e3.up.length === 0 && e3.nearUp === null);
+  const e4 = radarModel(res, 0, NaN);
+  ok('radarModel price=NaN → 空结构', e4.up.length === 0 && e4.nearDown === null);
+  const e5 = radarModel(res, 0, 130);
+  ok('radarModel 不抛异常且不改输入', e5.up.length === 2 && res.grid[5] === 8);
+}
+
+// ============ 11) fmtLiqRange ============
+{
+  ok('fmtLiqRange 千分位', fmtLiqRange(84786, 85002) === '84,786 – 85,002');
+  ok('fmtLiqRange 四舍五入', fmtLiqRange(84786.4, 85002.6) === '84,786 – 85,003');
+  ok('fmtLiqRange lo>hi 自动交换', fmtLiqRange(85002, 84786) === '84,786 – 85,002');
+  ok('fmtLiqRange 小数值', fmtLiqRange(0.5, 1.4) === '1 – 1');
+  ok('fmtLiqRange 非法 NaN → --', fmtLiqRange(NaN, 100) === '--');
+  ok('fmtLiqRange 非法 null → --', fmtLiqRange(null, undefined) === '--');
+  ok('fmtLiqRange 负值千分位', fmtLiqRange(-1234, -9876) === '-9,876 – -1,234');
+}
+
+// ============ 12) clampCardPos（拖拽钳位纯函数） ============
+{
+  const p = clampCardPos(100, 60, 180, 120, 800, 600);
+  ok('clampCardPos 正常位置原样返回', p.x === 100 && p.y === 60);
+  const l = clampCardPos(-50, -30, 180, 120, 800, 600);
+  ok('clampCardPos 左上越界 → 贴 4px', l.x === 4 && l.y === 4);
+  const rb = clampCardPos(9999, 9999, 180, 120, 800, 600);
+  ok('clampCardPos 右下越界 → 贴容器内边距', rb.x === 800 - 180 - 4 && rb.y === 600 - 120 - 4);
+  const small = clampCardPos(50, 50, 900, 700, 800, 600);
+  ok('clampCardPos 容器小于卡片 → 贴左上', small.x === 4 && small.y === 4);
+  const bad = clampCardPos(NaN, 1, 10, 10, 100, 100);
+  ok('clampCardPos 非法输入 → {4,4}', bad.x === 4 && bad.y === 4);
+  const bad2 = clampCardPos('a', 1, 10, 10, 100, 100);
+  ok('clampCardPos 非数字 → {4,4}', bad2.x === 4 && bad2.y === 4);
 }
 
 console.log(`\n=== liqHeatmapVol.test: ${passed} passed, ${failed} failed ===`);

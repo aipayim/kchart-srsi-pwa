@@ -578,6 +578,39 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
   .kchart-acard{font-size:8.5px;padding:5px 7px;max-width:min(260px,68%)}
   .kchart-acard .kac-big{font-size:13px}
 }
+/* v1.6.52：清算雷达 DOM 卡片（图内可拖拽 + 可折叠；按 CoinAnk 参考图重排：分组 + #序号 + 价格区间 + 大字强度分 + 绝对量 + 距离） */
+.liqcard{position:absolute;z-index:6;user-select:none;-webkit-user-select:none;touch-action:none;
+  background:rgba(14,19,27,.9);border:1px solid rgba(232,121,249,.45);border-radius:6px;
+  font:9.5px/1.35 sans-serif;color:rgba(200,212,224,.92);width:246px;backdrop-filter:blur(2px)}
+.liqcard.dragging{opacity:.9}
+.liqcard .liqcard-h{display:flex;align-items:center;gap:6px;padding:4px 7px;cursor:grab;
+  border-bottom:1px solid rgba(136,153,170,.22);background:rgba(232,121,249,.08);border-radius:6px 6px 0 0}
+.liqcard.dragging .liqcard-h{cursor:grabbing}
+.liqcard .liqcard-title{font-weight:700;color:#f0abfc}
+.liqcard .liqcard-badge{color:rgba(160,175,190,.85);font-size:8px}
+.liqcard .liqcard-tog{margin-left:auto;cursor:pointer;padding:0 4px;color:rgba(200,212,224,.9);
+  border:1px solid rgba(136,153,170,.35);border-radius:3px;line-height:12px}
+.liqcard .liqcard-tog:hover{color:#fff;border-color:rgba(232,121,249,.7)}
+.liqcard .liqcard-b{padding:5px 7px 6px}
+.liqcard .liqcard-sec{display:flex;align-items:center;gap:4px;margin-top:4px;color:rgba(180,195,210,.9);font-weight:700}
+.liqcard .liqcard-sec:first-child{margin-top:0}
+.liqcard .liqcard-dot{width:6px;height:6px;border-radius:50%;display:inline-block;flex:0 0 auto}
+.liqcard .liqcard-row{padding:2px 0 3px 8px;border-left:1px solid rgba(136,153,170,.18)}
+.liqcard .liqcard-r1{display:flex;gap:6px;align-items:baseline;white-space:nowrap}
+.liqcard .liqcard-rk{color:rgba(160,175,190,.8);flex:0 0 auto}
+.liqcard .liqcard-rg{color:rgba(230,238,245,.95);flex:1 1 auto}
+.liqcard .liqcard-r2{display:flex;align-items:baseline;gap:3px;white-space:nowrap}
+.liqcard .liqcard-lbl{color:rgba(160,175,190,.75)}
+.liqcard .liqcard-sc{font-size:14px;font-weight:700;line-height:1.1}
+.liqcard .liqcard-ms{color:rgba(200,212,224,.9);margin-left:auto;flex:0 0 auto}
+.liqcard .liqcard-empty{color:rgba(160,175,190,.7);padding-left:8px}
+.liqcard .liqcard-near{margin-top:5px;padding-top:4px;border-top:1px solid rgba(136,153,170,.22);color:rgba(230,238,245,.92);white-space:nowrap}
+.liqcard .liqcard-dist{white-space:nowrap;flex:0 0 auto;margin-left:4px}
+.liqcard .liqcard-note{margin-top:3px;color:#ffd740;font-size:8px}
+@media (max-width:900px){
+  .liqcard{width:216px;font-size:9px}
+  .liqcard .liqcard-sc{font-size:12px}
+}
 #kchartCanvas{display:block;border-radius:4px;cursor:crosshair;width:100%;height:auto;touch-action:none}
 .kchart-subtog{display:flex;align-items:center;gap:4px}
 .kchart-tog{display:flex;align-items:center;gap:3px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;padding:2px 6px;border:1px solid var(--border);border-radius:4px}

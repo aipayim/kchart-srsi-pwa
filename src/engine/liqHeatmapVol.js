@@ -171,7 +171,7 @@ function _engine(bars, opts, wantGrid) {
     if (isNum(hh) && isNum(ll) && isNum(cc)) {
       const E = (hh + ll + cc) / 3;
       const vol = isNum(v[i]) ? v[i] : 0;
-      addCohort(E, vol);
+      addCohort(E, vol * E);   // 基础币成交量 × 典型价 → USDT 名义（否则卡片会把 BTC 数量显示成 "$73"）
     }
     if (i % O.colStep === 0 || i === n - 1) snapshot(i);
   }
@@ -249,6 +249,79 @@ export function topZones(res, col, price, n) {
   below.sort((a, b) => b.mass - a.mass);
   const k = (isNum(n) && n > 0) ? Math.floor(n) : 2;
   return { above: above.slice(0, k), below: below.slice(0, k) };
+}
+
+// ============================================================
+// v1.6.52：清算雷达（DOM 卡片数据源）——把某列区间按「当前价上方 / 下方」分组，
+//   各取质量最大的前 n 条，并额外给出「距离最近」的上/下方档位（= 用户最关心的「临近价位的量」）。
+// 返回 { price, up:[{rank,lo,hi,mass,score,distPct,nearest}], down:[...],
+//        nearUp:{lo,hi,mass,score,distPct}|null, nearDown:{...}|null, maxMass, totalMass }
+//   · distPct = (区间中心价 − price)/price×100（上方为正、下方为负）
+//   · nearest：该组内距离最小的那条（标记，可能不在前 n 条内）
+//   · maxMass/totalMass：整列所有区间的最大质量 / 质量总和
+// 空输入 / col 越界 / price<=0 → 返回空结构（不抛异常）。
+// ============================================================
+function _nearestOf(arr) {
+  if (!arr || !arr.length) return null;
+  let best = null, bd = Infinity;
+  for (let i = 0; i < arr.length; i++) {
+    const d = Math.abs(arr[i].distPct);
+    if (isNum(d) && d < bd) { bd = d; best = arr[i]; }
+  }
+  return best;
+}
+
+export function radarModel(gridRes, col, price, opts) {
+  const empty = { up: [], down: [], nearUp: null, nearDown: null, maxMass: 0, totalMass: 0 };
+  if (!gridRes || !gridRes.grid || !(gridRes.cols > 0) || !(gridRes.bins > 0)) return empty;
+  if (!isNum(col) || col < 0 || col >= gridRes.cols) return empty;
+  if (!isNum(price) || !(price > 0)) return empty;
+  const n = (opts && isNum(opts.n) && opts.n > 0) ? Math.floor(opts.n) : 3;
+  const zones = zonesAtCol(gridRes, col);
+  if (!zones.length) return { price, up: [], down: [], nearUp: null, nearDown: null, maxMass: 0, totalMass: 0 };
+  let maxMass = 0, totalMass = 0;
+  const up = [], down = [];
+  for (let i = 0; i < zones.length; i++) {
+    const z = zones[i];
+    const mid = Math.sqrt(z.lo * z.hi);
+    const distPct = (mid - price) / price * 100;
+    if (z.mass > maxMass) maxMass = z.mass;
+    totalMass += z.mass;
+    (mid >= price ? up : down).push({ lo: z.lo, hi: z.hi, mass: z.mass, score: z.score, distPct });
+  }
+  up.sort((a, b) => b.mass - a.mass);
+  down.sort((a, b) => b.mass - a.mass);
+  const nearU = _nearestOf(up), nearD = _nearestOf(down);
+  const pack = (it, rank) => ({
+    rank, lo: it.lo, hi: it.hi, mass: it.mass, score: it.score, distPct: it.distPct,
+    nearest: it === nearU || it === nearD,
+  });
+  const clean = (it) => it ? { lo: it.lo, hi: it.hi, mass: it.mass, score: it.score, distPct: it.distPct } : null;
+  return {
+    price,
+    up: up.slice(0, n).map((it, k) => pack(it, k + 1)),
+    down: down.slice(0, n).map((it, k) => pack(it, k + 1)),
+    nearUp: clean(nearU),
+    nearDown: clean(nearD),
+    maxMass, totalMass,
+  };
+}
+
+// 价格区间人类可读：'84,786 – 85,002'（千分位、四舍五入、lo>hi 自动交换；非法 → '--'）
+export function fmtLiqRange(lo, hi) {
+  if (!isNum(lo) || !isNum(hi)) return '--';
+  let a = lo, b = hi;
+  if (a > b) { const t = a; a = b; b = t; }
+  const f = (x) => String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return f(a) + ' – ' + f(b);
+}
+
+// 浮层位置钳制（纯函数，可单测）：留 4px 边距，容器小于卡片时贴左上。
+// 与 kchart.js 的 clampBoxPos 同语义（那边已改为委托本函数，避免逻辑分叉）。
+export function clampCardPos(x, y, w, h, bw, bh) {
+  if (![x, y, w, h, bw, bh].every((v) => typeof v === 'number' && isFinite(v))) return { x: 4, y: 4 };
+  const cx = bw - w - 4, cy = bh - h - 4;
+  return { x: Math.max(4, Math.min(cx < 4 ? 4 : cx, x)), y: Math.max(4, Math.min(cy < 4 ? 4 : cy, y)) };
 }
 
 // 人类可读名义量：$1.2M / $340K / $12.3K / $999 / $0.00；非法 → '--'

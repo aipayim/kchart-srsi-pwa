@@ -16,7 +16,7 @@ import { buildChanlun } from '../engine/chanlun.js';
 import { chanlunWindowItems, chanlunReadout, chanDelayInfo, chanProjectLive, CHAN_LAYERS, chanCfgKey, CHAN_DISCLAIMER, CHAN_MULTI_NOTE } from '../engine/chanlunDisplay.js';
 import { renderChanlunInto } from './chanlunPanel.js';
 import { buildMaRibbonBox, maRibbonBoxReadout, RB_MA_PRESETS, RB_DISCLAIMER, RB_NO_TRADE } from '../engine/maRibbonBox.js';
-import { liqGrid, topZones } from '../engine/liqHeatmapVol.js';
+import { liqGrid, topZones, radarModel, fmtLiqRange, fmtLiqUsd, clampCardPos } from '../engine/liqHeatmapVol.js';
 import { renderMaRibbonBoxInto } from './maRibbonBoxPanel.js';
 import { adaptiveLeverage, medianOf, protectiveStopPrice, updateAtrMedian } from '../engine/adaptiveRisk.js';
 import { getFeeRate } from '../engine/fees.js';
@@ -702,7 +702,9 @@ export function defaultKConfig() {
     // v1.6.51：清算热图（成交量代理 OI，默认关；纯显示层，不接任何交易/资金）
     liqOn: false,              // 总开关（主图工具面板药丸）
     liqWin: 240,               // 建模窗口根数（含可见窗口之前的历史）
-    liqAlpha: 0.55,            // 热力网格最大不透明度
+    liqAlpha: 0.65,            // 热力网格最大不透明度（v1.6.52：0.55→0.65，可见性提升）
+    liqCardPos: null,          // v1.6.52：清算雷达卡片位置（相对 .kchart-box px；null=默认右上角）
+    liqCardOpen: true,         // v1.6.52：清算雷达卡片展开/折叠
     srsi,
     srsiByTf: buildSrsiByTf(),   // 每周期独立 SRSI 参数（默认全沿用 DEFAULT_SRSI）
     srsiAux: {},                 // 辅助周期标记：勾选即「只做放行闸门」(gate 角色)，不进共识；normalizeCfg 会对空配置默认注入 15m 为闸门
@@ -891,7 +893,9 @@ function normalizeCfg(c) {
   // ---- 清算热图（成交量代理 OI；默认关，总开关关时零计算/零绘制）----
   if (typeof c.liqOn !== 'boolean') c.liqOn = false;
   if (typeof c.liqWin !== 'number' || !(c.liqWin >= 60 && c.liqWin <= 1000)) c.liqWin = 240;
-  if (typeof c.liqAlpha !== 'number' || !(c.liqAlpha >= 0.1 && c.liqAlpha <= 1)) c.liqAlpha = 0.55;
+  if (typeof c.liqAlpha !== 'number' || !(c.liqAlpha >= 0.1 && c.liqAlpha <= 1)) c.liqAlpha = 0.65;
+  if (c.liqCardPos !== null && (typeof c.liqCardPos !== 'object' || typeof c.liqCardPos.x !== 'number' || typeof c.liqCardPos.y !== 'number' || !isFinite(c.liqCardPos.x) || !isFinite(c.liqCardPos.y))) c.liqCardPos = null;
+  if (typeof c.liqCardOpen !== 'boolean') c.liqCardOpen = true;
   if (typeof c.alphaLiveOn !== 'boolean') c.alphaLiveOn = false; // GOAL17：Alpha 基石实盘勾选持久
   if (typeof c.ktSafe !== 'boolean') c.ktSafe = false; // GOAL17：防误触持久
   if (typeof c.ktUseFixed !== 'boolean') c.ktUseFixed = false; // GOAL17：固定数额持久
@@ -4686,8 +4690,8 @@ export function renderKChart() {
   try { if (cfg.rbOn) drawMaRibbonBox(ctx); } catch (e) {}
   // v1.6.45：缠论结构层（画在蜡烛之上、标记之下）
   try { if (cfg.chanOn) drawChanlun(ctx); } catch (e) {}
-  // v1.6.51：清算热图信息块（画在蜡烛之上）
-  try { if (cfg.liqOn) drawLiqInfoBlock(ctx); } catch (e) {}
+  // v1.6.52：清算热图右侧色标（画在最上层）+ 信息块回退（DOM 卡片存在时不画 canvas 版）
+  try { if (cfg.liqOn) { if (!(_liqEl && _liqEl.isConnected)) drawLiqInfoBlock(ctx); drawLiqLegend(ctx); } } catch (e) {}
 
   // 子图
   const subList = buildSubList();
@@ -4744,6 +4748,8 @@ export function renderKChart() {
 export function refreshPanels() {
   // v1.6.23：行动卡浮层每秒重定位（首帧布局未就绪时会跳过，靠这里收敛；也随窗口尺寸变化自动修正）
   try { if (_acEl && _acEl.isConnected && _cv && _cv.parentElement) _placeActionCard(_acEl, _cv.parentElement); } catch (e) {}
+  // v1.6.52：清算雷达卡片每秒重绘/重定位（签名守卫；价格变化时更新距离/临近量）
+  try { if (cfg.liqOn) renderLiqCardDom(); } catch (e) {}
   const box = document.getElementById('kchartDisc');
   const ov = document.getElementById('kchartOverview');
   if (!box && !ov) return;
@@ -4941,6 +4947,8 @@ function adaptiveEvents(sym) {
 // ============================================================
 let _liqCache = { key: '', res: null };
 let _liqLast = null;
+let _liqEl = null;          // v1.6.52：清算雷达 DOM 卡片
+let _liqDragging = false;   // 拖动中：禁止每秒重定位
 
 const _VIRIDIS = [[68, 1, 84], [72, 40, 120], [62, 74, 137], [49, 104, 142], [38, 130, 142], [31, 158, 137], [53, 183, 121], [109, 205, 89], [180, 222, 44], [253, 231, 37]];
 function viridisColor(t) {
@@ -5056,6 +5064,197 @@ function drawLiqInfoBlock(ctx) {
     ctx.fillStyle = r.c;
     ctx.fillText(r.t, bx + 7, by + 15 + k * 12);
   });
+  ctx.restore();
+}
+
+// ============================================================
+// v1.6.52：清算雷达 DOM 卡片（替代 canvas 文本块 —— 可拖拽/可折叠，按 CoinAnk 参考图重排）
+//   数据源：radarModel（上方/下方各前 3 档：价格区间 + 强度分 + 绝对量 + 距离）+ 临近档位一行
+//   红线：cfg.liqOn=false → 不建卡/零计算；内容用签名（HTML 串）守卫，不每秒重建 DOM
+// ============================================================
+function liqRadarData() {
+  if (!cfg.liqOn) return null;
+  const res = _liqLast;
+  if (!res || !res.cols || !(res.maxV > 0)) return null;
+  let price = null;
+  try {
+    const Sp = typeof window !== 'undefined' ? window.S : null;
+    const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
+    if (pp && isFinite(pp.last) && pp.last > 0) price = pp.last;
+  } catch (e) { price = null; }
+  if (!(price > 0)) { try { const c = getTFData(cfg.symbol, cfg.mainTF).c; price = c.length ? c[c.length - 1] : null; } catch (e) { price = null; } }
+  if (!(price > 0)) return null;
+  const n = Math.max(1, Math.min(5, Math.round(cfg.liqZoneN) || 2));
+  return { price, radar: radarModel(res, res.cols - 1, price, { n }) };
+}
+
+// 清算雷达卡片 HTML（纯函数，可单测；model = liqRadarData() 的返回值）
+export function liqCardHtml(model, open) {
+  const isOpen = open !== false;
+  const head = '<div class="liqcard-h">'
+    + '<span class="liqcard-title">清算雷达</span>'
+    + '<span class="liqcard-badge">成交量代理 OI</span>'
+    + '<span class="liqcard-tog" title="折叠 / 展开">' + (isOpen ? '–' : '＋') + '</span>'
+    + '</div>';
+  const r = model && model.radar;
+  let body;
+  if (!r) {
+    body = '<div class="liqcard-b"><div class="liqcard-empty">（窗口内无档位）</div>'
+      + '<div class="liqcard-note">模型估算 · 未通过交易性验证 · 仅供参考</div></div>';
+  } else {
+    const distTxt = (d) => ((d >= 0 ? '+' : '') + d.toFixed(2) + '%');
+    const row = (it, cls) => {
+      const scCol = it.score >= 70 ? '#f97316' : (it.score >= 40 ? '#f59e0b' : '#8899aa');
+      const dCol = cls === 'up' ? '#ef4444' : '#22c55e';
+      return '<div class="liqcard-row">'
+        + '<div class="liqcard-r1"><span class="liqcard-rk">#' + it.rank + '</span><span class="liqcard-rg">' + fmtLiqRange(it.lo, it.hi) + '</span></div>'
+        + '<div class="liqcard-r2"><span class="liqcard-lbl">强度</span><span class="liqcard-sc" style="color:' + scCol + '">' + it.score + '</span><span class="liqcard-ms">' + fmtLiqUsd(it.mass) + '</span><span class="liqcard-dist" style="color:' + dCol + '">' + distTxt(it.distPct) + '</span></div>'
+        + '</div>';
+    };
+    const sec = (title, cls, arr) => '<div class="liqcard-sec"><span class="liqcard-dot" style="background:' + (cls === 'up' ? '#ef4444' : '#22c55e') + '"></span>' + title + '</div>'
+      + (arr.length ? arr.map((it) => row(it, cls)).join('') : '<div class="liqcard-empty">（无）</div>');
+    const near = (t, z) => z ? (t + ' ' + fmtLiqUsd(z.mass) + ' (' + distTxt(z.distPct) + ')') : (t + ' 无');
+    body = '<div class="liqcard-b">'
+      + sec('上方清算区域', 'up', r.up)
+      + sec('下方清算区域', 'down', r.down)
+      + '<div class="liqcard-near">临近：' + near('上方', r.nearUp) + ' · ' + near('下方', r.nearDown) + '</div>'
+      + '<div class="liqcard-note">模型估算 · 未通过交易性验证 · 仅供参考</div>'
+      + '</div>';
+  }
+  return head + (isOpen ? body : '');
+}
+
+// 默认位置：右上角；若与行动卡矩形重叠则下移让开
+function _liqCardDefaultPos(box, w, h) {
+  let x = Math.max(4, box.clientWidth - w - 12);
+  let y = 12;
+  const ac = _acEl;
+  if (ac && ac.isConnected && ac.style.display !== 'none') {
+    const al = ac.offsetLeft, at = ac.offsetTop, ar = al + ac.offsetWidth, ab = at + ac.offsetHeight;
+    if (!(x + w <= al || x >= ar || y + h <= at || y >= ab)) y = ab + 8;
+  }
+  return { x, y };
+}
+
+function _placeLiqCard(el, box) {
+  if (!el || !box) return;
+  if (_liqDragging) return;
+  const bw = box.clientWidth, bh = box.clientHeight;
+  if (!bw || !bh || bw < el.offsetWidth + 8 || bh < el.offsetHeight + 8) return;
+  const def = _liqCardDefaultPos(box, el.offsetWidth, el.offsetHeight);
+  const pos = cfg.liqCardPos && typeof cfg.liqCardPos.x === 'number' && typeof cfg.liqCardPos.y === 'number'
+    ? { x: cfg.liqCardPos.x, y: cfg.liqCardPos.y } : def;
+  const p = clampCardPos(pos.x, pos.y, el.offsetWidth, el.offsetHeight, bw, bh);
+  el.style.left = p.x + 'px';
+  el.style.top = p.y + 'px';
+}
+
+function bindLiqCardDrag(el, box) {
+  let drag = null;
+  el.addEventListener('pointerdown', (e) => {
+    const t = e.target;
+    if (!t || !t.closest) return;
+    if (!t.closest('.liqcard-h')) return;              // 仅标题栏可拖
+    if (t.closest('.liqcard-tog')) return;             // 折叠按钮不触发拖动
+    drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+    _liqDragging = true;
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    el.classList.add('dragging');
+    try { e.preventDefault(); } catch (err) {}
+  });
+  el.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const p = clampCardPos(e.clientX - drag.dx, e.clientY - drag.dy, el.offsetWidth, el.offsetHeight, box.clientWidth, box.clientHeight);
+    el.style.left = p.x + 'px';
+    el.style.top = p.y + 'px';
+  });
+  const end = (e) => {
+    if (!drag) return;
+    drag = null; _liqDragging = false;
+    el.classList.remove('dragging');
+    try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+    cfg.liqCardPos = { x: el.offsetLeft, y: el.offsetTop };
+    try { persist(); } catch (err) {}
+  };
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointercancel', end);
+  el.addEventListener('dblclick', (e) => {
+    const t = e.target;
+    if (t && t.closest && t.closest('.liqcard-tog')) return;
+    cfg.liqCardPos = null; try { persist(); } catch (err) {} _placeLiqCard(el, box);
+  });
+  el.addEventListener('click', (e) => {
+    const t = e.target;
+    if (!t || !t.closest || !t.closest('.liqcard-tog')) return;
+    cfg.liqCardOpen = !(cfg.liqCardOpen !== false);
+    try { persist(); } catch (err) {}
+    renderLiqCardDom();
+  });
+}
+
+function renderLiqCardDom() {
+  if (typeof document === 'undefined' || !_cv) return;
+  const box = _cv.parentElement;
+  if (!box || typeof box.appendChild !== 'function') return;
+  if (!cfg.liqOn) { if (_liqEl) _liqEl.style.display = 'none'; return; }
+  if (!_liqEl || !_liqEl.isConnected) {
+    let el = document.getElementById('kchartLiqCard');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'kchartLiqCard';
+      el.className = 'liqcard';
+      el.title = '拖动标题栏可移动 · 双击复位 · 点 –/＋ 折叠';
+      box.appendChild(el);
+      bindLiqCardDrag(el, box);
+    } else if (!el.classList || !el.classList.contains('liqcard')) {
+      el.className = 'liqcard';
+    }
+    _liqEl = el;
+  }
+  const el = _liqEl;
+  // 内容签名 = 渲染后的 HTML 串（只随显示值变化重建，不随浮点数微抖动每秒重建）
+  const html = liqCardHtml(liqRadarData(), cfg.liqCardOpen);
+  if (!_liqDragging && el.__sig !== html) { el.__sig = html; el.innerHTML = html; }
+  el.style.display = '';
+  _placeLiqCard(el, box);
+}
+
+// v1.6.52：右侧竖向色标（viridis，底 0 → 顶 refV=非零格 95 分位）——画在最上层，尽量不挡 K 线
+function drawLiqLegend(ctx) {
+  const res = _liqLast;
+  if (!res || !(res.maxV > 0)) return;
+  const refV = (res.refV > 0 ? res.refV : res.maxV);
+  const x = W - PAD_R + 2, w = 7;
+  const yT = PAD_T, yB = PAD_T + mainH();
+  const g = ctx.createLinearGradient(0, yB, 0, yT);
+  for (let k = 0; k <= 10; k++) {
+    const c = viridisColor(k / 10);
+    g.addColorStop(k / 10, 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.85)');
+  }
+  ctx.save();
+  ctx.fillStyle = g;
+  ctx.fillRect(x, yT, w, yB - yT);
+  ctx.strokeStyle = 'rgba(200,212,224,.35)'; ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, yT + 0.5, w - 1, yB - yT - 1);
+  ctx.font = '9px sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'right';
+  const label = (txt, y) => {
+    const tw = ctx.measureText(txt).width;
+    ctx.fillStyle = 'rgba(14,19,27,.8)';
+    ctx.fillRect(x - tw - 6, y - 6, tw + 5, 12);
+    ctx.fillStyle = 'rgba(220,230,240,.95)';
+    ctx.fillText(txt, x - 2, y);
+  };
+  label(fmtLiqUsd(refV), yT + 6);
+  label('0', yB - 6);
+  ctx.save();
+  ctx.translate(x + w / 2 - 3, (yT + yB) / 2);
+  ctx.rotate(-Math.PI / 2);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(200,212,224,.7)';
+  ctx.fillText('名义量(USDT)', 0, 0);
+  ctx.restore();
   ctx.restore();
 }
 
@@ -5342,6 +5541,7 @@ function drawMain(ctx, sym, tf, H) {
   // v1.6.23：行动卡改为 DOM 浮层（可拖动、双击复位）——先在 canvas 回退绘制前建层，建层成功则不重复画 canvas 版。
   // 理由（v1.5.58 教训）：悬浮控件必须在 DOM 顶层，不得参与 canvas 坐标命中（真机 tap 不可靠）。
   try { renderActionCardDom(); } catch (e) {}
+  try { renderLiqCardDom(); } catch (e) {}   // v1.6.52：清算雷达 DOM 卡片（跟随行动卡之后定位，便于重叠让位）
   if (cfg.sigOverlay && window.__actionCard && !(_acEl && _acEl.isConnected)) {
     const ac = window.__actionCard;
     const _v = actionCardView((typeof sym !== 'undefined' ? sym : cfg.sym), ac);
@@ -7308,9 +7508,7 @@ export function actionCardHtml(v) {
 // 浮层位置钳制（纯函数，可单测）：留 4px 边距，容器小于卡片时贴左上
 // （与 ruleMonitor 的 hudClampPos 同语义；不直接复用以免 kchart↔ruleMonitor 静态循环依赖）
 export function clampBoxPos(x, y, w, h, bw, bh) {
-  if (![x, y, w, h, bw, bh].every(v => typeof v === 'number' && isFinite(v))) return { x: 4, y: 4 };
-  const cx = bw - w - 4, cy = bh - h - 4;
-  return { x: Math.max(4, Math.min(cx < 4 ? 4 : cx, x)), y: Math.max(4, Math.min(cy < 4 ? 4 : cy, y)) };
+  return clampCardPos(x, y, w, h, bw, bh);
 }
 
 // 某个子图在 frac 处的读数 (纯数据)
@@ -7455,6 +7653,7 @@ export const kchartApi = {
   setMaRel,
   setLiqOn,
   liqInfo,
+  liqCardHtml,
   __liqGrid,
   __maRelData: () => maRelData(),
   chanInfo,
@@ -8613,7 +8812,7 @@ export function setChan(on) {
 export function setLiqOn(on) {
   cfg.liqOn = !!on;
   _liqCache = { key: '', res: null };
-  if (!cfg.liqOn) _liqLast = null;   // 关闭即清空，确保零绘制/零残留
+  if (!cfg.liqOn) { _liqLast = null; if (_liqEl) _liqEl.style.display = 'none'; }   // 关闭即清空，确保零绘制/零残留
   try { persist(); } catch (e) {}
   _mtSig = '';
   renderMainTools();
@@ -8630,11 +8829,18 @@ export function liqInfo() {
     const pp = Sp && Sp.prices && Sp.prices[cfg.symbol];
     if (pp && isFinite(pp.last) && pp.last > 0) price = pp.last;
   } catch (e) { price = null; }
+  if (!(price > 0)) { try { const c = getTFData(cfg.symbol, cfg.mainTF).c; price = c.length ? c[c.length - 1] : null; } catch (e) { price = null; } }
   return {
     sym: cfg.symbol, tf: cfg.mainTF, on: !!cfg.liqOn, win: cfg.liqWin, alpha: cfg.liqAlpha,
     cols: res.cols, bins: res.bins, pLo: res.pLo, pHi: res.pHi, maxV: res.maxV, mStart: res.mStart,
     sideRatio: res.sideRatio, decayBars: res.decayBars,
     zones: topZones(res, res.cols - 1, price, 2),
+    radar: radarModel(res, res.cols - 1, price, { n: Math.max(1, Math.min(5, Math.round(cfg.liqZoneN) || 2)) }),
+    card: {
+      x: (cfg.liqCardPos && typeof cfg.liqCardPos.x === 'number') ? cfg.liqCardPos.x : null,
+      y: (cfg.liqCardPos && typeof cfg.liqCardPos.y === 'number') ? cfg.liqCardPos.y : null,
+      open: cfg.liqCardOpen !== false,
+    },
   };
 }
 
