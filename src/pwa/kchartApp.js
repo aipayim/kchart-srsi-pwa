@@ -13,6 +13,7 @@ import { installAdaptivePortfolio } from './adaptivePortfolio.js';
 globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
+import { jevSchedulerTick, tickJevMature } from './jevClient.js';
 
 // 开发模式下自动注销残留 Service Worker（dev SW 缓存会导致浏览器长期跑旧代码，Ctrl+Shift+R 不清 SW 缓存）。
 // 生产构建不执行，不影响已安装 PWA。
@@ -590,6 +591,10 @@ function initPwaTrade() {
     try { if (globalThis.__adaptivePortfolio && globalThis.__adaptivePortfolio.isEnabled()) globalThis.__adaptivePortfolio.tick(); } catch (e) {}
     // 自动优选引擎：定时 + 无成交双触发重优选（防参数过期）
     if (api && api.maybeAutoOpt) api.maybeAutoOpt();
+    // 摘要：Jev 自动调度（按设置频率节流；手动模式不自动）+ 到期回填（节流 5min）。
+    // 二者内部只做轻量判断，默认未启用时立即 return。
+    try { jevSchedulerTick(); } catch (e) {}
+    try { tickJevMature(); } catch (e) {}
     // PWA 外壳（KPI / 信号驾驶舱 / 事件流）每秒刷新
     try { refreshShell(); } catch (e) {}
   }, 1000);

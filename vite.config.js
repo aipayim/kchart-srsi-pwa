@@ -43,7 +43,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/llm-proxy': {
-        target: 'http://127.0.0.1:3457',
+        target: 'http://127.0.0.1:3460/v1',   // Jev/LLM 本地网关（原 3457 已过期；/v1 由代理补齐）
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/llm-proxy/, '')
       },

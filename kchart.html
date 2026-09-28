@@ -187,6 +187,12 @@
                   <div class="pwa-dim mono" id="pwaWMeta" style="font-size:9.5px;margin-top:4px">组合 · 等待信号</div>
                 </div>
               </div>
+              <div class="pwa-card" data-acc="jev" id="pwaJevCard">
+                <div class="pwa-card-h pwa-acc-h" title="Jev（LLM）多空判断 + 本地 TSEV 学习：只做显示与本机学习，不接交易。需在「设置 → Jev 判断」填 base_url + Token（Token 只存本机加密库）">
+                  <span class="ttl">🧠 Jev 判断</span><span class="pwa-spacer"></span>
+                  <span class="pwa-pill" id="pwaJevPill">—</span><span class="pwa-caret">▾</span></div>
+                <div class="pwa-card-b"><div id="pwaJev"></div></div>
+              </div>
               <div class="pwa-card" data-acc="toolboard" id="pwaToolBoardCard" style="display:none">
                 <div class="pwa-card-h pwa-acc-h" title="工具一览：只列当前已开启的盯盘工具，各工具结论原样引用、互不融合（工具类信号历史命中≈随机，不做综合评分/方向）"><span class="ttl">🧰 工具一览</span><span class="pwa-spacer"></span>
                   <button class="pwa-mini" id="pwaToolBoardTf" title="只看与主图周期一致的工具">周期</button><span class="pwa-caret">▾</span></div>
@@ -330,6 +336,10 @@
           <div class="kchart-settings closed" id="kchartSrsiCardWrap">
             <div class="kchart-ovhead" onclick="document.getElementById('kchartSrsiCardWrap').classList.toggle('closed')">⚙ SRSI 各币对各周期参数（本地持久化）<span class="kchart-ovarrow">▾</span></div>
             <div id="kchartSrsiCard" class="kchart-settings-body"></div>
+          </div>
+          <div class="kchart-settings closed" id="pwaJevSetCard">
+            <div class="kchart-ovhead" onclick="document.getElementById('pwaJevSetCard').classList.toggle('closed')">🧠 Jev 判断（LLM 多空判断 + 本地 TSEV 学习）<span class="kchart-ovarrow">▾</span></div>
+            <div id="pwaJevSetBody" class="kchart-settings-body"></div>
           </div>
           <div class="kchart-settings" id="pwaStorageCard">
             <div class="kchart-ovhead" onclick="document.getElementById('pwaStorageCard').classList.toggle('closed')">🧰 本地存储自检 / 修复（安卓不保存设置时看这里）<span class="kchart-ovarrow">▾</span></div>

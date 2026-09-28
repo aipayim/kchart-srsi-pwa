@@ -424,6 +424,33 @@ export function getWeights() {
   return total ? { perSym: _localWeights, n: _localN } : null;
 }
 
+/**
+ * 外部样本注入（Jev 判断当因子）：与 addRow 同格式（按周分桶），供到期回填后调用。
+ * 因子键 = `<sym>|jev|<horizon>|<side>` → 训练后权重名 `jev|<horizon>|<side>`。
+ * 只写「按周分桶统计」而非原始样本，写入量极小（数 KB），遵守 §5.30 配额红线。
+ *
+ * 关掉 Jev 后：本函数不再被调用，但**已写入的 _stats 与训练出的权重仍在 IndexedDB/内存中保留**
+ * （train() 会继续把 jev|* 一起训练进去），故「本机学到的 Jev 可信度」不会因关 Jev 而丢失。
+ */
+export function recordJevSample(sym, tsMs, horizon, side, hit) {
+  if (!sym || !horizon) return false;
+  const s = Number(side);
+  if (s !== 1 && s !== -1) return false;
+  if (!/^(short|mid|long)$/.test(String(horizon))) return false;
+  const ts = (typeof tsMs === 'number' && tsMs > 0) ? tsMs : Date.now();
+  const wk = Math.floor(ts / (7 * 86400000));
+  const k = sym + '|jev|' + horizon + '|' + s;
+  const a = _stats[k] || (_stats[k] = { buckets: {} });
+  const b = a.buckets[wk] || (a.buckets[wk] = { n: 0, h: 0 });
+  b.n++;
+  b.h += hit ? 1 : 0;
+  _sampleCount++;
+  _status.sampleCount = _sampleCount;
+  try { persistSamples(); } catch (e) { /* 持久化失败不阻断（内存已更新） */ }
+  try { train(); if (_onTrained) _onTrained(_localWeights); } catch (e) { /* 训练失败保留旧权重 */ }
+  return true;
+}
+
 export function onTrained(cb) { _onTrained = cb; }
 
 export function setSymbolProvider(fn) { if (typeof fn === 'function') _getSym = fn; }
@@ -483,6 +510,6 @@ export function register() {
   globalThis.__localTsev = {
     getWeights, status, getStats, setEnabled, start, stop, onTrained, onProgress,
     backfillAll, kick, collectSymbol, forwardAccuracy, debugTsev, exportSamples, importSamples,
-    setSymbolProvider, setSymbolListProvider
+    setSymbolProvider, setSymbolListProvider, recordJevSample
   };
 }

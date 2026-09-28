@@ -35,14 +35,21 @@ public/pwa-512.png
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath}.js
+src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath,liqHeatmapVol,jevState}.js
+src/ai/llmClient.js
+src/auth/apiKeyStore.js
+src/persistence/indexdb.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs}
+src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css,jevClient.js}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel,jevPanel}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```
+
+> **例外（主系统目录中脱敏后入库的 3 个文件）**：`src/ai/llmClient.js`（零 import 的 LLM 客户端纯函数）、
+> `src/auth/apiKeyStore.js`（AES-GCM + IndexedDB 密钥库）、`src/persistence/indexdb.js`（零 import 的 IDB 封装，
+> `apiKeyStore` 的唯一依赖）—— 三者均为 Jev 功能所需，**不含任何密钥**，仅供 PWA 端加密保存用户自填 Token。
 
 > 这些文件就是 PWA 运行 / 构建 / 测试所需的全部依赖闭环。新增文件必须属于此白名单，否则不要入库。
 
@@ -50,7 +57,7 @@ public/tsev-weights.json
 
 ## 3. 排除项（绝不入库 / 已脱敏）
 
-- 主系统 UI 与交易核心：`index.html`、`src/legacy.js`、`src/main.js`、`src/ai/`、`src/tech/`、`src/auth/`、`src/tech2/fusionBacktest.js`
+- 主系统 UI 与交易核心：`index.html`、`src/legacy.js`、`src/main.js`、`src/tech/`、`src/ai/`（**例外见 §2**：仅 `llmClient.js` 入库）、`src/auth/`（**例外见 §2**：仅 `apiKeyStore.js` 入库）、`src/tech2/fusionBacktest.js`
 - 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/gen-tsev-weights.mjs`、`scripts/rehearse-tsev.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`
 - 主系统测试（覆盖主系统模块）：`tests/engine|persist|reconcile|ai|regime|disciplineAnalysis.test.mjs`
 - 内部文档：`AGENTS.md`、`PLAN.md`、`CHANGELOG.md`、`index.legacy.html.bak`、`docs/`（含真实 Cloudflare 区域/账户 ID）

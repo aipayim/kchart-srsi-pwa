@@ -747,3 +747,62 @@ body.pwa.kfs #kfsBar .pwa-kfs-hint{white-space:nowrap;overflow:hidden;text-overf
 .tb-c-flat{color:#f59e0b}
 .tb-conflicts{margin-top:5px;font-size:10px;color:#f59e0b;line-height:1.5}
 .tb-note{margin-top:6px;font-size:9px;color:var(--text2);opacity:.8;line-height:1.5}
+
+/* ==================== Jev（LLM 多空判断 + 本地 TSEV 学习）==================== */
+body.pwa .jev-head{display:flex;flex-wrap:wrap;gap:5px;align-items:center;margin-bottom:5px}
+body.pwa .jev-pill{font-size:9px;font-weight:800;padding:2px 6px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.04);white-space:nowrap}
+body.pwa .jev-pill.ok{color:var(--green);border-color:rgba(46,204,113,.45)}
+body.pwa .jev-pill.warn{color:#f59e0b;border-color:rgba(245,158,11,.45)}
+body.pwa .jev-pill.mute{color:var(--text2)}
+body.pwa .jev-dim{font-size:9.5px;color:var(--text2)}
+body.pwa .jev-rel{font-size:10.5px;color:var(--text2);margin:3px 0 2px;line-height:1.5}
+body.pwa .jev-rel .up{color:var(--green)}
+body.pwa .jev-rel .down{color:var(--red)}
+body.pwa .jev-driver{font-size:10.5px;margin:2px 0 5px;color:var(--text)}
+body.pwa .jev-sliders{display:flex;flex-direction:column;gap:4px;margin:5px 0 7px}
+body.pwa .jev-slider{display:grid;grid-template-columns:22px 1fr auto 14px;gap:6px;align-items:center}
+body.pwa .jev-sld-name{font-size:10px;color:var(--text2);font-weight:700}
+body.pwa .jev-sld-track{position:relative;height:9px;border-radius:5px;background:linear-gradient(90deg,rgba(255,82,82,.14),rgba(255,255,255,.06) 50%,rgba(46,204,113,.14));border:1px solid var(--border);overflow:hidden}
+body.pwa .jev-sld-zero{position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,.28)}
+body.pwa .jev-sld-fill{position:absolute;top:1px;bottom:1px;border-radius:3px;transition:left .35s ease,width .35s ease}
+body.pwa .jev-sld-fill.long{background:linear-gradient(90deg,rgba(46,204,113,.55),var(--green))}
+body.pwa .jev-sld-fill.short{background:linear-gradient(270deg,rgba(255,82,82,.55),var(--red))}
+body.pwa .jev-sld-fill.flat{background:#f59e0b}
+body.pwa .jev-sld-tick{position:absolute;top:-2px;bottom:-2px;width:2px;border-radius:1px;background:#e6f1ff;opacity:.85}
+body.pwa .jev-sld-val{font-size:9.5px;font-family:var(--mono);white-space:nowrap}
+body.pwa .jev-sld-val.long{color:var(--green)}
+body.pwa .jev-sld-val.short{color:var(--red)}
+body.pwa .jev-sld-val.flat{color:#f59e0b}
+body.pwa .jev-sld-src{font-size:9px;color:var(--text2);text-align:center}
+body.pwa .jev-row{border-top:1px dashed var(--border);padding:5px 0 4px}
+body.pwa .jev-row.stale{opacity:.55}
+body.pwa .jev-row-h{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+body.pwa .jev-hname{font-size:10.5px;font-weight:800}
+body.pwa .jev-dir{font-size:11px;font-weight:900;font-family:var(--mono)}
+body.pwa .jev-dir.long{color:var(--green)}
+body.pwa .jev-dir.short{color:var(--red)}
+body.pwa .jev-dir.flat{color:#f59e0b}
+body.pwa .jev-conf{font-size:9.5px;color:var(--text2)}
+body.pwa .jev-tag{font-size:9px;font-weight:800;padding:1px 5px;border-radius:7px;border:1px solid var(--border)}
+body.pwa .jev-tag.ok{color:var(--green);border-color:rgba(46,204,113,.45)}
+body.pwa .jev-tag.bad{color:var(--red);border-color:rgba(255,82,82,.45)}
+body.pwa .jev-tag.mute{color:var(--text2)}
+body.pwa .jev-row-b{font-size:9.5px;color:var(--text2);line-height:1.55;margin-top:2px}
+body.pwa .jev-tsev{font-family:var(--mono)}
+body.pwa .jev-foot{font-size:9.5px;color:var(--text2);margin-top:6px;border-top:1px solid var(--border);padding-top:5px}
+body.pwa .jev-foot2{font-size:9px;color:#6B7688;margin-top:3px}
+body.pwa .jev-err{font-size:10px;color:#ff8a8a;margin-top:4px;line-height:1.45}
+body.pwa .jev-hint{font-size:10px;color:#f59e0b;margin-top:4px;line-height:1.45}
+body.pwa .jev-pill-long{color:var(--green);border-color:rgba(46,204,113,.45)}
+body.pwa .jev-pill-short{color:var(--red);border-color:rgba(255,82,82,.45)}
+body.pwa .jev-pill-flat{color:#f59e0b;border-color:rgba(245,158,11,.45)}
+/* 设置卡 */
+body.pwa .jev-chks{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 4px}
+body.pwa .jev-chk{font-size:10.5px;color:var(--text);display:flex;gap:4px;align-items:center}
+body.pwa .jev-chk input{accent-color:var(--accent)}
+body.pwa .jev-inline{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--text2)}
+body.pwa .jev-inline input{background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:3px 5px;font-family:var(--mono);font-size:11px}
+body.pwa .jev-setmsg{font-size:10px;color:var(--text2);flex:1;min-width:90px;line-height:1.4}
+body.pwa .jev-adv{margin-top:6px;font-size:10.5px;color:var(--text2)}
+body.pwa .jev-adv summary{cursor:pointer;color:var(--accent)}
+body.pwa .jev-adv textarea{width:100%;min-height:90px;margin-top:5px;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:6px;font-family:var(--mono);font-size:10px;line-height:1.45;resize:vertical}

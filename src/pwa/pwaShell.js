@@ -20,6 +20,11 @@ import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, 
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
 import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
+import { buildJevModel, renderJevHtml, renderJevSetHtml } from '../tech2/jevPanel.js';
+import {
+  readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken,
+  testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange
+} from './jevClient.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
 
@@ -1281,6 +1286,181 @@ function bindToolBoard() {
   });
 }
 
+// ============ Jev（LLM 多空判断 + 本地 TSEV 学习）============
+// 红线：只显示 + 学习，不接交易；Token 只进 IndexedDB；写失败不静默吞（jevClient._safeSet 记录）
+const _jevCache = { sym: null, decisions: [], stats: null, hasToken: false, at: 0, loading: false };
+
+function jevSym() {
+  const api = globalThis.kchartApi;
+  const cfg = api && api.getConfig ? api.getConfig() : null;
+  return (cfg && cfg.symbol) || (globalThis.S && globalThis.S.sel) || null;
+}
+
+async function refreshJevData(force) {
+  const sym = jevSym();
+  const now = Date.now();
+  if (!force && _jevCache.sym === sym && now - _jevCache.at < 15000) return;
+  if (_jevCache.loading) return;
+  _jevCache.loading = true;
+  try {
+    const list = await listDecisions(60);
+    const stats = jevStats(list, sym);
+    let tok = false;
+    try { tok = await hasJevToken(); } catch (e) { tok = false; }
+    _jevCache.sym = sym; _jevCache.decisions = list; _jevCache.stats = stats;
+    _jevCache.hasToken = tok; _jevCache.at = Date.now();
+  } catch (e) {
+    _jevCache.at = Date.now();
+  }
+  _jevCache.loading = false;
+  renderJev();
+}
+
+function renderJev() {
+  const card = $('pwaJevCard');
+  const box = $('pwaJev');
+  if (!card || !box) return;
+  const cfg = readJevCfg();
+  const sym = jevSym();
+  if (!sym) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  const latest = (_jevCache.sym === sym ? _jevCache.decisions : []).find(r => r.sym === sym) || null;
+  const stats = (_jevCache.sym === sym ? _jevCache.stats : null) || jevStats([], sym);
+  const st = jevStatus();
+  let freqMs = 3600000;
+  try { const m = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }; freqMs = m[cfg.freq] || 0; } catch (e) {}
+  const model = buildJevModel({
+    sym, cfg, latest, decisions: _jevCache.decisions, stats, status: st,
+    hasToken: _jevCache.hasToken, freqMs, now: Date.now()
+  });
+  const html = renderJevHtml(model);
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+  const pill = $('pwaJevPill');
+  if (pill) {
+    const anyDir = model.rows.some(r => r.strength != null && Math.abs(r.strength) >= 15);
+    if (!cfg.enabled) { pill.textContent = '○ 未启用'; pill.className = 'pwa-pill'; }
+    else if (!_jevCache.hasToken) { pill.textContent = '⚠ 缺 Token'; pill.className = 'pwa-pill'; }
+    else if (anyDir) {
+      const d = model.rows.filter(r => r.strength != null)[0];
+      const tone = d.strength >= 15 ? 'long' : d.strength <= -15 ? 'short' : 'flat';
+      pill.textContent = d.label;
+      pill.className = 'pwa-pill jev-pill-' + tone;
+    } else { pill.textContent = '—'; pill.className = 'pwa-pill'; }
+    pill.title = 'Jev 多空判断（短/中/长）· 需自行填写 base_url + Token；只做显示与本地学习';
+  }
+}
+
+function renderJevSettings() {
+  const box = $('pwaJevSetBody');
+  if (!box || box.__built) { if (box) updateJevSetValues(); return; }
+  box.__built = true;
+  box.innerHTML = renderJevSetHtml(readJevCfg(), { hasToken: _jevCache.hasToken });
+  updateJevSetValues();
+  bindJevSettings();
+  hasJevToken().then(v => {
+    _jevCache.hasToken = v;
+    const inp = $('jevToken'); if (inp) inp.placeholder = v ? '已保存（留空=不修改）' : '未填写';
+  });
+}
+
+function updateJevSetValues() {
+  const c = readJevCfg();
+  const set = (id, v) => { const el = $(id); if (el && el.value !== String(v)) el.value = String(v); };
+  set('jevEnabled', c.enabled ? '1' : '0');
+  set('jevBase', c.baseUrl || '');
+  set('jevModel', c.model || '');
+  set('jevFreq', c.freq || '1h');
+  set('jevMode', c.mode || 'off');
+  set('jevIn', c.price && c.price.inPer1M || 0);
+  set('jevOut', c.price && c.price.outPer1M || 0);
+  const tpl = $('jevTpl'); if (tpl) tpl.value = c.template || '';
+}
+
+function jevSetMsg(msg, ok) {
+  const el = $('jevTestMsg');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok === false ? '#ff8a8a' : ok === true ? '#2ecc71' : '#8899aa';
+}
+
+function bindJevSettings() {
+  const box = $('pwaJevSetBody');
+  if (!box || box.__bound) return;
+  box.__bound = true;
+  const on = (sel, ev, fn) => {
+    const el = $(sel);
+    if (el) el.addEventListener(ev, fn);
+  };
+  on('jevEnabled', 'change', (e) => { patchJevCfg({ enabled: e.target.value === '1' }); renderJev(); });
+  on('jevBase', 'change', (e) => patchJevCfg({ baseUrl: e.target.value.trim() }));
+  on('jevModel', 'change', (e) => patchJevCfg({ model: e.target.value.trim() || 'jev-latest' }));
+  on('jevFreq', 'change', (e) => patchJevCfg({ freq: e.target.value }));
+  on('jevMode', 'change', (e) => { patchJevCfg({ mode: e.target.value }); renderJev(); });
+  on('jevIn', 'change', (e) => { const c = readJevCfg(); patchJevCfg({ price: Object.assign({}, c.price, { inPer1M: parseFloat(e.target.value) || 0 }) }); });
+  on('jevOut', 'change', (e) => { const c = readJevCfg(); patchJevCfg({ price: Object.assign({}, c.price, { outPer1M: parseFloat(e.target.value) || 0 }) }); });
+  on('jevTpl', 'change', (e) => patchJevCfg({ template: e.target.value }));
+  // 勾选档 / 周期分组（事件委托）
+  box.addEventListener('change', (e) => {
+    const t = e.target;
+    if (!t) return;
+    if (t.getAttribute && t.getAttribute('data-hz')) {
+      const c = readJevCfg();
+      const hz = Object.assign({}, c.horizons);
+      hz[t.getAttribute('data-hz')] = !!t.checked;
+      patchJevCfg({ horizons: hz });
+      renderJev();
+    } else if (t.getAttribute && t.getAttribute('data-grp')) {
+      const c = readJevCfg();
+      const id = t.getAttribute('data-grp');
+      const arr = String(t.value || '').split(/[,，\s]+/).map(s => s.trim()).filter(Boolean);
+      const groups = Object.assign({}, c.groups);
+      if (arr.length) groups[id] = arr;
+      patchJevCfg({ groups });
+    }
+  });
+  on('jevTokenSave', 'click', async () => {
+    const inp = $('jevToken');
+    const v = inp ? inp.value.trim() : '';
+    if (!v) { jevSetMsg('Token 为空（未修改）', null); return; }
+    try {
+      await setJevToken(v);
+      if (inp) inp.value = '';
+      _jevCache.hasToken = true;
+      jevSetMsg('Token 已加密保存到本机（IndexedDB）', true);
+      renderJev();
+    } catch (e) { jevSetMsg('保存失败：' + String((e && e.message) || e), false); }
+  });
+  on('jevTokenClear', 'click', async () => {
+    try { await setJevToken(''); _jevCache.hasToken = false; jevSetMsg('Token 已清除', true); renderJev(); }
+    catch (e) { jevSetMsg('清除失败：' + String((e && e.message) || e), false); }
+  });
+  on('jevTest', 'click', async () => {
+    jevSetMsg('测试中…', null);
+    const r = await testJevConnection();
+    if (r.ok) {
+      const p = r.parsed || {};
+      const parts = (p.horizons ? Object.keys(p.horizons) : []).map(h => h + ':' + (p.horizons[h].label || '?'));
+      jevSetMsg('✓ 连接成功 ' + r.ms + 'ms · ' + (r.model || '') + (parts.length ? ' · ' + parts.join(' ') : ''), true);
+    } else {
+      const probe = (r.probe && r.probe.results || []).map(x => x.label + '=' + (x.ok ? '200' : (x.status || 'ERR'))).join(' · ');
+      jevSetMsg('✗ ' + (r.err || '失败') + (probe ? ' ｜ 形状探测：' + probe : ''), false);
+    }
+  });
+  on('jevProbe', 'click', async () => {
+    jevSetMsg('探测中…', null);
+    const p = await probeJevShapes();
+    const txt = (p.results || []).map(x => x.label + '=' + (x.ok ? '200✓' : (x.status || 'ERR'))).join(' · ');
+    jevSetMsg(p.ok ? ('✓ 接受的形状：' + p.winner + ' ｜ ' + txt) : ('✗ 无候选形状被接受 ｜ ' + (txt || p.err || '')), !!p.ok);
+  });
+  on('jevRunNow', 'click', async () => {
+    jevSetMsg('调用中…（约 1-5s）', null);
+    const r = await runJevOnce({ force: true });
+    await refreshJevData(true);
+    renderJevSettings();
+    jevSetMsg(r.ok ? '✓ 已完成（见下方面板）' : ('✗ ' + (r.err || '失败')), !!r.ok);
+  });
+}
+
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
@@ -1454,6 +1634,8 @@ export function refreshShell() {
   renderChan();
   renderRb();
   renderToolBoard(snap);
+  renderJev();
+  try { refreshJevData(); } catch (e) {}
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
   // 主图工具栏「自适应」药丸关闭时，整卡隐藏（与「均线关系」「缠论」一致）
   const _adpCard = $('pwaAdaptiveCard');
@@ -1485,6 +1667,9 @@ export function initPwaShell() {
   bindCockpitAcc();
   bindEngine();
   bindToolBoard();
+  renderJevSettings();
+  try { onJevChange(() => { refreshJevData(true); }); } catch (e) {}
+  try { refreshJevData(true); } catch (e) {}
   applyPhoneDefaults();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}
