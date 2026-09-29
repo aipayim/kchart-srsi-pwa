@@ -646,6 +646,11 @@ export function jevStats(decisions, sym) {
           out.progress[h][sd === 1 ? 'long' : 'short'] = { n: x.n || 0, p: x.p != null ? x.p : null, w: x.w != null ? x.w : null, passed: !!x.passed };
         }
       }
+      // 本机 TSEV 整体规模（**经典因子族**的历史样本，与 Jev 因子族分开计）——避免用户把两者混为一谈
+      try {
+        const stt = local.status ? local.status() : null;
+        if (stt) out.local = { sampleCount: stt.sampleCount || 0, factorCount: stt.factorCount || 0, backfilling: !!stt.backfilling };
+      } catch (e) { /* 忽略 */ }
       out.weightsSource = 'local';
       out.minSample = 50;
     }

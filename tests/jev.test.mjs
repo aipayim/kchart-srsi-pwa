@@ -357,7 +357,8 @@ async function fetchTests2() {
   globalThis.__localTsev = {
     // localLoop.getWeights() 真实形状：{ perSym:{[sym]:{...}}, n }（不接受参数）
     getWeights: () => ({ perSym: { BTCUSDT: { 'jev|short|1': 1.099, 'jev|short|-1': -1.099 } }, n: 120 }),
-    debugTsev: (sym) => (sym === 'BTCUSDT' ? [{ key: 'jev|short|1', n: 55, p: 0.75 }, { key: 'jev|short|-1', n: 55, p: 0.25 }] : [])
+    debugTsev: (sym) => (sym === 'BTCUSDT' ? [{ key: 'jev|short|1', n: 55, p: 0.75 }, { key: 'jev|short|-1', n: 55, p: 0.25 }] : []),
+    status: () => ({ sampleCount: 12029, factorCount: 4, backfilling: false })
   };
   try {
     const st = jevStats([{ sym: 'BTCUSDT', matured: false, dirs: {}, outcomes: {} }], 'BTCUSDT');
@@ -367,6 +368,7 @@ async function fetchTests2() {
     ok('jevStats 解析样本进度（n/命中率）供面板显示', st.progress.short.long.n === 55 && near(st.progress.short.long.p, 0.75) && st.progress.short.short.n === 55);
     ok('jevStats 未提供的档 progress 为 null', st.progress.mid.long === null && st.progress.long.short === null);
     ok('jevStats minSample=50（与 TSEV 门槛一致）', st.minSample === 50);
+    ok('jevStats 取本机 TSEV 总规模（经典因子族 12029/4 个）', st.local && st.local.sampleCount === 12029 && st.local.factorCount === 4);
     ok('jevStats weightsSource=local', st.weightsSource === 'local');
     const stNoSym = jevStats([{ sym: 'X', matured: false, dirs: {}, outcomes: {} }], 'X');
     ok('jevStats 其它币无权重 → null', stNoSym.learned.short.long === null);
@@ -497,6 +499,16 @@ async function schedTest() {
   ok('设置卡含新闻源输入（带 {url} 说明）', s.indexOf('id="jevNews"') > 0 && s.indexOf('{url}') > 0);
   ok('设置卡说明 localhost 仅本机可用', s.indexOf('localhost 只指访问者自己') > 0);
   ok('设置卡未保存 Token 时提示未填写', renderJevSetHtml({ horizons: {}, groups: {}, price: {}, spend: {} }, { hasToken: false }).indexOf('未填写 Token') > 0);
+
+  // 因子族说明（回答用户「为什么纪律分析有上万样本、Jev 却是 0/50」）
+  const hFam = renderJevHtml(buildJevModel({
+    sym: 'BNBUSDT', cfg: { enabled: true, mode: 'learn' }, hasToken: true,
+    stats: { byHorizon: {}, learned: {}, local: { sampleCount: 12029, factorCount: 4 }, minSample: 50, n: 0, pending: 0 },
+    now: Date.now(), freqMs: 3600000
+  }));
+  ok('面板说明本机 TSEV 经典因子样本数', hFam.indexOf('12029') > 0 && hFam.indexOf('经典纪律因子') > 0);
+  ok('面板明确 Jev 因子另计且无法回补历史', hFam.indexOf('Jev 因子另计') > 0 && hFam.indexOf('无法回补历史') > 0);
+  ok('无本机 loop 数据时不显示规模数字', renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} } })).indexOf('经典纪律因子') < 0);
 
   // 三态开关的可见差异 + 样本进度（回答「怎样才能生效」）
   const mk = (mode) => buildJevModel({

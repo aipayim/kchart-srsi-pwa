@@ -820,3 +820,5 @@ body.pwa .jev-hc.pending{opacity:.75}
 body.pwa .jev-hc.expired,body.pwa .jev-hc.flat{color:#8899aa}
 body.pwa [data-acc="jev"] .sig-alerts{max-height:min(46vh,420px)}
 body.pwa .jev-hist-note{font-size:9px;color:#6B7688;margin:0 0 4px;line-height:1.5}
+body.pwa .jev-fam{font-size:9.5px;color:#9db2c8;margin:0 0 4px;line-height:1.5;padding:3px 5px;border-radius:5px;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.18)}
+body.pwa .jev-fam b{color:var(--accent)}

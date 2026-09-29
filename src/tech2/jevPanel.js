@@ -128,6 +128,7 @@ export function buildJevModel(inp) {
     total: stats.n || 0,
     history: it.history || null,
     minSample: stats.minSample || 50,
+    local: stats.local || null,
     inPer1M: pIn,
     outPer1M: pOut,
     fill: it.fill || null,
@@ -320,6 +321,12 @@ export function renderJevHtml(m) {
   const fill = m.fill
     ? '<div class="jev-fill">数据：' + m.fill.text + '</div>'
     : '<div class="jev-fill jev-dim">数据：盘口/新闻未采集（点「立即判断一次」会一并拉取；拉不到即为未知，不影响 Jev 判断）</div>';
+  // 因子族说明：本机 TSEV 里「经典纪律因子」的历史样本与「Jev 因子」是**分开计**的
+  const loc = m.local || null;
+  const fam = loc && (loc.sampleCount || loc.factorCount)
+    ? '<div class="jev-fam">本机 TSEV 共 <b>' + loc.sampleCount + '</b> 条样本 / 已学 <b>' + loc.factorCount + '</b> 个<b>经典纪律因子</b>' +
+      '（首开时用近 4 年历史 walk-forward 回补所得）· <b>Jev 因子另计</b>（Jev 无法回补历史，只能前向累积）</div>'
+    : (loc ? '<div class="jev-fam jev-dim">本机 TSEV 尚未回补（或本机 loop 未开启）→ 设置页可查看本机 loop 状态</div>' : '');
 
   const driver = m.driver ? '<div class="jev-driver">主要驱动：<b>' + m.driver + '</b>' + (JEV_DRIVERS[m.driver] ? '（' + JEV_DRIVERS[m.driver] + '）' : '') + '</div>' : '';
 
@@ -336,7 +343,7 @@ export function renderJevHtml(m) {
   '<div class="jev-foot2">' + JEV_DISCLAIMER + '</div>';
 
   const hist = m.history ? renderJevHistoryHtml(m.history) : '';
-  return head + rel + fill + driver + sliders + rows + hist + foot;
+  return head + rel + fill + fam + driver + sliders + rows + hist + foot;
 }
 
 /** 设置卡 HTML（纯函数） */
