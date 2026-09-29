@@ -364,6 +364,16 @@ async function fetchTests2() {
     const histNoe = buildJevHistory([{ ts: 1, sym: 'BTCUSDT', driver: '技术面', dirs: { short: { strength: -40, label: '偏空', conf: 0.5 } }, outcomes: { short: { win: 0, side: -1, reason: 'no-entry' } }, matured: true }], 'BTCUSDT', { limit: 5 });
     ok('历史行：no-entry → ⚠ 无法判定（不是 ⏳ 待回填 / ○ 未触发）', histNoe.rows[0].horizons[0].status === 'noentry');
     ok('历史汇总：无法判定单独计数且不重复计入未触发', histNoe.summary.noEntry === 1 && histNoe.summary.expired === 0);
+  // v1.6.66：汇总口径 = 全部记录（不只显示的 limit 条）
+  ok('⭐ 汇总覆盖全部记录（超出显示 limit 的已判定也计入）', (() => {
+    const mk2 = (h, win) => ({ ts: 1000 + h, sym: 'BTCUSDT', driver: '技术面', dirs: { short: { strength: -40, label: '偏空', conf: 0.8 } }, outcomes: win != null ? { short: { win, pnlPct: 1 } } : null, matured: win != null });
+    const list = [mk2(0, 1)];                       // 最旧：已判定（会落在显示窗口之外）
+    for (let i = 1; i <= 12; i++) list.push(mk2(i, null));
+    const hh = buildJevHistory(list, 'BTCUSDT', { limit: 10 });
+    return hh.rows.length === 10 && hh.summary.decided === 1 && hh.summary.win === 1 && hh.summary.calls === 13;
+  })());
+  ok('汇总文案写明「全部 N 条判断」（口径不含糊）', /全部 \d+ 条判断：已判定/.test(renderJevHistoryHtml(histNoe)));
+  ok('标题注明下方汇总为全部记录', /下方汇总为全部记录/.test(renderJevHistoryHtml(histNoe)));
     ok('历史 HTML 含「无法判定」文案', renderJevHistoryHtml(histNoe).indexOf('无法判定') > 0);
     ok('no-entry 档不算「待回填」（不再计入 pendingTotal）', histNoe.pendingTotal === 0 && histNoe.nextMs === null);
     const st = jevStats(decisions, 'BTCUSDT');

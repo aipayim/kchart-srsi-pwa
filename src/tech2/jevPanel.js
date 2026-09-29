@@ -250,9 +250,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
       else if (nextMs == null || due < nextMs) nextMs = due;
     }
   }
-  const rows = all
-    .slice(0, limit)
-    .map(r => {
+  // 行构造抽成函数：显示（limit 条）与汇总（全部）共用，避免两套逻辑漂移
+  const histRowOf = (r) => {
       const oc = r.outcomes || {};
       const horizons = JEV_HORIZONS.map(h => {
         const d = (r.dirs || {})[h.id];
@@ -286,10 +285,13 @@ export function buildJevHistory(decisions, sym, opts = {}) {
         // 行状态（供「所有明细」筛选）：有任一档已判定 → decided，否则 pending
         st: horizons.some(h => h.status === 'win' || h.status === 'loss' || h.status === 'noentry') ? 'decided' : 'pending'
       };
-    });
+  };
+  const allRows = all.map(histRowOf);
+  const rows = allRows.slice(0, limit);
   // 汇总（按档计）
-  const sum = { win: 0, loss: 0, pending: 0, expired: 0, noEntry: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: rows.length };
-  for (const r of rows) {
+  // ⚠ 汇总按**全部**记录计（不只显示的 limit 条）——与 pendingTotal 同口径（v1.6.66 修正混用）
+  const sum = { win: 0, loss: 0, pending: 0, expired: 0, noEntry: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: all.length };
+  for (const r of allRows) {
     for (const h of r.horizons) {
       const sk = h.status === 'noentry' ? 'noEntry' : h.status;   // noentry→noEntry（键名大小写）
       sum[sk] = (sum[sk] || 0) + 1;
@@ -319,10 +321,11 @@ export function renderJevHistoryHtml(hist) {
   const pendTxt = (hist.pendingTotal
     ? ' · 待回填 ' + hist.pendingTotal + ' 档' + (hist.nextMs ? '（最近一批预计 ' + fmtTime(hist.nextMs) + ' 出结果）' : '')
     : '');
-  const sumTxt = '已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
+  // 明确「汇总口径 = 全部记录」（条=一次调用 / 档=短中长），避免与上方「最近 N 笔」混读
+  const sumTxt = '全部 ' + (s.calls || 0) + ' 条判断：已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
     (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.noEntry ? ' · <span style="color:#f59e0b">无法判定 ' + s.noEntry + '</span>' : '') + (s.flat ? ' · 中性 ' + s.flat : '');
-  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；单位「档」= 短/中/长）──</div>' +
+  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；下方汇总为全部记录，单位「档」= 短/中/长）──</div>' +
     '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
     (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
     '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
