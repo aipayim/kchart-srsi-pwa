@@ -11,11 +11,11 @@ import {
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
 import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent } from '../src/pwa/jevClient.js';
-import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, renderJevAllHtml, historyRowHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
+import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, renderJevAllHtml, historyRowHtml, MATURITY_NOTE, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
 import { SOUND_KIND_GROUPS, ALL_SIGNAL_KINDS, defaultSoundFor } from '../src/pwa/signalSounds.js';
-import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
+import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg, previewDecisionHorizon } from '../src/pwa/jevClient.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; } else { failed++; console.log('FAIL:', name); } }
@@ -353,6 +353,24 @@ async function fetchTests2() {
     const planNe = planMaturation(Object.assign({}, base, { samples: [{ horizon: 'short', side: 1 }], dirs: { short: { strength: 74 } } }), () => ({ win: 0, side: 1, reason: 'no-entry' }), {});
     ok('⭐ planMaturation：缺 entry 的档也产出 outcome（不再 allDone=false 永久挂起）', planNe.anyOutcome === true && !!planNe.outcomes.short);
     ok('⭐ no-entry 不进样本（win=0 → 不喂 TSEV）', planNe.toFeed.length === 0 && planNe.fed.short === true);
+
+    // ===== v1.6.67 未到期预览（纯显示，不改统计、不喂样本）=====
+    // 记录落在数组末尾附近 ⇒ 窗口确实没走完（数组只到 times[99]）
+    const pvOpen = { sym: 'BTCUSDT', ts: times[90], matured: false, entry: { short: { tf: ev.tf, price: closes[90], atr: 1 } }, dirs: { short: { strength: 74 } } };
+    const pv = previewDecisionHorizon(pvOpen, 'short');
+    ok('⭐ 未到期也能预览（窗口 24 根只走了 9 根；ATR 小 → 已触止盈）', !!pv && pv.barsDone === 9 && pv.barsDone < ev.bars && pv.bars === ev.bars && pv.status === 'tp' && pv.done === false);
+    const pvHold = previewDecisionHorizon(Object.assign({}, pvOpen, { entry: { short: { tf: ev.tf, price: closes[90], atr: 100 } } }), 'short');
+    ok('窗口内未触发 → status=open 且带当前浮动%', !!pvHold && pvHold.status === 'open' && pvHold.pnlPct != null && pvHold.done === false);
+    const pvBase = { sym: 'BTCUSDT', ts: times[60], matured: false, entry: { short: { tf: ev.tf, price: closes[60], atr: 1 } }, dirs: { short: { strength: 74 } } };
+    const pvDone = previewDecisionHorizon(pvBase, 'short');
+    ok('窗口已走满 → preview 标 done=true（此时结算就会生效）', !!pvDone && pvDone.barsDone === ev.bars && pvDone.done === true);
+    const pvSl = previewDecisionHorizon(Object.assign({}, pvBase, { dirs: { short: { strength: -74 } } }), 'short');
+    ok('预览：反向逆行已触止损 → status=sl', !!pvSl && pvSl.status === 'sl' && pvSl.pnlPct < 0);
+    const pvNew = previewDecisionHorizon(Object.assign({}, pvBase, { ts: times[times.length - 1] }), 'short');
+    ok('刚开始的档（还没走满 1 根）→ null 或 barsDone=0', pvNew == null || pvNew.barsDone === 0);
+    ok('中性档 → null（与结算口径一致）', previewDecisionHorizon(Object.assign({}, pvOpen, { dirs: { short: { strength: 3 } } }), 'short') === null);
+    ok('无 klines → null（不抛）', (() => { const save = globalThis.S; globalThis.S = {}; const r = previewDecisionHorizon(pvOpen, 'short'); globalThis.S = save; return r === null; })());
+    ok('⭐ 预览**不会**改变记录（无副作用：不写 matured/outcomes）', (() => { const rec = Object.assign({}, pvOpen); previewDecisionHorizon(rec, 'short'); return rec.matured === false && rec.outcomes === undefined; })());
 
     const decisions = [
       { sym: 'BTCUSDT', matured: true, dirs: { short: { strength: 74, conf: 0.6 } }, outcomes: { short: { win: 1, pnlPct: 2.5, side: 1 } } },
@@ -772,6 +790,24 @@ async function schedTest() {
   ok('空数据给出引导文案（不报错）', renderJevAllHtml(null) === '' || renderJevAllHtml({ rows: [] }).indexOf('暂无 Jev 判断记录') > 0);
   ok('historyRowHtml 无 horizons → 空串', historyRowHtml(null) === '' && historyRowHtml({ ts: 1 }) === '');
   ok('renderJevSetHtml 含明细容器 #jevAllWrap', renderJevSetHtml({ enabled: true, freq: '1h', mode: 'learn', horizons: { short: true }, groups: {}, price: {}, spend: {} }, {}).indexOf('id="jevAllWrap"') > 0);
+})();
+
+// ============ 未到期预览（面板层，v1.6.67） ============
+(function previewRender() {
+  const rec = { ts: Date.now() - 6 * 3600e3, sym: 'BTCUSDT', driver: '技术面', dirs: { short: { strength: -40, label: '偏空', conf: 0.8 }, mid: { strength: -20, label: '偏空', conf: 0.6 } } };
+  const pf = (r, h) => h === 'short'
+    ? { status: 'open', pnlPct: 0.62, barsDone: 12, bars: 24, tf: '1h', side: -1 }
+    : { status: 'tp', pnlPct: 2.1, barsDone: 8, bars: 30, tf: '4h', side: -1 };
+  const h = buildJevHistory([rec], 'BTCUSDT', { limit: 10, previewFn: pf });
+  const html = renderJevHistoryHtml(h);
+  ok('⭐ 未到期档 chip 显示浮盈与进度「浮+0.62%（12/24）」', html.indexOf('浮+0.62%（12/24）') > 0);
+  ok('⭐ 未到期档 chip 显示「已触止盈 +2.10%」', html.indexOf('已触止盈 +2.10%') > 0);
+  ok('预览汇总行存在且标注「不计入统计」', /👀 预览（<b>未到期 · 不计入统计<\/b>）/.test(html) && /窗口内 1/.test(html));
+  ok('汇总行仍只统计到期结果（已判定 0 档，预览不影响）', /已判定 0 档/.test(html));
+  ok('hist.preview 汇总字段（tp/sl/open/n）', h.preview.tp === 1 && h.preview.open === 1 && h.preview.n === 2);
+  const hNo = buildJevHistory([rec], 'BTCUSDT', { limit: 10 });
+  ok('不传 previewFn → 无预览、chip 回到「待回填」', hNo.rows[0].horizons[0].preview === null && renderJevHistoryHtml(hNo).indexOf('待回填') > 0 && hNo.preview.none === 2);
+  ok('未到期预览口径写进 MATURITY_NOTE', MATURITY_NOTE.indexOf('实时预览') > 0 && MATURITY_NOTE.indexOf('不计入任何统计') > 0);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============

@@ -251,7 +251,7 @@ export function buildJevHistory(decisions, sym, opts = {}) {
     }
   }
   // 行构造抽成函数：显示（limit 条）与汇总（全部）共用，避免两套逻辑漂移
-  const histRowOf = (r) => {
+  const histRowOf = (r, previewFn) => {
       const oc = r.outcomes || {};
       const horizons = JEV_HORIZONS.map(h => {
         const d = (r.dirs || {})[h.id];
@@ -270,10 +270,15 @@ export function buildJevHistory(decisions, sym, opts = {}) {
           else if (o.reason === 'no-entry') status = 'noentry';
           else status = 'expired';
         }
+        // v1.6.67：未到期档的「实时进度预览」（只显示，不喂样本、不进统计）
+        let preview = null;
+        if (status === 'pending' && typeof previewFn === 'function') {
+          try { preview = previewFn(r, h.id) || null; } catch (e2) { preview = null; }
+        }
         return {
           id: h.id, name: h.name, side, strength: s, label: d.label || (side === 'long' ? '偏多' : side === 'short' ? '偏空' : '中性'),
           conf: d.conf != null ? d.conf : null, status, pnl, bars, tf, sideNum: side === 'long' ? 1 : side === 'short' ? -1 : 0,
-          reason: (o && o.reason) || null
+          reason: (o && o.reason) || null, preview
         };
       }).filter(Boolean);
       // 主方向（用于行左侧色条）：取第一档有方向的；均为中性→灰
@@ -286,8 +291,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
         st: horizons.some(h => h.status === 'win' || h.status === 'loss' || h.status === 'noentry') ? 'decided' : 'pending'
       };
   };
-  const allRows = all.map(histRowOf);
-  const rows = allRows.slice(0, limit);
+  const allRows = all.map(r => histRowOf(r, null));       // 汇总用：不算预览（避免逐条重算拖慢）
+  const rows = all.slice(0, limit).map(r => histRowOf(r, opts.previewFn));
   // 汇总（按档计）
   // ⚠ 汇总按**全部**记录计（不只显示的 limit 条）——与 pendingTotal 同口径（v1.6.66 修正混用）
   const sum = { win: 0, loss: 0, pending: 0, expired: 0, noEntry: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: all.length };
@@ -300,8 +305,21 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   }
   sum.winRate = sum.decided ? sum.win / sum.decided : null;
   sum.avgPnl = sum.pnlN ? sum.pnls / sum.pnlN : null;
+  // 未到期预览汇总（**只覆盖显示的那几行**，明确标注不计入统计）
+  const prev = { tp: 0, sl: 0, open: 0, noEntry: 0, none: 0, n: 0 };
+  for (const r of rows) {
+    for (const h of r.horizons) {
+      if (h.status !== 'pending') continue;
+      prev.n++;
+      if (!h.preview) { prev.none++; continue; }
+      if (h.preview.status === 'tp') prev.tp++;
+      else if (h.preview.status === 'sl') prev.sl++;
+      else if (h.preview.status === 'no-entry') prev.noEntry++;
+      else prev.open++;
+    }
+  }
   return {
-    rows, summary: sum, limit, maturityNote: MATURITY_NOTE,
+    rows, summary: sum, limit, maturityNote: MATURITY_NOTE, preview: prev,
     pendingByHorizon: pend,
     pendingTotal: pend.short + pend.mid + pend.long,
     nextMs: (pend.short + pend.mid + pend.long) ? nextMs : null,
@@ -312,7 +330,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
 const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', noentry: '⚠', flat: '–' };
 const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', noentry: 'expired', flat: 'flat' };
 // 到期口径（与 jevClient.JEV_EVAL + winLossByAtr 同源）——直接回答用户「要等多久才有结果」
-export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习 · 判断时缺 K 线的档在到期时用行情回推入场价，仍无法判定的标「⚠ 无法判定」且不计样本';
+export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习 · 判断时缺 K 线的档在到期时用行情回推入场价，仍无法判定的标「⚠ 无法判定」且不计样本' +
+  '；未到期档显示「浮±x%（n/m）」或「已触止盈/止损」= 实时预览，仅看当前浮动，不计入任何统计';
 
 /** 历史列表 HTML（纯函数）：时间 + 三档结果 + 驱动/置信度 */
 export function renderJevHistoryHtml(hist) {
@@ -327,6 +346,13 @@ export function renderJevHistoryHtml(hist) {
     (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.noEntry ? ' · <span style="color:#f59e0b">无法判定 ' + s.noEntry + '</span>' : '') + (s.flat ? ' · 中性 ' + s.flat : '');
   const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；下方汇总为全部记录，单位「档」= 短/中/长）──</div>' +
     '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
+    (hist.preview && hist.preview.n && (hist.preview.tp || hist.preview.sl || hist.preview.open) ?
+      '<div class="jev-hist-note">👀 预览（<b>未到期 · 不计入统计</b>）：' +
+        (hist.preview.tp ? '<span style="color:#2ecc71">已触止盈 ' + hist.preview.tp + '</span> · ' : '') +
+        (hist.preview.sl ? '<span style="color:#ff6b6b">已触止损 ' + hist.preview.sl + '</span> · ' : '') +
+        '窗口内 ' + hist.preview.open +
+        (hist.preview.noEntry ? ' · 缺K线 ' + hist.preview.noEntry : '') +
+        '（覆盖下方显示的 ' + hist.rows.length + ' 笔，共 ' + hist.preview.n + ' 个未到期档）</div>' : '') +
     (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
     '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
   return head + hist.rows.map(r => historyRowHtml(r)).join('');
@@ -338,14 +364,21 @@ export function historyRowHtml(r, opts = {}) {
   const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
   const icon = r.mainSide === 'long' ? '▲' : r.mainSide === 'short' ? '▼' : '·';
   const chips = r.horizons.map(h => {
-    const c = h.status === 'win' ? '#2ecc71' : h.status === 'loss' ? '#ff6b6b' : h.status === 'noentry' ? '#f59e0b' : '#8899aa';
+    const c = h.status === 'win' ? '#2ecc71' : h.status === 'loss' ? '#ff6b6b' : h.status === 'noentry' ? '#f59e0b'
+      : (h.preview && h.preview.status === 'tp') ? '#2ecc71' : (h.preview && h.preview.status === 'sl') ? '#ff6b6b' : '#8899aa';
     const dirTxt = h.side === 'flat' ? '中性' : h.label + ' ' + (h.strength >= 0 ? '+' : '') + h.strength;
-    const tail = h.status === 'pending' ? ' 待回填'
+    const pv = h.preview;
+    const tail = h.status === 'pending'
+      ? (!pv ? ' 待回填'
+        : pv.status === 'tp' ? ' 已触止盈' + (pv.pnlPct != null ? ' ' + fmtPct(pv.pnlPct, 2) : '')
+          : pv.status === 'sl' ? ' 已触止损' + (pv.pnlPct != null ? ' ' + fmtPct(pv.pnlPct, 2) : '')
+            : pv.status === 'no-entry' ? ' 待回填(缺K线)'
+              : ' 浮' + (pv.pnlPct != null ? fmtPct(pv.pnlPct, 2) : '—') + '（' + (pv.barsDone || 0) + '/' + (pv.bars || 0) + '）')
       : h.status === 'expired' ? ' 未触发'
       : h.status === 'noentry' ? ' 无法判定'
         : h.status === 'flat' ? ''
           : (h.pnl != null ? ' ' + fmtPct(h.pnl, 2) : '');
-    return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '" title="' + (h.tf || '') + (h.bars ? ' · ' + h.bars + ' 根' : '') + (h.reason === 'no-entry' ? ' · 判断时缺 K 线，已按行情回推/无法判定' : '') + '">' +
+    return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '" title="' + (h.tf || '') + (h.bars ? ' · ' + h.bars + ' 根' : '') + (h.reason === 'no-entry' ? ' · 判断时缺 K 线，已按行情回推/无法判定' : '') + (h.preview && h.status === 'pending' ? ' · 未到期预览：仅看当前浮动，不计入统计' : '') + '">' +
       h.name + ' ' + dirTxt + ' ' + HIST_SYM[h.status] + tail + '</i>';
   }).join('');
   const confs = r.horizons.map(h => h.conf != null ? Math.round(h.conf * 100) + '%' : '—').join('/');

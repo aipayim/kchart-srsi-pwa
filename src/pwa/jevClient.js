@@ -499,30 +499,32 @@ export async function runJevOnce(opts = {}) {
 // 到期回填 + TSEV 喂样
 // ---------------------------------------------------------------------------
 /** 用当前已加载的 K 线，判定一条记录某档的前向盈亏；返回 {win, side} 或 null（未到期/无法判定） */
-export function evalDecisionHorizon(rec, h) {
+/**
+ * 解析一条判断的某档「入场上下文」：方向 / 入场 bar 索引 / 入场价 + ATR（缺失时用当时 K 线回推）。
+ * 供到期结算（evalDecisionHorizon）与未到期预览（previewDecisionHorizon）共用，避免两套逻辑漂移。
+ * @returns {{ok:true, side:number, ev:Object, closes:Array, idx:number, e:Object, barsDone:number}|{ok:false, reason:string, side?:number, ev?:Object}}
+ */
+function resolveHorizonContext(rec, h) {
   const dir = rec && rec.dirs && rec.dirs[h];
-  if (!dir || dir.strength == null) return null;
+  if (!dir || dir.strength == null) return { ok: false, reason: 'flat' };
   const ev = JEV_EVAL[h];
+  if (!ev) return { ok: false, reason: 'no-eval' };
   const side = dir.strength >= JEV_SIDE_THR ? 1 : dir.strength <= -JEV_SIDE_THR ? -1 : 0;
-  if (!side) return null;
+  if (!side) return { ok: false, reason: 'flat', ev };
   let e = rec.entry && rec.entry[h];
   const s = S();
   const closes = (s.klines && s.klines[rec.sym] && s.klines[rec.sym][ev.tf]) || null;
   const times = (s.klinesT && s.klinesT[rec.sym] && s.klinesT[rec.sym][ev.tf]) || null;
-  if (!Array.isArray(closes) || !closes.length) return null;
+  if (!Array.isArray(closes) || !closes.length) return { ok: false, reason: 'no-klines', side, ev };
   let idx = closes.length - 1;
   if (Array.isArray(times) && times.length === closes.length) {
     let found = -1;
     for (let i = times.length - 1; i >= 0; i--) { if (times[i] <= rec.ts) { found = i; break; } }
     idx = found;            // 决策时刻对应的 bar
   }
-  if (idx < 0) return null;                        // 该 bar 已滚出窗口
-  const need = Math.min(idx + ev.bars, closes.length - 1);
-  if (need - idx < ev.bars) return null;           // 还没走满到期根数
-  // 🐞 修复（v1.6.64）：判断当时的 K 线尚未加载 ⇒ rec.entry[h] 缺失（PWA 渐进拉取，1d 最晚）。
-  // 旧实现直接 return null ⇒ **该档永远不结算**，一直挂到 120 天被静默标过期（样本永久丢失、待回填数只增不减）。
-  // 现改为：到期时用当时的 K 线**回推**入场价 + ATR；实在无法判定（bar 已滚出/数据不足）则返回 win=0 + reason='no-entry'
-  // → 正常结算掉（不喂样本），不再无限期悬挂。
+  if (idx < 0) return { ok: false, reason: 'out-of-window', side, ev };   // 该 bar 已滚出窗口
+  // 🐞 v1.6.64：判断时该档 K 线未加载 ⇒ rec.entry[h] 缺失（PWA 渐进拉取，1d 最晚）⇒ 用当时 K 线回推，
+  // 否则该档会永久悬挂（挂到 120 天才静默过期）。
   if (!e || !(e.price > 0) || !(e.atr > 0)) {
     let price = null, atr = null;
     const px = closes[idx];
@@ -535,8 +537,22 @@ export function evalDecisionHorizon(rec, h) {
       } catch (err) { atr = null; }
     }
     if (price && atr) e = { tf: ev.tf, price, atr, derived: true };
-    else return { win: 0, side, pnlPct: null, bars: ev.bars, tf: ev.tf, reason: 'no-entry' };
+    else return { ok: false, reason: 'no-entry', side, ev };
   }
+  const kept = Math.min(idx + ev.bars, closes.length - 1);
+  return { ok: true, side, ev, closes, idx, e, barsDone: kept - idx };
+}
+
+/** 到期结算：走满 ev.bars 根才判定（未走满返回 null）。 */
+export function evalDecisionHorizon(rec, h) {
+  const cx = resolveHorizonContext(rec, h);
+  if (!cx.ok) {
+    if (cx.reason === 'no-entry') return { win: 0, side: cx.side, pnlPct: null, bars: cx.ev.bars, tf: cx.ev.tf, reason: 'no-entry' };
+    return null;
+  }
+  const { side, ev, closes, idx, e, barsDone } = cx;
+  if (barsDone < ev.bars) return null;             // 还没走满到期根数
+  const need = idx + ev.bars;
   const atrArr = [];
   for (let i = 0; i <= need; i++) atrArr.push(e.atr);   // 用决策时的 ATR 作固定止损/止盈距离
   const r = winLossByAtr(closes.slice(0, need + 1), atrArr, {
@@ -545,6 +561,30 @@ export function evalDecisionHorizon(rec, h) {
   });
   if (!r || r.win === 0 || r.win == null) return { win: 0, side, pnlPct: (r && r.pnlPct) != null ? r.pnlPct : null, bars: ev.bars, tf: ev.tf };
   return { win: r.win, side, pnlPct: r.pnlPct, bars: r.barsHeld, tf: ev.tf, exitDir: r.exitDir };
+}
+
+/**
+ * ⚠ 未到期**预览**（v1.6.67）：窗口尚未走满时，看看「到此刻为止」判断是对是错。
+ * **纯显示**——绝不写库、不喂 TSEV 样本、不进任何统计（统计只认 evalDecisionHorizon 的到期结果）。
+ * @returns {null|{status:'tp'|'sl'|'open'|'no-entry', pnlPct:number|null, barsDone:number, bars:number, tf:string, side:number}}
+ */
+export function previewDecisionHorizon(rec, h) {
+  try {
+    const cx = resolveHorizonContext(rec, h);
+    if (!cx.ok) return cx.reason === 'no-entry' ? { status: 'no-entry', pnlPct: null, barsDone: 0, bars: (cx.ev || {}).bars || 0, tf: (cx.ev || {}).tf || null, side: cx.side || 0 } : null;
+    const { side, ev, closes, idx, e, barsDone } = cx;
+    if (barsDone < 1) return null;                 // 连一根都还没走完
+    const atrArr = [];
+    for (let i = 0; i <= idx + barsDone; i++) atrArr.push(e.atr);
+    const r = winLossByAtr(closes.slice(0, idx + barsDone + 1), atrArr, {
+      entryIdx: idx, direction: side === 1 ? 'buy' : 'sell',
+      tpAtr: THRESH.BT_TP_ATR, slAtr: THRESH.BT_SL_ATR, horizon: ev.bars
+    });
+    let status = 'open';
+    if (r && r.win === 1) status = 'tp';
+    else if (r && r.win === -1) status = 'sl';
+    return { status, pnlPct: (r && r.pnlPct) != null ? r.pnlPct : null, barsDone, bars: ev.bars, tf: ev.tf, side, done: barsDone >= ev.bars };
+  } catch (e2) { return null; }
 }
 
 // 方向档阈值（|强度| ≥ 此值才算「有方向」；与 jevState.jevSide 保持一致）

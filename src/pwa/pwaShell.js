@@ -23,7 +23,7 @@ import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js'
 import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevAllHtml } from '../tech2/jevPanel.js';
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
-  readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken,
+  readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange
 } from './jevClient.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -1353,7 +1353,8 @@ function renderJev() {
     sym, cfg, latest, decisions: _jevCache.decisions, stats, status: st,
     hasToken: _jevCache.hasToken, freqMs, now: Date.now(),
     fill: cfg.lastFill || null, flow: cfg.flow || null,
-    history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10 })
+    // v1.6.67：盯盘面板只给显示的 10 笔算「未到期预览」（10×3 次轻量计算；设置页 400 条不算，避免卡顿）
+    history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10, previewFn: previewDecisionHorizon })
   });
   const html = renderJevHtml(model);
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
