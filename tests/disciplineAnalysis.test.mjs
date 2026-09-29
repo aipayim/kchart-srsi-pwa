@@ -1,6 +1,6 @@
 // 交易纪律方向因子消融 · 共享分析核心单元测试
 // 覆盖 parseJsonl / dedupeRows / decorrelate / coverageMatrix / buildAblation
-import { parseJsonl, dedupeRows, decorrelate, buildAblation, coverageMatrix, MIN_SAMPLE, REGIMES, DIRS, extractDisciplineFactors, trainTsevWeights, voteTsev, TSEV_CFG, wilsonShrink, trainTsevWeightsStats, forwardAccuracy, decayStats } from '../src/engine/disciplineAnalysis.js';
+import { parseJsonl, dedupeRows, decorrelate, buildAblation, coverageMatrix, MIN_SAMPLE, REGIMES, DIRS, extractDisciplineFactors, trainTsevWeights, voteTsev, TSEV_CFG, wilsonShrink, trainTsevWeightsStats, forwardAccuracy, decayStats, jevFactorsFromLatest, summarizeJevVotes, JEV_FACTOR_THR } from '../src/engine/disciplineAnalysis.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; console.log('ok:', name); } else { failed++; console.log('FAIL:', name); } }
@@ -229,6 +229,62 @@ ok('MIN_SAMPLE=600', MIN_SAMPLE === 600);
   }
   const fa2 = forwardAccuracy(faNoise, { split: 0.7, horizon: 'h4', MIN_SAMPLE: 400, Z_THRESH: 1.5, M: 0.5 });
   ok('forwardAccuracy 噪声因子→null或低命中率(不虚高)', fa2 === null || fa2.acc < 0.65);
+}
+
+// ---- P4: Jev（LLM）因子接入（jevFactorsFromLatest / extractDisciplineFactors jev / summarizeJevVotes）
+// 红线：Jev 是可选的加分项 —— 不传 jev 时 extractDisciplineFactors 输出必须逐字节不变。
+{
+  const NOW_MS = 1800000000000;
+  const mkLatest = (over = {}) => ({ sym: 'BTCUSDT', ts: NOW_MS - 60000, freqMs: 3600000, dirs: { short: { strength: -60 } }, ...over });
+
+  // jevFactorsFromLatest —— 新鲜/阈值/超时/未来/币种/空
+  const fresh = jevFactorsFromLatest(mkLatest(), NOW_MS, { sym: 'BTCUSDT' });
+  ok('jev 新鲜短档空→side-1/strength-60', fresh.length === 1 && fresh[0].name === 'jev' && fresh[0].cond === 'short' && fresh[0].side === -1 && fresh[0].strength === -60);
+  ok('JEV_FACTOR_THR=15', JEV_FACTOR_THR === 15);
+  ok('jev 强度14<15→无', jevFactorsFromLatest(mkLatest({ dirs: { short: { strength: 14 } } }), NOW_MS).length === 0);
+  ok('jev 强度15→多(side+1)', (() => { const r = jevFactorsFromLatest(mkLatest({ dirs: { short: { strength: 15 } } }), NOW_MS); return r.length === 1 && r[0].side === 1; })());
+  ok('jev 强度-15→空(side-1)', (() => { const r = jevFactorsFromLatest(mkLatest({ dirs: { short: { strength: -15 } } }), NOW_MS); return r.length === 1 && r[0].side === -1; })());
+  ok('jev 多档各自判定(中性档跳过)', jevFactorsFromLatest(mkLatest({ dirs: { scalp: { strength: 40 }, short: { strength: -60 }, mid: { strength: 5 }, long: { strength: -20 } } }), NOW_MS).length === 3);
+  ok('jev 超时(2×频率外)→空', jevFactorsFromLatest(mkLatest({ ts: NOW_MS - 3 * 3600000 }), NOW_MS).length === 0);
+  ok('jev 2×频率内(≤2h)→有', jevFactorsFromLatest(mkLatest({ ts: NOW_MS - 1.5 * 3600000 }), NOW_MS).length === 1);
+  ok('jev freqMs=0 30min内→有', jevFactorsFromLatest(mkLatest({ freqMs: 0, ts: NOW_MS - 30 * 60000 }), NOW_MS).length === 1);
+  ok('jev freqMs=0 90min外→空(1h下限)', jevFactorsFromLatest(mkLatest({ freqMs: 0, ts: NOW_MS - 90 * 60000 }), NOW_MS).length === 0);
+  ok('jev 未来ts→空', jevFactorsFromLatest(mkLatest({ ts: NOW_MS + 120000 }), NOW_MS).length === 0);
+  ok('jev ts缺失→空', jevFactorsFromLatest({ sym: 'BTCUSDT', dirs: { short: { strength: -60 } } }, NOW_MS).length === 0);
+  ok('jev 币种不匹配→空', jevFactorsFromLatest(mkLatest(), NOW_MS, { sym: 'ETHUSDT' }).length === 0);
+  ok('jev 无opts.sym时不校验币种', jevFactorsFromLatest(mkLatest(), NOW_MS).length === 1);
+  ok('jev null/非对象→空', jevFactorsFromLatest(null, NOW_MS).length === 0 && jevFactorsFromLatest(42, NOW_MS).length === 0);
+  ok('jev horizons 别名兼容', jevFactorsFromLatest({ sym: 'BTCUSDT', ts: NOW_MS - 60000, horizons: { short: { strength: -60 } } }, NOW_MS).length === 1);
+
+  // extractDisciplineFactors —— jev 不传/空数组时输出逐字节不变（隔离红线）
+  const base = {
+    trend: { up: true, flat: false, tf: '4h', spreadPct: 2 },
+    mt: { up: true, tf: '30d', spreadPct: 1 },
+    confirm: { dir: 'buy', isHook: true, confirmed: true, fresh: 1, tf: '15m' },
+    leading: { dir: 'buy', score: 80, tf: '15m', isHook: false, isClear: true },
+    reversalAdd: 8, zones: { daily: 'oversold', main: 'oversold' }, verdict: '一致偏多', periodKAdd: 10, gapAdd: 5
+  };
+  const fNo = extractDisciplineFactors(base);
+  const fUndef = extractDisciplineFactors({ ...base, jev: undefined });
+  const fEmpty = extractDisciplineFactors({ ...base, jev: [] });
+  ok('extract 不传jev与空数组逐字节一致', JSON.stringify(fNo) === JSON.stringify(fEmpty) && JSON.stringify(fNo) === JSON.stringify(fUndef));
+  ok('extract 无jev时不产出jev因子', fNo.every(f => f.name !== 'jev'));
+  const fJev = extractDisciplineFactors({ ...base, jev: [{ name: 'jev', cond: 'short', side: -1 }, { name: 'jev', cond: 'scalp', side: 1 }] });
+  ok('extract 传jev→追加jev因子', fJev.filter(f => f.name === 'jev').length === 2 && fJev.find(f => f.cond === 'short').side === -1);
+  ok('extract 非法jev项被过滤(side=0/缺cond)', extractDisciplineFactors({ ...base, jev: [{ name: 'jev', cond: 'x', side: 0 }, { name: 'jev', side: 1 }] }).filter(f => f.name === 'jev').length === 0);
+  // jev 因子键格式与 localLoop.recordJevSample 写入的 jev|<horizon>|<side> 完全兼容 → voteTsev 直接消费
+  const vJev = voteTsev(fJev, { 'jev|short|-1': 3 });
+  ok('vote 直接消费 jev 键→看空', vJev.dir === -1 && vJev.net === -3);
+
+  // summarizeJevVotes
+  const sItems = summarizeJevVotes([{ name: 'jev', cond: 'short', side: -1, strength: -60 }], { 'jev|short|-1': -1.5 }, { dir: 1 }, { dir: 0 });
+  ok('summarize nWeighted/net(含side)', sItems.nWeighted === 1 && sItems.net === 1.5 && sItems.available === true);
+  ok('summarize decisive(去掉jev后方向改变)', sItems.decisive === true);
+  ok('summarize items 标 has/w/key', sItems.items[0].has === true && sItems.items[0].w === -1.5 && sItems.items[0].key === 'jev|short|-1');
+  ok('summarize 非决定性(去掉后同向)', summarizeJevVotes([{ name: 'jev', cond: 'short', side: -1, strength: -60 }], { 'jev|short|-1': -1.5 }, { dir: 1 }, { dir: 1 }).decisive === false);
+  ok('summarize 无权重→nWeighted0 但 available', (() => { const r = summarizeJevVotes([{ name: 'jev', cond: 'short', side: -1, strength: -60 }], {}, null, null); return r.nWeighted === 0 && r.available === true && r.net === 0; })());
+  ok('summarize 已学jev权重线索(即使本次无读数)', (() => { const r = summarizeJevVotes([], { 'jev|short|-1': -1.5, 'pullback|up_os|1': 2 }, null, null); return r.available === false && r.learnedKeys.length === 1 && r.learnedKeys[0].key === 'jev|short|-1'; })());
+  ok('summarize 空入力安全', (() => { const r = summarizeJevVotes(null, null, null, null); return r.available === false && r.nFactors === 0 && r.learnedKeys.length === 0; })());
 }
 
 console.log(`\n=== disciplineAnalysis.test: ${passed} passed, ${failed} failed ===`);

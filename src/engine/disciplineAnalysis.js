@@ -194,11 +194,79 @@ export function combineWeights(globalW, localW, opts = {}) {
   return { weights: {}, source: 'classic', n: 0 };
 }
 
+// Jev（LLM）方向阈值：|强度| ≥ 此值才算「有方向」（与 jevState.jevSide / jevClient.JEV_SIDE_THR 一致）
+export const JEV_FACTOR_THR = 15;
+// Jev 档位 id（顺序仅影响产出顺序；不放发请求）
+export const JEV_FACTOR_IDS = ['scalp', 'short', 'mid', 'long'];
+
+/**
+ * 纯函数：把「最近一次 Jev 判断」转成纪律因子（**本模块不依赖任何 Jev 模块**，
+ * 仅消费普通对象 → 主图 kchart.js 可零 Jev 依赖地调用，Jev 缺失/报错时返回空数组）。
+ *
+ * `latest` 形态（jevClient 发布到 `globalThis.__jevLatest`）：
+ *   { sym, ts, freqMs, dirs|horizons: { scalp:{strength}, short:{...}, ... } }
+ * 仅当以下均成立才产出：新鲜（age ≤ max(2×freqMs, 1h)；超时视为无）、
+ * 币种匹配（opts.sym 与 latest.sym 均非空时）、|strength| ≥ thr。
+ * @returns {Array<{name:'jev',cond:string,side:1|-1,strength:number}>}
+ */
+export function jevFactorsFromLatest(latest, now, opts = {}) {
+  const out = [];
+  if (!latest || typeof latest !== 'object') return out;
+  const ts = Number(latest.ts);
+  const n = (now != null && isFinite(now)) ? now : Date.now();
+  if (!isFinite(ts) || ts <= 0) return out;
+  if (ts > n + 60000) return out;                                     // 未来时间戳 → 视为无效
+  const freqMs = Number(latest.freqMs) || 0;
+  const win = Math.max(freqMs > 0 ? freqMs * 2 : 0, 3600 * 1000);      // 至少 1h；否则 2× 调用频率
+  if (n - ts > win) return out;                                        // 超时 → 视为无
+  if (opts.sym && latest.sym && String(latest.sym) !== String(opts.sym)) return out;
+  const hs = latest.dirs || latest.horizons || {};
+  const thr = opts.thr != null ? opts.thr : JEV_FACTOR_THR;
+  const ids = Array.isArray(opts.ids) && opts.ids.length ? opts.ids : JEV_FACTOR_IDS;
+  for (const h of ids) {
+    const d = hs[h];
+    if (!d || typeof d.strength !== 'number' || !isFinite(d.strength)) continue;
+    if (d.strength >= thr) out.push({ name: 'jev', cond: h, side: +1, strength: d.strength });
+    else if (d.strength <= -thr) out.push({ name: 'jev', cond: h, side: -1, strength: d.strength });
+  }
+  return out;
+}
+
+/**
+ * 纯函数：把 Jev 因子的 TSEV 权重参与情况汇总（供面板如实展示「学到的 Jev 权重到底用上了没」）。
+ * @param {Array} jevFactors jevFactorsFromLatest 的产出
+ * @param {Object} weights   本币权重表 { 'name|cond|side': w }
+ * @param {Object} tsev      本次投票结果（可为 null）；tsevNoJev = 去掉 jev 因子的投票结果
+ * @returns {{available,nFactors,nWeighted,net,items,decisive,text}}
+ */
+export function summarizeJevVotes(jevFactors, weights, tsev, tsevNoJev) {
+  const list = Array.isArray(jevFactors) ? jevFactors : [];
+  const W = weights || {};
+  const items = list.map(f => {
+    const key = f.name + '|' + f.cond + '|' + f.side;
+    const w = W[key];
+    const hasW = (typeof w === 'number' && isFinite(w));
+    return { cond: f.cond, side: f.side, strength: f.strength, key, w: hasW ? w : null, has: hasW };
+  });
+  const withW = items.filter(x => x.has);
+  const net = withW.reduce((a, x) => a + x.w * x.side, 0);
+  let decisive = false;
+  if (withW.length && tsev && tsev.dir !== 0) {
+    const d0 = tsev.dir;
+    const d1 = tsevNoJev ? tsevNoJev.dir : 0;
+    decisive = (d1 !== d0);   // 去掉 Jev 因子后方向改变（含变为 0）→ Jev 是决定性的
+  }
+  // 已学到的 jev|* 权重（即使本次没 Jev 读数也能看到——防「学了不用」的审计线索）
+  const learnedKeys = Object.keys(W).filter(k => k.indexOf('jev|') === 0).map(k => ({ key: k, w: W[k] }));
+  return { available: list.length > 0, nFactors: list.length, nWeighted: withW.length, net: Math.round(net * 100) / 100, items, decisive, learnedKeys };
+}
+
 // 从 analyzeTradeDiscipline 的中间产物抽取方向因子态。
 // 入参对象需含：ov(速览) 不必；trend(horizonTrend) / mt(macroTrend) / confirm /
 // leading(leader) / reversalAdd / zones / verdict / periodKAdd / gapAdd / mainTFUse
+// `jev`：可选，jevFactorsFromLatest 产出的数组（Jev 因子；不传 = 零影响）。
 // 每个因子返回 {name, cond, side}，side: +1=支持看多, −1=支持看空, 0=无方向。
-export function extractDisciplineFactors({ trend, mt, confirm, leading, reversalAdd, zones, verdict, periodKAdd, gapAdd }) {
+export function extractDisciplineFactors({ trend, mt, confirm, leading, reversalAdd, zones, verdict, periodKAdd, gapAdd, jev }) {
   const F = [];
   // F_pullback：主周期超买/超卖回调（顺势低吸/高抛）
   const zr = zones && zones.main;
@@ -225,6 +293,12 @@ export function extractDisciplineFactors({ trend, mt, confirm, leading, reversal
   // F_macro：宏观(7d/30d)与基准趋势反向
   if (mt && mt.up != null && trend && trend.up != null && mt.up !== trend.up)
     F.push({ name: 'macro', cond: 'reverse', side: mt.up === true ? +1 : -1 });
+  // F_jev：Jev（LLM）方向档位（只做显示 + 本机学习；表里没有对应权重 → voteTsev 自然忽略）
+  // ⭐ 断点①修复：以前 TSEV 学到了 `jev|*` 权重却从不使用（因子列表里没有 jev）；现在能自动被消费。
+  for (const j of (Array.isArray(jev) ? jev : [])) {
+    if (!j || !j.cond || (j.side !== 1 && j.side !== -1)) continue;
+    F.push({ name: 'jev', cond: String(j.cond), side: j.side });
+  }
   return F;
 }
 

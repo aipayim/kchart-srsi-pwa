@@ -24,7 +24,7 @@ import { liquidationPrice } from '../engine/liquidation.js';
 import { fundingPayment, FUNDING_HOURS } from '../engine/funding.js';
 import { regimeStrategy } from '../engine/regimeParams.js';
 import { updateRuleMonitorTick, renderRuleMonitor, kToggleRuleMonitor, ruleMonitorClear, ruleOptimizeRun, ruleOptimizeApply, ruleVersionSwitch, __ruleMonitorTestState, hudClampPos } from './ruleMonitor.js';
-import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights } from '../engine/disciplineAnalysis.js';
+import { TSEV_CFG, extractDisciplineFactors, trainTsevWeights, voteTsev, parseJsonl, combineWeights, jevFactorsFromLatest, summarizeJevVotes } from '../engine/disciplineAnalysis.js';
 
 // ---- TSEV 权重（全局：dev 下 /data 训练 或 生产 /tsev-weights.json 快照；本机：IndexedDB 由 localLoop 训练）----
 let _tsevWeights = {};     // { [sym]: { 'name|cond|side': logitWeight } }（按币种分别训练）
@@ -38,6 +38,16 @@ export function setTsevEnabled(v) {
 export function isTsevEnabled() { return _tsevEnabled; }
 export function getTsevWeights(sym) { return _tsevEnabled ? ((sym && _tsevWeights[sym]) || {}) : {}; }
 export function getTsevInfo() { return _tsevInfo; }
+
+// Jev（LLM）最近判断：**只读弱引用**（由 PWA 侧 jevClient 发布到 globalThis.__jevLatest）。
+// ⚠ 本文件**不 import 任何 Jev 模块**（Jev 是可选加分项：关掉/缺失/报错都不能影响主图与纪律面板）。
+function readJevLatest() {
+  try {
+    if (typeof globalThis === 'undefined') return null;
+    const j = globalThis.__jevLatest;
+    return (j && typeof j === 'object') ? j : null;
+  } catch (e) { return null; }
+}
 
 // 读取本机权重（由 src/pwa/localLoop.js 注册到 globalThis.__localTsev）。浏览器才有，Node 环境返回 null。
 async function loadLocalTsevWeights() {
@@ -1949,7 +1959,24 @@ export function renderTradeDiscipline(hz, capMin) {
       }
     }
   } catch (e) {}
-  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}${accTxt}<br><span class="disc-tsev-effect">${tsevEffectTxt}</span>${unbalTxt}${dbgTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积 + 首次载入全部币种近4年历史回补；桌面重训后可导出 JSON 在手机导入共享）</span></div>`;
+  // Jev（LLM）因子是否被 TSEV 用上（防「学了不用」再发生）——只展示；无 Jev 读数且无已学权重时不渲染该行
+  let jevTxt = '';
+  try {
+    const jv = analysis.jevVote;
+    if (jv) {
+      if (jv.nWeighted) {
+        const parts = jv.items.filter(x => x.has).map(x => `${x.key.replace(/\|/g, '·')} w${x.w > 0 ? '+' : ''}${x.w.toFixed(1)}`);
+        const verd = jv.decisive ? '<b>关键票（去掉后方向改变）</b>' : '未决胜（同向但非决定）';
+        jevTxt = `<br><span class="disc-jev-vote">🧠 Jev 因子已计入 TSEV 投票：${parts.join(' · ')} → 净贡献 ${jv.net > 0 ? '+' : ''}${jv.net} 票 · ${verd}</span>`;
+      } else if (jv.available) {
+        const thr = jv.items.map(x => `${x.cond}${x.side > 0 ? '多' : '空'} ${Math.round(x.strength)}`).join(' · ');
+        jevTxt = `<br><span class="disc-jev-vote disc-jev-mute">🧠 Jev 有方向（${thr}）但本机 TSEV 未达门槛 → 本次未计入（需 50 个独立样本）</span>`;
+      } else if (jv.learnedKeys && jv.learnedKeys.length) {
+        jevTxt = `<br><span class="disc-jev-vote disc-jev-mute">🧠 本机已学 ${jv.learnedKeys.length} 个 Jev 权重（${jv.learnedKeys.slice(0, 4).map(k => k.key.replace(/\|/g, '·')).join(' · ')}）但当前无新鲜 Jev 读数 → 未计入</span>`;
+      }
+    }
+  } catch (e) { jevTxt = ''; }
+  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}${accTxt}<br><span class="disc-tsev-effect">${tsevEffectTxt}</span>${unbalTxt}${jevTxt}${dbgTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积 + 首次载入全部币种近4年历史回补；桌面重训后可导出 JSON 在手机导入共享）</span></div>`;
 
   // ---- 信号指示：方向来自经典或 TSEV，避免「看多」头部与「信号不足」矛盾 ----
   const _dirLong = entry.dir.startsWith('看多');
@@ -3570,7 +3597,14 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
   // ---- TSEV 数据门控投票：用数据训练的因子权重覆盖硬 if/else 方向 ----
   // 仅在权重可用（dev 下 /data/discipline-factors.jsonl 经 loadTsevWeights 训练）时启用；
   // 否则保持经典逻辑（其方向精度已证实低于随机，dev 下会用 TSEV 修正）。
-  const factors = extractDisciplineFactors({ trend, mt, confirm, leading: leader, reversalAdd, zones, verdict, periodKAdd, gapAdd });
+  // ⭐ Jev（LLM）因子：只读消费（opts.jevLatest 供测试注入，否则读 globalThis.__jevLatest）。
+  // Jev 关闭/无读数/超时/报错 → jevFactors=[] → 输出与无 Jev 完全一致（隔离红线）。
+  let jevFactors = [];
+  try {
+    const latest = (opts.jevLatest !== undefined) ? opts.jevLatest : readJevLatest();
+    jevFactors = jevFactorsFromLatest(latest, Date.now(), { sym: opts.sym });
+  } catch (e) { jevFactors = []; }
+  const factors = extractDisciplineFactors({ trend, mt, confirm, leading: leader, reversalAdd, zones, verdict, periodKAdd, gapAdd, jev: jevFactors });
   let tsev = null;
   const _w = (weights !== undefined) ? weights : getTsevWeights(opts.sym);
   if (_w && Object.keys(_w).length) {
@@ -3601,6 +3635,16 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
       // TSEV 无明确方向票 → 不覆盖经典方向(保留经典 看多/看空/观望)，仅标记不可交易（宁缺毋滥，不触发真实交易）
       tsev.actionable = false;
     }
+  }
+
+  // Jev 因子到底用上了没（防「学了不用」再发生）——只展示，绝不触发交易。
+  // 仅当「本次有 Jev 读数」或「已学到 jev|* 权重」时才有内容；无 Jev → available=false 且无已学权重 → 面板不渲染该行。
+  let jevVote = summarizeJevVotes(jevFactors, _w || {}, tsev, null);
+  if (tsev && jevVote.nWeighted) {
+    try {
+      const factorsNoJev = extractDisciplineFactors({ trend, mt, confirm, leading: leader, reversalAdd, zones, verdict, periodKAdd, gapAdd });
+      jevVote = summarizeJevVotes(jevFactors, _w || {}, tsev, voteTsev(factorsNoJev, _w));
+    } catch (e) { /* 反事实投票失败 → 保留基础汇总（decisive 保持 false） */ }
   }
 
   // 辅助周期放行闸门（用户标记的周期仅作放行闸门: 与主方向反向 → 否决为观望, 且不进共识/不加权）
@@ -3698,6 +3742,8 @@ export function analyzeTradeDiscipline(priceMap, srsiCfg, opts = {}) {
     },
     factors,
     tsev,
+    jevFactors,
+    jevVote,
     shortFactors,
     sizing,
     rules,

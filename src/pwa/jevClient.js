@@ -528,6 +528,7 @@ export async function runJevOnce(opts = {}) {
     }
     await putDecision(rec);
     await trimDecisions();
+    publishJevLatest(rec);   // 供主图纪律面板只读消费（Jev 因子进 TSEV 投票）；绝不触发交易
     emitJevSignal(rec);   // 入「最近信号」列表（方向变化时才弹提示/发声）
     _status.lastRun = Date.now(); _status.lastErr = parsed.ok ? null : parsed.err;
     const res = { ok: parsed.ok, rec, parsed, stateText, missing: merged.reduce((a, m) => a.concat(m.missing), []) };
@@ -884,6 +885,31 @@ export function jevStats(decisions, sym) {
   // 样本数（未成熟样本数）
   out.pending = rows.filter(r => !r.matured).length;
   return out;
+}
+
+/**
+ * 把「最近一次判断」发布到 globalThis.__jevLatest —— 供主图纪律面板**只读**消费（Jev 因子进 TSEV 投票）。
+ * 粒度：只发布 dirs（强度）+ ts + 调用间隔（供时效判断）；绝不触发任何交易。
+ * 主图 kchart.js **不 import 本模块**，只读这个弱引用 → Jev 缺失/报错时主图零影响。
+ */
+export function publishJevLatest(rec) {
+  try {
+    if (!rec || !rec.sym || !rec.dirs) return null;
+    const cfg = readJevCfg();
+    const out = { sym: rec.sym, ts: rec.ts, freqMs: FREQ_MS[cfg.freq] || 0, dirs: rec.dirs, driver: rec.driver || null };
+    globalThis.__jevLatest = out;
+    return out;
+  } catch (e) { return null; }
+}
+
+/** 从已载入的判断列表里挑最新一条（本币）并发布（页面刷新后无需等到下次调用） */
+export function publishJevLatestFromList(decisions, sym) {
+  try {
+    const list = (decisions || []).filter(x => x && x.dirs && (!sym || x.sym === sym));
+    if (!list.length) return null;
+    list.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    return publishJevLatest(list[0]);
+  } catch (e) { return null; }
 }
 
 // 供 kchartApp 定时调用：到期回填（节流 5min）

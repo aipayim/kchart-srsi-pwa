@@ -825,6 +825,58 @@ console.log('\n[kchart: 交易纪律分析 analyzeTradeDiscipline]');
   ok('S17 不可交易(actionable=false)', s17.tsev && s17.tsev.actionable === false);
 }
 
+console.log('\n[kchart: Jev（LLM）因子接入 analyzeTradeDiscipline]');
+{
+  // 隔离红线：Jev 关/无读数/超时/中性 → jevVote.available=false 且 entry.dir/conf 与不传 Jev 完全相同
+  const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };
+  const rising = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(100 + i * 0.3); return a; };
+  const falling = (n) => { const a = []; for (let i = 0; i < n; i++) a.push(300 - i * 0.3); return a; };
+  const riseThenDip = (n) => { const a = rising(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] - (i + 1) * 1.2); return a; };
+  const fallThenRally = (n) => { const a = falling(n); for (let i = 0; i < 40; i++) a.push(a[a.length - 1] + (i + 1) * 1.2); return a; };
+  const pmUp = { '5m': riseThenDip(500), '15m': riseThenDip(500), '1h': rising(500), '4h': rising(500) };
+  const pmDown = { '5m': fallThenRally(500), '15m': fallThenRally(500), '1h': falling(500), '4h': falling(500) };
+  const W = { 'consensus|bear|-1': 0.1 };   // 非空权重表：确保走 TSEV 代码路径
+
+  // 保存/清空全局弱引用，避免其它测试残留干扰
+  const savedG = globalThis.__jevLatest;
+  delete globalThis.__jevLatest;
+  try {
+    const rNone = analyzeTradeDiscipline(pmUp, srsi, { bars: 150, mainTF: '15m', weights: W });
+    const rNull = analyzeTradeDiscipline(pmUp, srsi, { bars: 150, mainTF: '15m', weights: W, jevLatest: null });
+    const rStale = analyzeTradeDiscipline(pmUp, srsi, { bars: 150, mainTF: '15m', weights: W,
+      jevLatest: { sym: 'BTCUSDT', ts: Date.now() - 99999999, freqMs: 3600000, dirs: { short: { strength: -90 } } } });
+    ok('J1 无jev: jevVote.available=false', rNone.jevVote && rNone.jevVote.available === false);
+    ok('J1 无jev: jevFactors 空数组', Array.isArray(rNone.jevFactors) && rNone.jevFactors.length === 0);
+    ok('J1 null Jev → available=false 且 dir/conf 与不传完全同',
+      rNull.jevVote.available === false && rNull.entry.dir === rNone.entry.dir && rNull.entry.conf === rNone.entry.conf);
+    ok('J1 超时 Jev → available=false 且 dir/conf 与不传完全同',
+      rStale.jevVote.available === false && rStale.entry.dir === rNone.entry.dir && rStale.entry.conf === rNone.entry.conf);
+    ok('J1 中性(未达阈值15) Jev → 零影响', (() => {
+      const r = analyzeTradeDiscipline(pmUp, srsi, { bars: 150, mainTF: '15m', weights: W,
+        jevLatest: { sym: 'BTCUSDT', ts: Date.now() - 60000, freqMs: 3600000, dirs: { short: { strength: 5 } } } });
+      return r.jevVote.available === false && r.entry.dir === rNone.entry.dir && r.entry.conf === rNone.entry.conf;
+    })());
+
+    // J2: 新鲜 Jev + 本机已学 `jev|short|-1` 权重 → 确实改变方向与置信
+    const jevFresh = { sym: 'BTCUSDT', ts: Date.now() - 60000, freqMs: 3600000, dirs: { short: { strength: -60 } } };
+    const wJev = { 'jev|short|-1': -1.5 };   // net = -1.5 × (-1) = +1.5 → 看多
+    const base = analyzeTradeDiscipline(pmDown, srsi, { bars: 150, mainTF: '15m', weights: wJev, jevLatest: null });
+    const withJev = analyzeTradeDiscipline(pmDown, srsi, { bars: 150, mainTF: '15m', weights: wJev, jevLatest: jevFresh });
+    ok('J2 基线(无jev读数)→经典看空', base.entry.dir === '看空');
+    ok('J2 nWeighted=1 / net=+1.5', withJev.jevVote.nWeighted === 1 && withJev.jevVote.net === 1.5);
+    ok('J2 Jev 权重确实改变方向(看空→看多)', withJev.entry.dir === '看多' && withJev.entry.dir !== base.entry.dir);
+    ok('J2 Jev 权重确实改变置信', withJev.entry.conf !== base.entry.conf);
+    ok('J2 decisive=true(去掉jev后方向改变)', withJev.jevVote.decisive === true);
+    ok('J2 item 标 has/w', withJev.jevVote.items[0] && withJev.jevVote.items[0].has === true && withJev.jevVote.items[0].w === -1.5);
+
+    // J3: 权重表里有 jev 键但本次无新鲜读数 → 仅线索（learnedKeys），不影响方向
+    const onlyLearned = analyzeTradeDiscipline(pmDown, srsi, { bars: 150, mainTF: '15m', weights: wJev, jevLatest: null });
+    ok('J3 已学jev权重线索可见/不影响方向', onlyLearned.jevVote.learnedKeys.length === 1 && onlyLearned.jevVote.available === false && onlyLearned.entry.dir === '看空');
+  } finally {
+    if (savedG === undefined) delete globalThis.__jevLatest; else globalThis.__jevLatest = savedG;
+  }
+}
+
 // S16 诚实逆势：方向依据 / 顺势交易规则 必须与实际方向一致（消除「看多基准却判看空」的自相矛盾）
 {
   const srsi = { rsiPeriod: 85, stochPeriod: 50, smoothK: 10, smoothD: 5, overbought: 80, oversold: 20 };

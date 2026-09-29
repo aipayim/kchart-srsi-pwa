@@ -728,6 +728,10 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .disc-tsev-hint{display:block;margin-top:3px;font-size:9px;opacity:.7}
  .disc-tsev-effect{display:block;margin-top:3px;font-size:10px;color:var(--text);font-weight:600}
  .disc-tsev-unbal{display:block;margin-top:4px;padding:4px 8px;border-left:3px solid #FF5252;border-radius:4px;background:rgba(255,82,82,0.08);color:#FF6B6B;font-size:10px;line-height:1.5;font-weight:600}
+/* Jev（LLM）因子参与情况（防「学了不用」）：只展示，绝不触发交易 */
+.disc-jev-vote{display:block;margin-top:4px;padding:4px 8px;border-left:3px solid #a78bfa;border-radius:4px;background:rgba(167,139,250,0.10);color:#c4b5fd;font-size:10px;line-height:1.55}
+.disc-jev-vote b{color:#ddd6fe}
+.disc-jev-mute{border-left-color:#6B7688;background:rgba(107,118,136,0.10);color:#9db2c8}
 .disc-tsev-live{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);vertical-align:middle;margin:0 3px;box-shadow:0 0 4px var(--accent);animation:tsevBreath 2s ease-in-out infinite}
 @keyframes tsevBreath{0%,100%{opacity:.25;transform:scale(.7)}50%{opacity:1;transform:scale(1.15)}}
 .disc-tsev-spin{display:inline-block;width:1.1em;font-weight:700;color:var(--accent)}

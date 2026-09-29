@@ -25,7 +25,7 @@ import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange,
-  scalpBarsNow, scalpBarsSuggestion, setScalpBars
+  scalpBarsNow, scalpBarsSuggestion, setScalpBars, publishJevLatestFromList
 } from './jevClient.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
@@ -1329,6 +1329,8 @@ async function refreshJevData(force, ttlMs) {
     try { tok = await hasJevToken(); } catch (e) { tok = false; }
     _jevCache.sym = sym; _jevCache.decisions = list; _jevCache.stats = stats;
     _jevCache.hasToken = tok; _jevCache.at = Date.now();
+    // 把最近一次判断发布到 globalThis.__jevLatest（纪律面板只读消费 Vev 因子；刷新后无需等下次调用）
+    try { publishJevLatestFromList(list, sym); } catch (e) { /* 忽略 */ }
   } catch (e) {
     _jevCache.at = Date.now();
   }
