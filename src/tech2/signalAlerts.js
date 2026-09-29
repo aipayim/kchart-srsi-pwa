@@ -29,7 +29,10 @@ export const SIGNAL_KINDS = {
   'srsi-hook-death': { label: '卫星·死钩（看空·历史≈随机）', side: 'short', severity: 'signal', color: '#FF5252', icon: '◆' },
   'alpha-rebal': { label: '基石·调仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
   'alpha-open': { label: '基石·开仓', side: null, severity: 'trade', color: '#22d3ee', icon: '◆' },
-  'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '◇' }
+  'alpha-close': { label: '基石·平仓', side: null, severity: 'trade', color: '#8899aa', icon: '◇' },
+  // v1.6.62：Jev（LLM）判断入流。severity='info' = 只入列表，默认不弹提示/不发声
+  //（只在「短档方向发生变化」时 quiet=false → 才提示/发声，避免 15m×3 刷屏）
+  'jev-signal': { label: 'Jev·判断', side: null, severity: 'info', color: '#a78bfa', icon: '✦' }
 };
 
 // 事件方向（side 优先，否则由 w 推导）——供图标/颜色按方向变化
@@ -134,6 +137,9 @@ export function pushSignalEvent(ev) {
     need: Number.isFinite(+ev.need) ? +ev.need : null,
     text: ev.text ? String(ev.text).slice(0, 160) : '',
     barT: Number.isFinite(+ev.barT) ? +ev.barT : null,
+    // v1.6.62：quiet 必须**保留**——告警管线（pwaShell.installSignalAlertSink）靠它决定“只入列表”还是“也弹提示/发声”。
+    // （旧实现把未知字段丢掉 ⇒ Jev 常规判断也会每次弹提示）
+    quiet: !!ev.quiet,
     src: ev.src || ''
   };
   const key = signalEventKey(item);
@@ -167,7 +173,7 @@ export function signalLine(ev) {
 
 // 仅「事件类」实时信号（不在主图绘制，纯提醒）：面板会与主图标记合并展示
 // v1.6.35：主图标记由 kchartApi.chartSignalEvents() 同源生成；这里只保留不在主图上的提醒事件。
-export const LIVE_ONLY_SIGNAL_KINDS = ['srsi-edge-upper', 'srsi-edge-lower', 'srsi-preview', 'srsi-confirm'];
+export const LIVE_ONLY_SIGNAL_KINDS = ['srsi-edge-upper', 'srsi-edge-lower', 'srsi-preview', 'srsi-confirm', 'jev-signal'];
 
 // 信号列表 HTML（给定事件数组；调用方负责顺序）——空态明确说明「引擎是否在跑」，不再让用户猜
 // v1.6.26：每条 = 时间 → **主图标记符（与图例同形）** → 信号名（按类型着色） → 明细；整行左侧色条按类型着色。

@@ -50,7 +50,8 @@ export const SOUND_KIND_GROUPS = [
   { id: 'trade', name: '真实成交', kinds: ['srsi-open', 'srsi-close', 'alpha-open', 'alpha-close'] },
   { id: 'opportunity', name: '机会点与钩', kinds: ['srsi-cross-buy', 'srsi-cross-sell', 'srsi-hook-gold', 'srsi-hook-death'] },
   { id: 'watch', name: '提醒预演', kinds: ['srsi-edge-upper', 'srsi-edge-lower', 'srsi-confirm', 'srsi-preview'] },
-  { id: 'alpha', name: '基石调仓', kinds: ['alpha-rebal'] }
+  { id: 'alpha', name: '基石调仓', kinds: ['alpha-rebal'] },
+  { id: 'jev', name: 'Jev（LLM）判断', kinds: ['jev-signal'] }
 ];
 
 // 每种信号的默认音效：成交类更醒目、机会点类柔和、预演类默认静音（保留旧行为）
@@ -59,6 +60,9 @@ const DEFAULT_BY_KIND = {
   'srsi-close': 'drop',
   'alpha-open': 'chime2',
   'alpha-close': 'drop',
+  // Jev（LLM）判断：默认**静音**。原因：判断本身是「状态」，15m 频率下一天数十次，默认发声会刷屏；
+  // 只在「短档方向变化」时才会走提示/发声路径（quiet=false），用户也可在设置里给它选个音效。
+  'jev-signal': 'silent',
   'alpha-rebal': 'bell',
   'srsi-edge-upper': 'pulse',
   'srsi-edge-lower': 'pulse',

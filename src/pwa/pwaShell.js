@@ -21,6 +21,7 @@ import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, pre
 import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
 import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory } from '../tech2/jevPanel.js';
+import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange
@@ -1065,9 +1066,13 @@ export function installSignalAlertSink() {
   onSignalEvent((ev) => {
     if (ev) {
       const sev = kindMeta(ev.kind).severity;
-      if (prefOn('toast')) showToast(ev);
-      if (prefOn('sound')) alertSound(ev.kind, sev);   // 声音种类由映射决定（含静音）
-      notifyDesktop(ev);
+      // v1.6.62：quiet 事件（如常规 Jev 判断）**只入列表**，不弹提示/不发声/不桌面通知——
+      // 避免 15m 频率下一天几十次刷屏；“方向变化”的 Jev 事件不 quiet，走完整告警。
+      if (!ev.quiet) {
+        if (prefOn('toast')) showToast(ev);
+        if (prefOn('sound')) alertSound(ev.kind, sev);   // 声音种类由映射决定（含静音）
+        notifyDesktop(ev);
+      }
     }
     renderRecentSignals();
   });
@@ -1232,6 +1237,19 @@ function renderRb() {
   }
 }
 
+// 工具一览用的 Jev 摘要（只读）：已启用 + 最近一笔本币判断的三档方向
+function buildJevBoardInput(sym) {
+  try {
+    const jc = readJevCfg();
+    const latest = (_jevCache.sym === sym ? _jevCache.decisions : []).find(r => r && r.sym === sym) || null;
+    const rows = JEV_HORIZONS.map(h => {
+      const d = latest && latest.dirs ? latest.dirs[h.id] : null;
+      return { id: h.id, name: h.name, label: d ? (d.label || '—') : '—', strength: d && d.strength != null ? d.strength : null };
+    });
+    return { enabled: !!jc.enabled, rows, mode: jc.mode, modeText: (JEV_MODES[jc.mode] || JEV_MODES.off).short };
+  } catch (e) { return null; }
+}
+
 // v1.6.50：工具一览（Tool Board）—— 只列已开启工具，各工具结论原样引用、互不融合（见 toolBoard.js 注释）
 function renderToolBoard(snap) {
   const card = $('pwaToolBoardCard');
@@ -1254,7 +1272,8 @@ function renderToolBoard(snap) {
   } catch (e) { adaptiveSym = null; }
   const model = buildToolBoardModel({
     cfg, alphaSig, adaptive: adaptiveSym, srsi: snap, mainTF: cfg.mainTF,
-    maRel: _lastReadouts.maRel, chan: _lastReadouts.chan, rb: _lastReadouts.rb
+    maRel: _lastReadouts.maRel, chan: _lastReadouts.chan, rb: _lastReadouts.rb,
+    jev: buildJevBoardInput(sym)
   });
   const tfBtn = $('pwaToolBoardTf');
   if (tfBtn) {

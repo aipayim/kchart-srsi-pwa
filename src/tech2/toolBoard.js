@@ -47,7 +47,7 @@ export function toolBoardConflicts(rows) {
 }
 
 // 各工具的静态身份（name 固定，nativeTf 见下：跟随 mainTF 的传 'mainTF' 占位）
-const TOOL_ORDER = ['alpha', 'srsi', 'adaptive', 'maRel', 'rb', 'chan', 'live', 'monitor'];
+const TOOL_ORDER = ['alpha', 'srsi', 'jev', 'adaptive', 'maRel', 'rb', 'chan', 'live', 'monitor'];
 
 // 主入口：构建工具一览模型
 // 入参：
@@ -56,6 +56,7 @@ const TOOL_ORDER = ['alpha', 'srsi', 'adaptive', 'maRel', 'rb', 'chan', 'live', 
 //   maRel/chan/rb  各面板的 readout（{tone, verdict}）或 null
 //   adaptive 自适应组合摘要 {enabled, bucket, wA, wC, alphaW} 或 null
 //   srsi     规则快照 {band} 或 null
+//   jev      Jev 判断摘要 {enabled, rows:[{id,name,label,strength}], mode, text} 或 null
 //   mainTF   主图周期（用于「跟随」类工具与过滤）
 export function buildToolBoardModel(input = {}) {
   const cfg = input.cfg || {};
@@ -78,6 +79,7 @@ export function buildToolBoardModel(input = {}) {
     if (id === 'adaptive' && !cfg.adaptiveOverlay) return;
     if (id === 'live' && !cfg.sigOverlay) return;
     if (id === 'monitor' && !cfg.ruleMonitorOpen) return;
+    if (id === 'jev' && !(input.jev && input.jev.enabled)) return;
     const tf = nativeTf === 'mainTF' ? mainTF : nativeTf;
     rows.push({ id, name, tf, nativeTf: tf, concl: concl || '—', dir: dir || 'none', aligned: tf === mainTF });
   };
@@ -114,6 +116,19 @@ export function buildToolBoardModel(input = {}) {
   // 展示层（无方向）
   push('live', '实盘信号', '成交', '实际成交标记（SRSI 15m · Alpha 1h·日线）', 'none');
   push('monitor', '实时监测', '—', '11 条规则链只读镜像（不产生交易信号）', 'none');
+  // v1.6.62：Jev（LLM）多空判断（短/中/长三档；只显示+本地学习，不接交易）
+  {
+    const jev = input.jev || null;
+    const rs = (jev && Array.isArray(jev.rows)) ? jev.rows : [];
+    const m = (id) => rs.find(x => x.id === id) || null;
+    const fmt = (x) => (x && x.strength != null) ? ((x.label || '—') + ' ' + (Math.round(x.strength) >= 0 ? '+' : '') + Math.round(x.strength)) : '—';
+    const concl = jev && jev.enabled
+      ? ('短 ' + fmt(m('short')) + ' · 中 ' + fmt(m('mid')) + ' · 长 ' + fmt(m('long')) + (jev.modeText ? '（TSEV ' + jev.modeText + '）' : ''))
+      : '未启用（设置 → Jev 判断）';
+    const s = m('short');
+    const dir = (s && s.strength != null) ? (s.strength >= 15 ? 'long' : s.strength <= -15 ? 'short' : 'flat') : 'none';
+    push('jev', '🧠 Jev 判断', '短/中/长', concl, dir);
+  }
 
   rows.sort((a, b) => TOOL_ORDER.indexOf(a.id) - TOOL_ORDER.indexOf(b.id));
   const shown = tfOnly ? rows.filter((r) => r.nativeTf === mainTF) : rows;

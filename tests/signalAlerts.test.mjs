@@ -155,5 +155,19 @@ console.log('\n[signalAlerts: 事件流]');
   ok('清空后为 0', loadSignalEvents().length === 0);
 }
 
+
+// v1.6.62：pushSignalEvent 必须保留 quiet（否则告警管线无法区分「只入列表」与「要提示」）
+(function quietPassthrough() {
+  clearSignalEvents();
+  const e1 = pushSignalEvent({ kind: 'jev-signal', sym: 'BTCUSDT', ts: 1, side: 'short', quiet: false, text: 'x' });
+  const e2 = pushSignalEvent({ kind: 'jev-signal', sym: 'BTCUSDT', ts: 2, side: 'short', barT: 999, quiet: true, text: 'y' });
+  ok('quiet=false 被保留', !!e1 && e1.quiet === false);
+  ok('quiet=true 被保留', !!e2 && e2.quiet === true);
+  const back = recentSignals(10).filter(e => e.kind === 'jev-signal');
+  ok('存盘读回后 quiet 仍在', back.length === 2 && back.some(e => e.quiet === true) && back.some(e => e.quiet === false));
+  ok('未传 quiet 视为 false（默认弹提示，向后兼容）', (pushSignalEvent({ kind: 'alpha-close', sym: 'X', ts: 3 }) || {}).quiet === false);
+  clearSignalEvents();
+})();
+
 console.log(`\n=== signalAlerts: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);

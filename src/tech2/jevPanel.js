@@ -370,7 +370,9 @@ export function renderJevHtml(m) {
       '<span class="jev-dim">同一前向窗口内的相邻判断高度重叠（不算独立），所以每档约 ' +
       ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快。</span></div>' +
     '<div>5. <b>为什么 Jev 不能像经典因子那样回补历史</b>：历史上没有 Jev 的判断记录；且拿历史状态去问，模型训练数据已含此后行情 → 前视污染，所以只能前向累积。</div>' +
-    '<div>6. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
+    '<div>6. <b>提示与声音</b>：每次判断都会进「<b>最近信号</b>」列表；但只有<b>短档方向发生变化</b>时才弹提示条/发声' +
+      '（避免 15m 频率刷屏）。Jev 的默认音效是<b>静音</b>，可在「设置 → 通知与外观 → 分信号音效 → Jev（LLM）判断」里换成其它音效。</div>' +
+    '<div>7. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
     '</div></details>';
   return head + rel + fill + driver + sliders + rows + hist + howto + foot;
 }

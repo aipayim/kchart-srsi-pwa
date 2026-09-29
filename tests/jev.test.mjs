@@ -10,8 +10,11 @@ import {
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
-import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors } from '../src/pwa/jevClient.js';
+import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
+import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
+import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
+import { SOUND_KIND_GROUPS, ALL_SIGNAL_KINDS, defaultSoundFor } from '../src/pwa/signalSounds.js';
 import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
 
 let passed = 0, failed = 0;
@@ -508,7 +511,8 @@ async function schedTest() {
   }));
   // v1.6.61：不再显示 localLoop 的**全局**样本数（那是所有币合计，放在单币面板下会让人以为串味）
   ok('面板不再出现全局「经典纪律因子」样本数', hFam.indexOf('经典纪律因子') < 0 && hFam.indexOf('12029') < 0);
-  ok('面板带「怎么看」折叠说明（6 条）', hFam.indexOf('jev-howto') > 0 && hFam.indexOf('这个面板怎么看') > 0);
+  ok('面板带「怎么看」折叠说明', hFam.indexOf('jev-howto') > 0 && hFam.indexOf('这个面板怎么看') > 0);
+  ok('说明里写清提示/声音规则', hFam.indexOf('短档方向发生变化') > 0 && hFam.indexOf('静音') > 0);
   ok('说明里写清 50 个独立样本门槛', hFam.indexOf('50 个独立样本') > 0);
   ok('说明里写清提高频率不会加快生效', hFam.indexOf('不会') > 0 && hFam.indexOf('独立') > 0);
   ok('说明里写清不能回补历史的原因', hFam.indexOf('前视污染') > 0);
@@ -653,6 +657,49 @@ async function schedTest() {
   ok('planMaturation：在 eligible → 正常喂样', p2.toFeed.length === 1 && p2.toFeed[0].hit === true);
   const p3 = planMaturation(mk(base), evfn);
   ok('planMaturation：不传 eligible 时全部允许（向后兼容）', p3.toFeed.length === 1);
+})();
+
+// ============ 信号流接入（v1.6.62：工具一览 / 最近信号 / 提示与声音） ============
+(function signalFlow() {
+  // 注册表
+  ok('SIGNAL_KINDS 注册了 jev-signal（severity=info）', !!SIGNAL_KINDS['jev-signal'] && SIGNAL_KINDS['jev-signal'].severity === 'info');
+  ok('jev-signal 进入 LIVE_ONLY（否则不会出现在「最近信号」列表）', LIVE_ONLY_SIGNAL_KINDS.indexOf('jev-signal') >= 0);
+  ok('音效分组覆盖 jev-signal（与 ALL_SIGNAL_KINDS 一一对应）', SOUND_KIND_GROUPS.some(g => g.kinds.indexOf('jev-signal') >= 0));
+  ok('ALL_SIGNAL_KINDS 含 jev-signal（无重复）', ALL_SIGNAL_KINDS.filter(k => k === 'jev-signal').length === 1);
+  ok('Jev 默认音效 = 静音（防刷屏）', defaultSoundFor('jev-signal', 'info') === 'silent');
+
+  // 事件构造（纯函数）
+  const ts = 1700000000000;
+  const rec = { sym: 'BTCUSDT', ts, driver: '技术面', dirs: { short: { strength: -41, label: '偏空' }, mid: { strength: -20, label: '偏空' }, long: { strength: 3, label: '中性' } } };
+  const ev = buildJevSignalEvent(rec, { prevSide: 'long', freq: '15m' });
+  ok('buildJevSignalEvent：kind/sym/side 正确（side 取短档）', ev.kind === 'jev-signal' && ev.sym === 'BTCUSDT' && ev.side === 'short');
+  ok('buildJevSignalEvent：barT 按频率分桶（15m 去重键）', ev.barT === Math.floor(ts / 900000) * 900000);
+  ok('buildJevSignalEvent：text 含三档与驱动', /短 偏空 -41/.test(ev.text) && /中 偏空 -20/.test(ev.text) && /长 中性 \+3/.test(ev.text) && /驱动 技术面/.test(ev.text));
+  ok('⭐ 方向变化 → quiet=false（弹提示/发声）', ev.quiet === false);
+  ok('方向未变 → quiet=true（只入列表）', buildJevSignalEvent(rec, { prevSide: 'short', freq: '15m' }).quiet === true);
+  ok('首次判断（无 prevSide）→ quiet=false', buildJevSignalEvent(rec, { freq: '15m' }).quiet === false);
+  ok('短档中性 → side=null 且 quiet=true', (() => { const e = buildJevSignalEvent({ sym: 'X', ts, dirs: { short: { strength: 5, label: '中性' } } }, { prevSide: 'long' }); return e.side === null && e.quiet === true; })());
+  ok('无 dirs → null（不入流）', buildJevSignalEvent({ sym: 'X', ts }) === null && buildJevSignalEvent(null) === null);
+  ok('事件可被 signalEventKey 去重（同 barT 同 kind 同 side 同键）', signalEventKey(ev) === signalEventKey(buildJevSignalEvent(rec, { prevSide: 'long', freq: '15m' })));
+  // ⭐ quiet 必须能穿过 pushSignalEvent 的归一化（否则告警管线永远看不到它 → 每次弹提示）
+  ok('quiet 语义：首次/翻转=false，同向/中性=true', (() => {
+    const mk = (st, ps) => buildJevSignalEvent({ sym: 'BTCUSDT', ts: 1700000000000, dirs: { short: { strength: st, label: st < 0 ? '偏空' : st > 0 ? '偏多' : '中性' } } }, { prevSide: ps, freq: 'manual' });
+    return mk(-40, undefined).quiet === false && mk(-30, 'short').quiet === true && mk(50, 'short').quiet === false && mk(3, 'long').quiet === true;
+  })());
+
+  // 工具一览
+  const cfg = { toolBoardTfOnly: false, mainTF: '15m' };
+  const base = { cfg, alphaSig: null, srsi: null, adaptive: null, maRel: null, chan: null, rb: null };
+  const off = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: false, rows: [] } }));
+  ok('未启用 Jev → 工具一览不出现该行', !off.allRows.some(r => r.id === 'jev'));
+  const on = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: true, mode: 'learn', modeText: '只学', rows: [{ id: 'short', strength: -41, label: '偏空' }, { id: 'mid', strength: -20, label: '偏空' }, { id: 'long', strength: 3, label: '中性' }] } }));
+  const row = on.allRows.find(r => r.id === 'jev');
+  ok('启用后出现「🧠 Jev 判断」行（周期=短/中/长）', !!row && row.name.indexOf('Jev') > 0 && row.tf === '短/中/长');
+  ok('工具一览结论原样引用三档（带 TSEV 模式）', /短 偏空 -41/.test(row.concl) && /中 偏空 -20/.test(row.concl) && /TSEV 只学/.test(row.concl));
+  ok('工具一览方向取短档（偏空）', row.dir === 'short');
+  const onFlat = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: true, rows: [{ id: 'short', strength: 4, label: '中性' }] } }));
+  ok('短档中性 → 工具一览标为中/无方向', onFlat.allRows.find(r => r.id === 'jev').dir === 'none' || onFlat.allRows.find(r => r.id === 'jev').dir === 'flat');
+  ok('工具一览渲染包含 Jev 行', renderToolBoardHtml(on).indexOf('Jev 判断') > 0);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============

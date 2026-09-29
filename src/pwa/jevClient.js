@@ -15,6 +15,7 @@ import { winLossByAtr, atrClose, volumeDivergence, supportResistance } from '../
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_DAYS } from '../engine/jevState.js';
 import { fetchJevFlow, fetchJevNews } from './data.js';
 import { newsSentiment } from '../engine/indicators.js';
+import { pushSignalEvent } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
 
 const LSK = 'pwa_jev';
@@ -481,6 +482,7 @@ export async function runJevOnce(opts = {}) {
     }
     await putDecision(rec);
     await trimDecisions();
+    emitJevSignal(rec);   // 入「最近信号」列表（方向变化时才弹提示/发声）
     _status.lastRun = Date.now(); _status.lastErr = parsed.ok ? null : parsed.err;
     const res = { ok: parsed.ok, rec, parsed, stateText, missing: merged.reduce((a, m) => a.concat(m.missing), []) };
     _status.lastResult = res;
@@ -659,6 +661,58 @@ export async function matureDecisions() {
     await putDecision(rec);
   }
   return { matured, fed };
+}
+
+/** 频率字符串 → 毫秒（用于 barT 分桶去重） */
+const FREQ_BUCKET_MS = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000, manual: 900000 };
+
+/**
+ * 纯函数：由一条判断记录构造「信号事件」（入「最近信号」列表 + 告警管线）。
+ * `quiet=true` 的事件只进列表（不弹提示、不发声、不桌面通知）——避免 15m 频率下一天几十次刷屏；
+ * 只有「短档方向发生变化」（或首次出现方向）时 `quiet=false` → 才提示/发声。
+ * @param {Object} rec 决策记录
+ * @param {Object} opts { prevSide, bucketMs }
+ */
+export function buildJevSignalEvent(rec, opts = {}) {
+  if (!rec || !rec.sym || !rec.dirs) return null;
+  const sideOf = (d) => (d && d.strength != null)
+    ? (d.strength >= JEV_SIDE_THR ? 'long' : d.strength <= -JEV_SIDE_THR ? 'short' : null)
+    : null;
+  const parts = JEV_HORIZON_IDS.filter(h => rec.dirs[h] && rec.dirs[h].strength != null).map(h => {
+    const d = rec.dirs[h];
+    const nm = h === 'short' ? '短' : h === 'mid' ? '中' : '长';
+    return nm + ' ' + (d.label || '—') + ' ' + (Math.round(d.strength) >= 0 ? '+' : '') + Math.round(d.strength);
+  });
+  if (!parts.length) return null;
+  const side = sideOf(rec.dirs.short);
+  const bucketMs = opts.bucketMs || FREQ_BUCKET_MS[opts.freq] || 900000;
+  const prev = opts.prevSide == null ? undefined : opts.prevSide;
+  const changed = (side != null) && (side !== prev);
+  return {
+    kind: 'jev-signal',
+    sym: rec.sym,
+    ts: rec.ts,
+    barT: Math.floor(rec.ts / bucketMs) * bucketMs,
+    side,
+    text: parts.join(' · ') + (rec.driver ? ' · 驱动 ' + rec.driver : ''),
+    quiet: !changed
+  };
+}
+
+/**
+ * 把一条判断推入信号流（列表 + 告警管线）。会持久化 `cfg.lastJevSide` 供下次判定「方向是否变化」。
+ * 只做显示/提醒，绝不触发交易。
+ */
+export function emitJevSignal(rec) {
+  try {
+    const cfg = readJevCfg();
+    if (!cfg.enabled) return null;
+    const ev = buildJevSignalEvent(rec, { prevSide: cfg.lastJevSide, freq: cfg.freq });
+    if (!ev) return null;
+    const out = pushSignalEvent(ev);
+    if (ev.side) { cfg.lastJevSide = ev.side; writeJevCfg(cfg); }
+    return out;
+  } catch (e) { return null; }
 }
 
 /** 分档统计（命中率/平均盈亏）+ 本机 TSEV 已学到的 jev 因子权重 */
