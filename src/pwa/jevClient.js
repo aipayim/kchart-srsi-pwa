@@ -591,8 +591,10 @@ export function jevStats(decisions, sym) {
     if (b.n) { b.winRate = b.wins / b.n; b.avgPnl = b.sumPnl / b.n; }
     b.avgConf = b.n ? b.conf / b.n : null;
   }
-  // 本机 TSEV：已学到的 jev 权重（两个方向分别看）
+  // 本机 TSEV：已学到的 jev 权重（两个方向分别看）+ 未达门槛时的样本进度
   // 注意 localLoop.getWeights() 返回 { perSym:{ [sym]: {'name|cond|side':w} }, n }（不接受参数）
+  out.progress = {};
+  for (const h of JEV_HORIZON_IDS) out.progress[h] = { long: null, short: null };
   try {
     const local = globalThis.__localTsev;
     if (local && local.getWeights) {
@@ -605,9 +607,18 @@ export function jevStats(decisions, sym) {
       }
       if (local.debugTsev) {
         const dbg = local.debugTsev(sym) || [];
-        out.fedN = dbg.filter(x => String(x.key || '').indexOf('jev|') === 0).reduce((a, x) => a + ((x.n || 0) | 0), 0);
+        const jevRows = dbg.filter(x => String(x.key || '').indexOf('jev|') === 0);
+        out.fedN = jevRows.reduce((a, x) => a + ((x.n || 0) | 0), 0);
+        // 样本进度：面板用它回答「怎样才能生效」（门槛 LOCAL_FACTOR_MIN=50）
+        for (const x of jevRows) {
+          const seg = String(x.key).split('|');   // jev | horizon | side
+          const h = seg[1], sd = Number(seg[2]);
+          if (!out.progress[h]) continue;
+          out.progress[h][sd === 1 ? 'long' : 'short'] = { n: x.n || 0, p: x.p != null ? x.p : null, w: x.w != null ? x.w : null, passed: !!x.passed };
+        }
       }
       out.weightsSource = 'local';
+      out.minSample = 50;
     }
   } catch (e) { /* 学习信息缺失不影响统计 */ }
   // 样本数（未成熟样本数）

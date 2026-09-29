@@ -254,12 +254,22 @@ async function fetchTests2() {
 
 // ============ 面板模型 ============
 (function panel() {
-  ok('sliderView 有 Jev → source=jev', sliderView({ strength: 74, conf: 0.59 }, { long: null, short: null }).source === 'jev');
-  const sv = sliderView({ strength: 74, conf: 0.59 }, null);
-  ok('sliderView 值 = Jev 强度', sv.value === 74 && sv.tone === 'long' && sv.tick === 0.59);
-  const sv2 = sliderView(null, { long: 0.8, short: -0.2 });
+  ok('sliderView apply+有 Jev → source=jev', sliderView({ strength: 74, conf: 0.59 }, { long: null, short: null }, 'apply').source === 'jev');
+  const sv = sliderView({ strength: 74, conf: 0.59 }, null, 'apply');
+  ok('sliderView apply → 值 = Jev 强度', sv.value === 74 && sv.tone === 'long' && sv.tick === 0.59 && sv.affecting === true && sv.ghostValue === null);
+  const sv2 = sliderView(null, { long: 0.8, short: -0.2 }, 'apply');
   ok('sliderView 无 Jev → 本机 TSEV 偏置', sv2.source === 'tsev' && sv2.value === Math.round((0.8 - (-0.2)) / 1.5 * 100));
-  ok('sliderView 全无 → 0/none', sliderView(null, null).source === 'none' && sliderView(null, null).value === 0);
+  ok('sliderView 全无 → 0/none', sliderView(null, null, 'apply').source === 'none' && sliderView(null, null, 'apply').value === 0);
+
+  // 三态开关必须真实生效（不能是装饰性设置）：learn 下 Jev 不计入强度
+  const lv = sliderView({ strength: -41, conf: 0.85 }, null, 'learn');
+  ok('sliderView learn：Jev 不计入强度（value 0 / source none）', lv.value === 0 && lv.source === 'none' && lv.affecting === false);
+  ok('sliderView learn：Jev 位置以 ghost 标记保留', lv.ghostValue === -41);
+  const lv2 = sliderView({ strength: -41, conf: 0.85 }, { long: 0.8, short: -0.2 }, 'learn');
+  ok('sliderView learn + 有 TSEV 权重 → 值 = TSEV 偏置', lv2.value === 67 && lv2.source === 'tsev' && lv2.ghostValue === -41);
+  const ov = sliderView({ strength: -41, conf: 0.85 }, null, 'off');
+  ok('sliderView off 行为同 learn', ov.source === 'none' && ov.ghostValue === -41);
+  ok('sliderView 三态差异可见（apply≠learn）', sliderView({ strength: -41 }, null, 'apply').value !== sliderView({ strength: -41 }, null, 'learn').value);
 
   ok('jevTsevRelation 同向', jevTsevRelation(60, { long: 0.5, short: null }).relation === 'agree');
   ok('jevTsevRelation 相反', jevTsevRelation(60, { long: -0.5, short: null }).relation === 'differ');
@@ -347,13 +357,16 @@ async function fetchTests2() {
   globalThis.__localTsev = {
     // localLoop.getWeights() 真实形状：{ perSym:{[sym]:{...}}, n }（不接受参数）
     getWeights: () => ({ perSym: { BTCUSDT: { 'jev|short|1': 1.099, 'jev|short|-1': -1.099 } }, n: 120 }),
-    debugTsev: (sym) => (sym === 'BTCUSDT' ? [{ key: 'jev|short|1', n: 55 }, { key: 'jev|short|-1', n: 55 }] : [])
+    debugTsev: (sym) => (sym === 'BTCUSDT' ? [{ key: 'jev|short|1', n: 55, p: 0.75 }, { key: 'jev|short|-1', n: 55, p: 0.25 }] : [])
   };
   try {
     const st = jevStats([{ sym: 'BTCUSDT', matured: false, dirs: {}, outcomes: {} }], 'BTCUSDT');
     ok('jevStats 从 getWeights().perSym[sym] 取权重', st.learned.short.long === 1.099 && st.learned.short.short === -1.099);
     ok('jevStats 未学到的档为 null', st.learned.mid.long === null && st.learned.long.short === null);
     ok('jevStats fedN 汇总 jev 样本数', st.fedN === 110);
+    ok('jevStats 解析样本进度（n/命中率）供面板显示', st.progress.short.long.n === 55 && near(st.progress.short.long.p, 0.75) && st.progress.short.short.n === 55);
+    ok('jevStats 未提供的档 progress 为 null', st.progress.mid.long === null && st.progress.long.short === null);
+    ok('jevStats minSample=50（与 TSEV 门槛一致）', st.minSample === 50);
     ok('jevStats weightsSource=local', st.weightsSource === 'local');
     const stNoSym = jevStats([{ sym: 'X', matured: false, dirs: {}, outcomes: {} }], 'X');
     ok('jevStats 其它币无权重 → null', stNoSym.learned.short.long === null);
@@ -466,6 +479,39 @@ async function schedTest() {
     delete globalThis.localStorage;
   }
 }
+
+// ============ 面板：数据填充度 + 三态开关可见差异 + 样本进度 + 设置卡（v1.6.55/57） ============
+(function panelFill() {
+  const m = buildJevModel({
+    sym: 'BTCUSDT', cfg: { enabled: true, mode: 'learn', freq: '1h' }, hasToken: true,
+    latest: null, stats: { byHorizon: {}, learned: {} },
+    fill: { text: '盘口 5/5 · 新闻 ✓', flow: { have: 5, total: 5, missing: [] } }, now: Date.now(), freqMs: 3600000
+  });
+  const h = renderJevHtml(m);
+  ok('面板显示数据填充度（真实时）', h.indexOf('盘口 5/5 · 新闻 ✓') > 0);
+  const h2 = renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} }, fill: null }));
+  ok('面板无填充度时提示拉不到不影响判断', h2.indexOf('不影响 Jev 判断') > 0);
+
+  const s = renderJevSetHtml({ enabled: true, horizons: { short: true }, groups: JEV_DEFAULT_GROUPS, price: {}, spend: {} }, { hasToken: true });
+  ok('设置卡含 Token 即时反馈行', s.indexOf('id="jevTokMsg"') > 0 && s.indexOf('已保存（AES-GCM') > 0);
+  ok('设置卡含新闻源输入（带 {url} 说明）', s.indexOf('id="jevNews"') > 0 && s.indexOf('{url}') > 0);
+  ok('设置卡说明 localhost 仅本机可用', s.indexOf('localhost 只指访问者自己') > 0);
+  ok('设置卡未保存 Token 时提示未填写', renderJevSetHtml({ horizons: {}, groups: {}, price: {}, spend: {} }, { hasToken: false }).indexOf('未填写 Token') > 0);
+
+  // 三态开关的可见差异 + 样本进度（回答「怎样才能生效」）
+  const mk = (mode) => buildJevModel({
+    sym: 'BTCUSDT', cfg: { enabled: true, mode, freq: '15m' }, hasToken: true,
+    latest: { ts: Date.now(), dirs: { short: { strength: -41, conf: 0.85, label: '偏空' } }, driver: '技术面' },
+    stats: { byHorizon: {}, learned: {}, progress: { short: { long: { n: 1, p: 1 }, short: null } }, n: 1, pending: 1, minSample: 50 },
+    now: Date.now(), freqMs: 900000
+  });
+  const hApply = renderJevHtml(mk('apply'));
+  const hLearn = renderJevHtml(mk('learn'));
+  ok('apply 面板写「已计入」且无 ghost', hApply.indexOf('（已计入）') > 0 && hApply.indexOf('jev-sld-ghost') < 0);
+  ok('learn 面板写「未计入」且带 ghost 标记', hLearn.indexOf('未计入') > 0 && hLearn.indexOf('jev-sld-ghost') > 0);
+  ok('三态提示语随模式变化', hApply.indexOf('「学并影响」') > 0 && hLearn.indexOf('「只学不影响」') > 0 && renderJevHtml(mk('off')).indexOf('「关」') > 0);
+  ok('未达门槛时显示样本进度 n/50', hLearn.indexOf('样本 看多 1/50（命中 100%） · 看空 0/50') > 0);
+})();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============
 (function cfg() {

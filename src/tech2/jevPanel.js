@@ -31,24 +31,27 @@ const fmtAgo = (ms) => {
 const toneOf = (v) => (v == null ? 'flat' : v >= 15 ? 'long' : v <= -15 ? 'short' : 'flat');
 
 /**
- * 滑块视图（纯函数）：
- *  - 有 Jev 读数 → 值 = Jev 强度（source 'jev'），tick = 置信度
- *  - 无 Jev 读数但有本机 TSEV 权重 → 值 = 已学偏置 (wLong − wShort) 归一（source 'tsev'）
- *    → 这就是「关掉 Jev 后权重仍在本地生效/可见」的体现
- *  - 都没有 → 0（source 'none'）
+ * 滑块视图（纯函数）：三态开关必须真实生效（不能是装饰性）：
+ *  - mode='apply'（学并影响）+ 有 Jev 读数 → 值 = **Jev 强度**（source 'jev'，表示「已计入」），tick = 置信度
+ *  - mode='learn'（只学不影响）→ 值 = **仅本机 TSEV 已学偏置**（source 'tsev'）；无权重则 0/none
+ *    → 切「只学」↔「学并影响」，滑块会从 TSEV 偏置跳到 Jev 强度（差异可见）
+ *  - mode='off' → 同 learn（不记录新样本）
+ * 本机 TSEV 偏置 = (wLong − wShort) 归一 → 这就是「关掉 Jev 后权重仍在本地生效/可见」的体现
  */
-export function sliderView(jev, tsev) {
+export function sliderView(jev, tsev, mode) {
   const wl = (tsev && isFinite(tsev.long)) ? tsev.long : null;
   const ws = (tsev && isFinite(tsev.short)) ? tsev.short : null;
-  if (jev && jev.strength != null) {
-    return { value: Math.max(-100, Math.min(100, Math.round(jev.strength))), source: 'jev', tick: jev.conf != null ? jev.conf : null, tone: toneOf(jev.strength) };
+  const affecting = (mode || 'off') === 'apply';
+  const js = (jev && jev.strength != null) ? Math.max(-100, Math.min(100, Math.round(jev.strength))) : null;
+  if (affecting && js != null) {
+    return { value: js, source: 'jev', tick: jev.conf != null ? jev.conf : null, tone: toneOf(js), affecting: true, ghostValue: null };
   }
   if (wl != null || ws != null) {
     const bias = (wl || 0) - (ws || 0);
     const v = Math.max(-100, Math.min(100, Math.round(bias / 1.5 * 100)));
-    return { value: v, source: 'tsev', tick: null, tone: toneOf(v) };
+    return { value: v, source: 'tsev', tick: null, tone: toneOf(v), affecting: false, ghostValue: js };
   }
-  return { value: 0, source: 'none', tick: null, tone: 'flat' };
+  return { value: 0, source: 'none', tick: null, tone: 'flat', affecting: false, ghostValue: js };
 }
 
 /** 是否过期（超过 3× 调用间隔视为陈旧） */
@@ -84,20 +87,21 @@ export function buildJevModel(inp) {
     const d = latest && latest.dirs ? latest.dirs[h.id] : null;
     const strength = d && d.strength != null ? d.strength : null;
     const tsev = (stats.learned && stats.learned[h.id]) ? stats.learned[h.id] : { long: null, short: null };
+    const prog = (stats.progress && stats.progress[h.id]) ? stats.progress[h.id] : { long: null, short: null };
     const rel = jevTsevRelation(strength, tsev);
     if (rel.relation === 'agree') agree++;
     else if (rel.relation === 'differ') differ++;
     else if (rel.relation === 'nodata') nodata++;
     else na++;
     const b = (stats.byHorizon && stats.byHorizon[h.id]) || {};
-    const slider = sliderView(d ? { strength, conf: d.conf } : null, tsev);
+    const slider = sliderView(d ? { strength, conf: d.conf } : null, tsev, cfg.mode);
     rows.push({
       id: h.id, name: h.name, desc: h.desc,
       stale: isStale(latest ? latest.ts : null, it.freqMs, now),
       strength, label: d ? (d.label || '未知') : '—',
       conf: d && d.conf != null ? d.conf : null,
       type: d ? d.type : null,
-      tsev, rel, slider,
+      tsev, rel, slider, prog,
       hit: { n: b.n || 0, wins: b.wins || 0, losses: b.losses || 0, winRate: b.winRate != null ? b.winRate : null, avgPnl: b.avgPnl != null ? b.avgPnl : null, expired: b.expired || 0 }
     });
   }
@@ -120,6 +124,7 @@ export function buildJevModel(inp) {
     stats,
     pending: stats.pending || 0,
     total: stats.n || 0,
+    minSample: stats.minSample || 50,
     fill: it.fill || null,
     flow: it.flow || null,
     spend: { calls: spend.calls || 0, inTok: spend.inTok || 0, outTok: spend.outTok || 0, cost: spend.cost || 0 },
@@ -140,34 +145,54 @@ function sliderHtml(r) {
   const half = Math.min(50, Math.abs(v) / 2);
   const left = v >= 0 ? 50 : 50 - half;
   const tick = r.slider.tick != null ? Math.max(0, Math.min(1, r.slider.tick)) : null;
-  const srcTxt = r.slider.source === 'jev' ? 'Jev ' + (v >= 0 ? '+' : '') + v
-    : r.slider.source === 'tsev' ? '本机TSEV偏置 ' + (v >= 0 ? '+' : '') + v
-      : '无数据';
+  const srcTxt = r.slider.source === 'jev' ? 'Jev ' + (v >= 0 ? '+' : '') + v + '（已计入）'
+    : r.slider.source === 'tsev' ? '本机TSEV偏置 ' + (v >= 0 ? '+' : '') + v + (r.slider.ghostValue != null ? '（Jev ' + (r.slider.ghostValue >= 0 ? '+' : '') + r.slider.ghostValue + ' 未计入）' : '')
+      : (r.slider.ghostValue != null ? '本机TSEV 无权重（Jev ' + (r.slider.ghostValue >= 0 ? '+' : '') + r.slider.ghostValue + ' 未计入）' : '无数据');
+  const srcTip = r.slider.source === 'jev' ? '来源：Jev 判断强度（当前开「学并影响」→ 已计入强度）'
+    : r.slider.source === 'tsev' ? '来源：本机 TSEV 已学到的 jev 因子权重（「只学不影响」时只看它；Jev 关掉后依然保留）；细线 = Jev 当前位置（仅展示）'
+      : '暂无数据（需先有 Jev 读数，或累积到 50 条同向样本）；细线 = Jev 当前位置（未计入）';
+  const ghost = r.slider.ghostValue != null
+    ? '<i class="jev-sld-ghost" style="left:' + (50 + Math.max(-50, Math.min(50, r.slider.ghostValue / 2))) + '%" title="Jev 位置 ' + r.slider.ghostValue + '（未计入强度）"></i>'
+    : '';
   return '<div class="jev-slider">' +
     '<span class="jev-sld-name">' + r.name + '</span>' +
     '<span class="jev-sld-track">' +
       '<i class="jev-sld-zero"></i>' +
       '<i class="jev-sld-fill ' + r.slider.tone + '" style="left:' + left + '%;width:' + half + '%"></i>' +
+      ghost +
       (tick != null ? '<i class="jev-sld-tick" style="left:' + (50 + (tick * 50)) + '%" title="置信度刻度 ' + Math.round(tick * 100) + '%"></i>' : '') +
     '</span>' +
     '<span class="jev-sld-val ' + r.slider.tone + '">' + srcTxt + '</span>' +
-    '<span class="jev-sld-src" title="' + (r.slider.source === 'jev' ? '来源：Jev 判断强度' : r.slider.source === 'tsev' ? '来源：本机 TSEV 已学到的 jev 因子权重（Jev 关掉后依然保留）' : '暂无数据') + '">' + (r.slider.source === 'jev' ? 'J' : r.slider.source === 'tsev' ? 'T' : '–') + '</span>' +
+    '<span class="jev-sld-src" title="' + srcTip + '">' + (r.slider.source === 'jev' ? 'J' : r.slider.source === 'tsev' ? 'T' : '–') + '</span>' +
   '</div>';
 }
 
-function rowHtml(r) {
+// 「本机 TSEV」行：有权重→显示 w；未达门槛→显示样本进度 n/50（回答「怎样才能生效」）
+function tsevLineHtml(r, minSample) {
+  const t = r.tsev || {};
+  const p = r.prog || {};
+  const min = minSample || 50;
+  if (t.long != null || t.short != null) {
+    return '本机 TSEV: w<sub>多</sub>' + (t.long != null ? t.long.toFixed(2) : '—') + ' / w<sub>空</sub>' + (t.short != null ? t.short.toFixed(2) : '—');
+  }
+  const parts = [];
+  for (const [side, label] of [['long', '看多'], ['short', '看空']]) {
+    const x = p[side];
+    const n = (x && x.n) || 0;
+    parts.push(label + ' ' + n + '/' + min + (x && x.p != null ? '（命中 ' + Math.round(x.p * 100) + '%）' : ''));
+  }
+  return '本机 TSEV: 未达训练门槛 · 样本 ' + parts.join(' · ');
+}
+
+function rowHtml(r, minSample) {
   const s = r.strength;
   const tone = toneOf(s);
   const confTxt = r.conf != null ? '置信 ' + Math.round(r.conf * 100) + '%' : '置信 —';
-  const t = r.tsev || {};
-  const wTxt = (t.long != null || t.short != null)
-    ? ('w<sub>多</sub>' + (t.long != null ? t.long.toFixed(2) : '—') + ' / w<sub>空</sub>' + (t.short != null ? t.short.toFixed(2) : '—'))
-    : '（未达训练门槛）';
   return '<div class="jev-row' + (r.stale ? ' stale' : '') + '">' +
     '<div class="jev-row-h"><span class="jev-hname">' + r.name + '线</span>' +
       '<span class="jev-dir ' + tone + '">' + (s == null ? '—' : r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s)) + '</span>' +
       '<span class="jev-conf">' + confTxt + '</span>' + relBadge(r.rel) + '</div>' +
-    '<div class="jev-row-b">' + r.rel.text + '<br><span class="jev-tsev">本机 TSEV: ' + wTxt + '</span>' +
+    '<div class="jev-row-b">' + r.rel.text + '<br><span class="jev-tsev">' + tsevLineHtml(r, minSample) + '</span>' +
       (r.hit.n ? ' · 历史命中 ' + Math.round(r.hit.winRate * 100) + '%(' + r.hit.wins + '/' + r.hit.n + ')' + (r.hit.avgPnl != null ? ' · 均 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 暂无已判定样本') +
     '</div></div>';
 }
@@ -178,10 +203,15 @@ export function renderJevHtml(m) {
   const modeCls = m.mode === 'apply' ? 'ok' : m.mode === 'learn' ? 'warn' : 'mute';
   const head = '<div class="jev-head">' +
     '<span class="jev-pill ' + (m.enabled ? 'ok' : 'mute') + '">' + (m.enabled ? '● 已启用' : '○ 未启用') + '</span>' +
-    '<span class="jev-pill ' + modeCls + '" title="TSEV 学 Jev 三态">TSEV ' + m.modeText + '</span>' +
+    '<span class="jev-pill ' + modeCls + '" title="TSEV 学 Jev 三态：关／只学不影响（只记录样本，强度只看本机 TSEV）／学并影响（Jev 计入强度）">TSEV ' + m.modeText + '</span>' +
     '<span class="jev-pill mute" title="调用频率">' + m.freq + '</span>' +
     '<span class="jev-dim">上次 ' + (m.latestTs ? m.latestAgo + '（' + fmtTime(m.latestTs) + '）' : '从未调用') + '</span>' +
-  '</div>';
+  '</div>' +
+  '<div class="jev-modehint">' + (m.mode === 'apply'
+    ? '「学并影响」：下方滑块 = Jev 强度（已计入）'
+    : m.mode === 'learn'
+      ? '「只学不影响」：滑块只看本机 TSEV（Jev 读数仅展示、不计入）'
+      : '「关」：不记录样本；滑块只看本机 TSEV') + '</div>';
 
   const rel = '<div class="jev-rel">Jev × TSEV 关系：' +
     '<b class="up">同向 ' + m.relation.agree + '</b> · <b class="down">相反 ' + m.relation.differ + '</b> · ' +
@@ -196,7 +226,7 @@ export function renderJevHtml(m) {
 
   const sliders = '<div class="jev-sliders">' + m.rows.map(sliderHtml).join('') + '</div>';
 
-  const rows = m.rows.map(rowHtml).join('');
+  const rows = m.rows.map(r => rowHtml(r, m.minSample)).join('');
 
   const foot = '<div class="jev-foot">' +
     '样本 ' + m.total + ' 条（待回填 ' + m.pending + '）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : ' · 费用 $0（本地网关）') +
