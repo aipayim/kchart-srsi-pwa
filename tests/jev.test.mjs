@@ -3,10 +3,10 @@
 //       决策端点 URL 与调用（mock fetch：200/400/网络错误）/ 形状探测 / 面板模型（滑块三态、关系判定、单测渲染）/
 //       到期判定 evalDecisionHorizon（多空 TP·SL、未到期、K线滚出窗口）/ jevStats 统计。
 import {
-  JEV_LEVELS, JEV_HORIZONS, JEV_DEFAULT_GROUPS, JEV_MODES,
+  JEV_LEVELS, JEV_HORIZONS, JEV_HORIZON_IDS, JEV_HORIZON_NAMES, JEV_DEFAULT_GROUPS, JEV_MODES, JEV_SCALP_BARS,
   rsiZone, macdState, maState, volState, candlePattern, srsiBandText, atrBandText,
   resonanceText, timeWindow, buildJevState, renderTemplate, buildJevBody,
-  parseJevResponse, jevSamplesFor, scoreToStrength, strengthLabel, jevSide
+  parseJevResponse, jevSamplesFor, scoreToStrength, strengthLabel, jevSide, calibrateScalpBars
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
@@ -15,7 +15,7 @@ import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSet
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
 import { SOUND_KIND_GROUPS, ALL_SIGNAL_KINDS, defaultSoundFor } from '../src/pwa/signalSounds.js';
-import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg, previewDecisionHorizon } from '../src/pwa/jevClient.js';
+import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg, previewDecisionHorizon, scalpBarsNow, setScalpBars, scalpBarsSuggestion } from '../src/pwa/jevClient.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; } else { failed++; console.log('FAIL:', name); } }
@@ -123,11 +123,12 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
 
   const b = buildJevBody({ model: 'jev-latest', enabled: { short: true, mid: false, long: true } }, 'STATE');
   ok('buildJevBody 只含已勾选档', !!b.questions.short && !b.questions.mid && !!b.questions.long);
+  ok('⭐ buildJevBody 包含超短档（scalp，同一调用 0 额外请求）', !!b.questions.scalp && b.questions.scalp.type === 'score' && b.questions.scalp.criteria.length === JEV_LEVELS.length);
   ok('buildJevBody score criteria = 5 档', Array.isArray(b.questions.short.criteria) && b.questions.short.criteria.length === JEV_LEVELS.length);
   ok('buildJevBody 含 driver choice', b.questions.driver.type === 'choice' && !!b.questions.driver.criteria.技术面);
   ok('buildJevBody state 原样传入', b.state === 'STATE');
   let e2 = false;
-  try { buildJevBody({ enabled: { short: false, mid: false, long: false } }, 'S'); } catch (e) { e2 = e.message.indexOf('至少勾选') >= 0; }
+  try { buildJevBody({ enabled: { scalp: false, short: false, mid: false, long: false } }, 'S'); } catch (e) { e2 = e.message.indexOf('至少勾选') >= 0; }
   ok('buildJevBody 全不勾选报错', e2);
   const viaTpl = buildJevBody({ model: 'M', template: '{"model":"{{model}}","state":{{state}},"questions":{"q1":{"instructions":"i"}}}' }, 'ST');
   ok('buildJevBody 模板优先', viaTpl.questions.q1.instructions === 'i' && viaTpl.model === 'M');
@@ -139,6 +140,7 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   const r = parseJevResponse({
     model: 'jev-1.13.0', usage: { input_tokens: 473, output_tokens: 120 },
     answers: {
+      scalp: { type: 'score', score: 3, confidence: 0.61 },
       short: score5,
       mid: { type: 'score', score: 2, confidence: 0.5 },
       long: { type: 'score', score: 0, confidence: 0.8 },
@@ -147,11 +149,15 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   });
   ok('parseJevResponse ok', r.ok === true && r.err === null);
   ok('parseJevResponse usage/model', r.usage.input_tokens === 473 && r.model === 'jev-1.13.0');
+  ok('⭐ parseJevResponse 解析超短档', r.horizons.scalp && r.horizons.scalp.strength === 50 && r.horizons.scalp.conf === 0.61);
   ok('parseJevResponse score=3.48 → +74', r.horizons.short.strength === 74);
   ok('parseJevResponse score=2(中性) → 0', r.horizons.mid.strength === 0);
   ok('parseJevResponse score=0 → −100 强空', r.horizons.long.strength === -100 && r.horizons.long.label === '强空');
   ok('parseJevResponse driver', r.driver === '技术面');
   ok('parseJevResponse 置信度透传', r.horizons.short.conf === 0.59);
+  // 优雅降级：上游没返回 scalp 档时不影响 short/mid/long
+  const rNoScalp = parseJevResponse({ answers: { short: score5, mid: { type: 'score', score: 2 }, long: { type: 'score', score: 1 } } });
+  ok('⭐ 上游缺 scalp 档 → 优雅降级（ok=true 且短/中/长照常）', rNoScalp.ok === true && !rNoScalp.horizons.scalp && rNoScalp.horizons.short.strength === 74);
 
   const rc = parseJevResponse({ answers: { short: { type: 'choice', choice: '偏多', confidence: 0.98, probabilities: { 偏多: 0.99, 偏空: 0.0, 观望: 0.01 } } } });
   ok('parseJevResponse choice 概率差 → 强度', rc.horizons.short.strength === 99 && rc.horizons.short.label === '强多');
@@ -165,9 +171,34 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   ok('strengthLabel 分级', strengthLabel(60) === '强多' && strengthLabel(15) === '偏多' && strengthLabel(0) === '中性' && strengthLabel(-15) === '偏空');
   ok('jevSide 阈值', jevSide(15) === 'long' && jevSide(-15) === 'short' && jevSide(14) === 'flat' && jevSide(null) === 'flat');
 
-  const smp = jevSamplesFor({ ok: true, horizons: { short: { strength: 60 }, mid: { strength: 0 }, long: { strength: -60 } } }, 'BTCUSDT', 1000);
-  ok('jevSamplesFor 中性不留样本', smp.length === 2);
-  ok('jevSamplesFor side 映射', smp[0].side === 'long' && smp[1].side === 'short');
+  const smp = jevSamplesFor({ ok: true, horizons: { scalp: { strength: -60 }, short: { strength: 60 }, mid: { strength: 0 }, long: { strength: -60 } } }, 'BTCUSDT', 1000);
+  ok('jevSamplesFor 中性不留样本', smp.length === 3);
+  ok('jevSamplesFor side 映射（含超短档）', smp[0].side === 'short' && smp[0].horizon === 'scalp' && smp[1].side === 'long' && smp[2].side === 'short');
+})();
+
+// ============ 超短档 N 标定（calibrateScalpBars，GOAL §2 P0）============
+(function scalpCal() {
+  ok('JEV_SCALP_BARS 默认 8（2h）', JEV_SCALP_BARS === 8);
+  ok('JEV_EVAL.scalp = 15m×8', JEV_EVAL.scalp.tf === '15m' && JEV_EVAL.scalp.bars === 8);
+  ok('JEV_HORIZON_IDS 含 scalp 且 JEV_HORIZONS 4 档', JEV_HORIZON_IDS.indexOf('scalp') === 0 && JEV_HORIZONS.length === 4);
+  ok('JEV_HORIZON_NAMES 映射', JEV_HORIZON_NAMES.scalp === '超短' && JEV_HORIZON_NAMES.long === '长');
+  // 样本 <20 → null（保持默认）
+  const few = Array.from({ length: 19 }, () => ({ src: 'srsiAuto', t: 1000, openT: 0 }));
+  ok('样本 <20 → null（不下结论，保持默认 8）', calibrateScalpBars(few) === null);
+  ok('空输入安全', calibrateScalpBars(null) === null && calibrateScalpBars([]) === null);
+  // barsHeld 优先
+  const barsHeld = Array.from({ length: 20 }, () => ({ src: 'srsiAuto', barsHeld: 5 }));
+  ok('优先用 barsHeld', calibrateScalpBars(barsHeld) === 6);          // 中位 5 → 向上取偶 6
+  // 无 barsHeld → (t-openT)/15min；clamp
+  const byTime = Array.from({ length: 20 }, () => ({ src: 'srsiAuto', t: 10 * 900000, openT: 0 }));
+  ok('回退 (t-openT)/15min', calibrateScalpBars(byTime) === 10);
+  ok('clamp 下界 4', calibrateScalpBars(Array.from({ length: 20 }, () => ({ src: 'srsiAuto', barsHeld: 1 }))) === 4);
+  ok('clamp 上界 32', calibrateScalpBars(Array.from({ length: 20 }, () => ({ src: 'srsiAuto', barsHeld: 99 }))) === 32);
+  ok('中位数→向上取偶（7 → 8）', calibrateScalpBars(Array.from({ length: 20 }, (_, i) => ({ src: 'srsiAuto', barsHeld: i < 10 ? 5 : 7 }))) === 8);
+  ok('非 srsiAuto / 缺时间字段 → 不计入', calibrateScalpBars([{ src: 'manual', barsHeld: 9 }, { src: 'srsiAuto' }]) === null);
+  ok('minSamples 可配', calibrateScalpBars(Array.from({ length: 5 }, () => ({ src: 'srsiAuto', barsHeld: 5 })), { minSamples: 5 }) === 6);
+  ok('scalpBarsNow 无 localStorage → 默认 8', scalpBarsNow() === 8);
+  ok('scalpBarsSuggestion 无 S.closed → null（不抛）', scalpBarsSuggestion() === null);
 })();
 
 // ============ 决策端点 URL / 调用（mock fetch） ============
@@ -291,12 +322,14 @@ async function fetchTests2() {
     stats: { byHorizon: { short: { n: 10, wins: 6, losses: 4, winRate: 0.6, avgPnl: 0.3 } }, learned: { short: { long: 0.5, short: null } }, n: 5, pending: 1 },
     status: {}, now: Date.now(), freqMs: 3600000
   });
-  ok('buildJevModel 三档', model.rows.length === JEV_HORIZONS.length);
-  ok('buildJevModel 关系计数（短同向/中样本不足/长中性）', model.relation.agree === 1 && model.relation.nodata === 1 && model.relation.na === 1);
+  ok('buildJevModel 四档（含超短）', model.rows.length === JEV_HORIZONS.length && model.rows.length === 4);
+  ok('buildJevModel 关系计数（超短未给判断→中性/短同向/中样本不足/长中性）', model.relation.agree === 1 && model.relation.nodata === 1 && model.relation.na === 2);
   ok('buildJevModel modeText', model.modeText === JEV_MODES.apply.short);
   const html = renderJevHtml(model);
   ok('renderJevHtml 含免责声明', html.indexOf(JEV_DISCLAIMER) >= 0);
-  ok('renderJevHtml 含三行滑块', (html.match(/jev-slider/g) || []).length >= 3);
+  ok('renderJevHtml 含三行主滑块（超短另置折叠）', (html.match(/jev-slider/g) || []).length >= 3);
+  ok('⭐ renderJevHtml 超短档默认收起（<details> 无 open）', html.indexOf('<details class="jev-scalp">') > 0 && html.indexOf('<details class="jev-scalp" open') < 0);
+  ok('⭐ 超短档行标「超短档」且提示可展开', html.indexOf('超短档') > 0 && html.indexOf('点击展开') > 0);
   ok('renderJevHtml 含关系条', html.indexOf('Jev × TSEV 关系') >= 0);
   ok('renderJevHtml 含驱动', html.indexOf('主要驱动') >= 0);
   ok('renderJevHtml 含费用', html.indexOf('$0.0100') >= 0);
@@ -305,6 +338,8 @@ async function fetchTests2() {
   const setHtml = renderJevSetHtml({ enabled: true, baseUrl: 'http://localhost:3460/v1', model: 'jev-latest', freq: '1h', mode: 'learn', horizons: { short: true, mid: true, long: false }, groups: JEV_DEFAULT_GROUPS, price: {}, spend: { calls: 1, inTok: 10, outTok: 5, cost: 0 }, spend0: null }, { hasToken: true });
   ok('renderJevSetHtml 含启用/base/模型', setHtml.indexOf('id="jevEnabled"') > 0 && setHtml.indexOf('id="jevBase"') > 0 && setHtml.indexOf('id="jevModel"') > 0);
   ok('renderJevSetHtml 含频率三态与勾选', setHtml.indexOf('id="jevFreq"') > 0 && setHtml.indexOf('data-hz="long"') > 0);
+  ok('⭐ 设置卡含超短档勾选与 N 标定按钮', setHtml.indexOf('data-hz="scalp"') > 0 && setHtml.indexOf('id="jevScalpCal"') > 0 && setHtml.indexOf('id="jevScalpBars"') > 0);
+  ok('⭐ 设置卡写明 N 写死与「显式确认才改」', setHtml.indexOf('显式点') > 0 && setHtml.indexOf('不得因结果好坏再改') > 0);
   ok('renderJevSetHtml 含 Token 保存/清除/测试/探测/立即', setHtml.indexOf('idt="x"') < 0 && setHtml.indexOf('id="jevTokenSave"') > 0 && setHtml.indexOf('id="jevTokenClear"') > 0 && setHtml.indexOf('id="jevTest"') > 0 && setHtml.indexOf('id="jevProbe"') > 0 && setHtml.indexOf('id="jevRunNow"') > 0);
   ok('renderJevSetHtml 含高级模板', setHtml.indexOf('id="jevTpl"') > 0);
   ok('renderJevSetHtml 未勾 long → 不 checked', setHtml.indexOf('data-hz="long">') > 0 && setHtml.indexOf('data-hz="long" checked') < 0);
@@ -625,7 +660,7 @@ async function schedTest() {
   // v1.6.63：汇总不再重复「待回填」，并给出「最近一批到期时间」+ 单位说明
   ok('汇总行内只出现一次「待回填」', (() => { const m = html.match(/<div class="jev-hist-sum">([^<]*)</); return !!m && (m[1].match(/待回填/g) || []).length === 1; })());
   ok('汇总给出「最近一批预计…出结果」', /最近一批预计 /.test(html) && /出结果/.test(html));
-  ok('标题写明单位「档」= 短/中/长', html.indexOf('单位「档」= 短/中/长') > 0);
+  ok('标题写明单位「档」= 超短/短/中/长', html.indexOf('单位「档」= 超短/短/中/长') > 0);
   ok('history 暴露 pendingByHorizon / pendingTotal / nextMs', (() => {
     const hh = buildJevHistory([{ ts: 1000, sym: 'BTCUSDT', dirs: { short: { strength: -40 }, mid: { strength: 30 }, long: { strength: 3 } } }], 'BTCUSDT', { limit: 5 });
     return hh.pendingByHorizon.short === 1 && hh.pendingByHorizon.mid === 1 && hh.pendingByHorizon.long === 0 && hh.pendingTotal === 2 && hh.nextMs === 1000 + JEV_WINDOW_MS.short;
@@ -698,7 +733,7 @@ async function schedTest() {
   const H = 3600e3, W = JEV_WINDOW_MS;
   const base = 1700000000000;
   const mk = (ts, h, st) => ({ id: 'r' + ts, ts, sym: 'BTCUSDT', dirs: { [h || 'short']: { strength: st == null ? -40 : st } }, samples: [{ horizon: h || 'short', side: 'short' }] });
-  ok('窗口常量：短 1 天 / 中 5 天 / 长 30 天', JEV_WINDOW_MS.short === 86400000 && JEV_WINDOW_MS.mid === 5 * 86400000 && JEV_WINDOW_MS.long === 30 * 86400000);
+  ok('窗口常量：超短 2h / 短 1 天 / 中 5 天 / 长 30 天', JEV_WINDOW_MS.scalp === 8 * 15 * 60000 && JEV_WINDOW_MS.short === 86400000 && JEV_WINDOW_MS.mid === 5 * 86400000 && JEV_WINDOW_MS.long === 30 * 86400000);
 
   const a = planIndependentFeeds([mk(base), mk(base + 15 * 60000), mk(base + 30 * 60000), mk(base + 45 * 60000), mk(base + 60 * 60000)]);
   ok('15m 间隔 ×5：短档只取 1 条当独立样本', (a.plan[0] || []).join() === 'short' && Object.keys(a.plan).slice(1).every(i => a.plan[i].length === 0));
@@ -764,8 +799,8 @@ async function schedTest() {
   ok('未启用 Jev → 工具一览不出现该行', !off.allRows.some(r => r.id === 'jev'));
   const on = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: true, mode: 'learn', modeText: '只学', rows: [{ id: 'short', strength: -41, label: '偏空' }, { id: 'mid', strength: -20, label: '偏空' }, { id: 'long', strength: 3, label: '中性' }] } }));
   const row = on.allRows.find(r => r.id === 'jev');
-  ok('启用后出现「🧠 Jev 判断」行（周期=短/中/长）', !!row && row.name.indexOf('Jev') > 0 && row.tf === '短/中/长');
-  ok('工具一览结论原样引用三档（带 TSEV 模式）', /短 偏空 -41/.test(row.concl) && /中 偏空 -20/.test(row.concl) && /TSEV 只学/.test(row.concl));
+  ok('启用后出现「🧠 Jev 判断」行（周期=超短/短/中/长）', !!row && row.name.indexOf('Jev') > 0 && row.tf === '超短/短/中/长');
+  ok('工具一览结论原样引用四档（带 TSEV 模式）', /超短 —/.test(row.concl) && /短 偏空 -41/.test(row.concl) && /中 偏空 -20/.test(row.concl) && /TSEV 只学/.test(row.concl));
   ok('工具一览方向取短档（偏空）', row.dir === 'short');
   const onFlat = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: true, rows: [{ id: 'short', strength: 4, label: '中性' }] } }));
   ok('短档中性 → 工具一览标为中/无方向', onFlat.allRows.find(r => r.id === 'jev').dir === 'none' || onFlat.allRows.find(r => r.id === 'jev').dir === 'flat');
@@ -814,8 +849,54 @@ async function schedTest() {
 (function cfg() {
   const c = readJevCfg();
   ok('readJevCfg 默认值（无 localStorage）', c.enabled === false && c.freq === '1h' && c.mode === 'off' && c.model === 'jev-latest');
-  ok('readJevCfg 默认三档全勾', c.horizons.short && c.horizons.mid && c.horizons.long);
-  ok('readJevCfg 默认分组', c.groups.short.join(',') === '5m,15m,1h' && c.groups.long.join(',') === '7d,30d');
+  ok('readJevCfg 默认四档全勾（含超短）', c.horizons.scalp && c.horizons.short && c.horizons.mid && c.horizons.long);
+  ok('readJevCfg 默认分组含超短', c.groups.scalp.join(',') === '5m,15m,1h' && c.groups.long.join(',') === '7d,30d');
+  ok('readJevCfg 默认 scalpBars=8', c.scalpBars === 8);
+})();
+
+// ============ 隔离：Jev 关闭 / 缺失时不影响原有功能（用户红线） ============
+(function jevIsolation() {
+  // 无 localStorage、无 S、无 __localTsev、无 Token → 所有 Jev 纯函数必须安全（不抛、不阻塞）
+  const m0 = buildJevModel({ cfg: { enabled: false }, stats: { byHorizon: {}, learned: {} } });
+  ok('Jev 关闭 → buildJevModel 不抛且返回 4 档骨架', !!m0 && m0.rows.length === 4 && m0.enabled === false);
+  ok('Jev 关闭 → renderJevHtml 不抛且含未启用提示', renderJevHtml(m0).indexOf('未启用：不产生调用与样本') >= 0);
+  ok('renderJevSetHtml 空 cfg 不抛', renderJevSetHtml(null, {}).indexOf('jevEnabled') > 0);
+  ok('buildJevHistory 空数据不抛', buildJevHistory(null, 'BTCUSDT').rows.length === 0 && buildJevHistory(undefined, null).summary.decided === 0);
+  ok('renderJevHistoryHtml / renderJevAllHtml 空数据不抛', renderJevHistoryHtml(null) === '' && renderJevAllHtml(null).indexOf('暂无 Jev 判断记录') >= 0);
+  ok('jevStats 空输入不抛', jevStats(null, 'X').n === 0 && jevStats(undefined).byHorizon.scalp.n === 0);
+  ok('sliderView / jevTsevRelation 无数据不抛', sliderView(null, null, 'off').source === 'none' && jevTsevRelation(null, null).relation === 'na');
+  // Jev 关闭 → 工具一览不出现该行（其余工具行不受影响——天关 Jev 不是依赖）
+  const tb = buildToolBoardModel({ cfg: { toolBoardTfOnly: false, mainTF: '15m' }, jev: { enabled: false, rows: [] } });
+  ok('Jev 关闭 → 工具一览不出现 Jev 行（其余行照常）', !tb.allRows.some(r => r.id === 'jev') && renderToolBoardHtml(tb).indexOf('Jev 判断') < 0);
+})();
+
+// ============ 超短档 N 应用（用户显式确认路径） ============
+(function scalpApply() {
+  const saved = globalThis.localStorage;
+  const store = {};
+  globalThis.localStorage = {
+    getItem: k => (k in store ? store[k] : null),
+    setItem: (k, v) => { store[k] = String(v); },
+    removeItem: k => { delete store[k]; },
+    key: i => Object.keys(store)[i] || null,
+    get length() { return Object.keys(store).length; }
+  };
+  try {
+    ok('setScalpBars 写入并返回（12）', setScalpBars(12) === 12 && scalpBarsNow() === 12);
+    ok('setScalpBars 落盘（cfg.scalpBars）', JSON.parse(store['pwa_jev'] || '{}').scalpBars === 12);
+    ok('setScalpBars 向上取偶（13→14）', setScalpBars(13) === 14);
+    ok('setScalpBars clamp 上界（100→32）', setScalpBars(100) === 32);
+    ok('setScalpBars 非法输入 → 保持当前', setScalpBars('abc') === 32);
+    ok('JEV_EVAL.scalp 默认常量仍为 8（实际生效走 scalpBarsNow）', JEV_EVAL.scalp.bars === 8 && scalpBarsNow() === 32);
+    // 卫星持仓建议：≥20 笔 srsiAuto → 中位数（6 根）
+    const saveS = globalThis.S;
+    globalThis.S = { closed: Array.from({ length: 30 }, () => ({ src: 'srsiAuto', t: 6 * 900000, openT: 0 })) };
+    ok('scalpBarsSuggestion 用卫星持仓中位数（6 根）', scalpBarsSuggestion() === 6);
+    globalThis.S = saveS;
+  } finally {
+    if (saved === undefined) delete globalThis.localStorage; else globalThis.localStorage = saved;
+    setScalpBars(8);    // 复位内存缓存，避免影响后续用例
+  }
 })();
 
 await contextTest();

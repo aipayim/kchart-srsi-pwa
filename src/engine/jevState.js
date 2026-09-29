@@ -15,26 +15,65 @@
 // 提示词只喂提炼后的**文字档位**，绝不塞原始 K 线序列；缺项显式写「未知」。
 import { volumeDivergence, supportResistance, newsSentiment, momentumPct } from './indicators.js';
 
+// ⭐ 超短档（scalp）：口径对齐 SRSI 卫星的**实际出场量级**（15m × N 根）——
+//   只有这一档用于「Jev 能否纠正 SRSI 信号」的裁决（GOAL_jev-srsi.md §2）。
+//   N 预先写死为 JEV_SCALP_BARS，**不得因结果不好而手调**；若卫星真实持仓样本足够，
+//   只能由用户显式确认后经 cfg.scalpBars 覆盖（见 calibrateScalpBars）。
+export const JEV_SCALP_BARS = 8;   // 8 × 15m = 2h
+
 export const JEV_HORIZONS = [
+  { id: 'scalp', name: '超短', desc: '约 2 小时（SRSI 出场口径）' },
   { id: 'short', name: '短', desc: '数小时 ~ 1 天' },
   { id: 'mid', name: '中', desc: '数日 ~ 1 周' },
   { id: 'long', name: '长', desc: '数周 ~ 1 月' }
 ];
 export const JEV_HORIZON_IDS = JEV_HORIZONS.map(h => h.id);
+export const JEV_HORIZON_NAMES = JEV_HORIZONS.reduce((a, h) => (a[h.id] = h.name, a), {});
 
 // 各档「前向窗口」天数（= 该档判断要等多久才能结算）—— 到期口径的唯一来源。
 // 也是**独立样本**的间隔：相邻判断若落在同一窗口内，其结果是同一段行情决定的，
 // 不能当独立样本（否则 n 被高估数十倍、z 检验失去意义）。
 // 短 = 1h×24 = 1 天；中 = 4h×30 = 5 天；长 = 1d×30 = 30 天（与 src/pwa/jevClient.js 的 JEV_EVAL 一致）。
-export const JEV_WINDOW_DAYS = { short: 1, mid: 5, long: 30 };
+export const JEV_WINDOW_DAYS = { scalp: JEV_SCALP_BARS * 15 / 1440, short: 1, mid: 5, long: 30 };
 export const JEV_WINDOW_MS = {
+  scalp: JEV_SCALP_BARS * 15 * 60000,             // 8 × 15m = 2h（超短档独立样本间隔）
   short: JEV_WINDOW_DAYS.short * 86400000,
   mid: JEV_WINDOW_DAYS.mid * 86400000,
   long: JEV_WINDOW_DAYS.long * 86400000
 };
 
+/**
+ * 纯函数：用**卫星真实持仓**标定超短档的前向根数 N（数据驱动，只在用户显式确认后应用）。
+ *   - 取 `S.closed` 中 `src==='srsiAuto'` 的平仓记录：优先 `barsHeld`，否则 `(t - openT) / 15min`；
+ *   - 样本 < minSamples（默认 20）→ 返回 null（调用方保持默认 JEV_SCALP_BARS）；
+ *   - 否则取中位数 → 向上取偶 → clamp [4, 32]。
+ * ⚠ 结果一旦应用即写死；**不得因「结果不好」而调整**（统计诚实性红线）。
+ * @param {Array} closed S.closed 记录数组
+ * @param {Object} [opts] { minSamples?:number, tfMs?:number }
+ * @returns {number|null}
+ */
+export function calibrateScalpBars(closed, opts = {}) {
+  const minSamples = opts.minSamples != null ? opts.minSamples : 20;
+  const tfMs = opts.tfMs != null ? opts.tfMs : 15 * 60000;
+  const bars = [];
+  for (const c of (Array.isArray(closed) ? closed : [])) {
+    if (!c || c.src !== 'srsiAuto') continue;
+    let b = null;
+    if (typeof c.barsHeld === 'number' && isFinite(c.barsHeld) && c.barsHeld > 0) b = c.barsHeld;
+    else if (typeof c.t === 'number' && typeof c.openT === 'number' && c.t > c.openT) b = (c.t - c.openT) / tfMs;
+    if (b != null && isFinite(b) && b > 0) bars.push(b);
+  }
+  if (bars.length < minSamples) return null;
+  bars.sort((a, b) => a - b);
+  const med = bars[Math.floor(bars.length / 2)];
+  let n = Math.ceil(med);
+  if (n % 2 !== 0) n += 1;                       // 向上取偶
+  return Math.max(4, Math.min(32, n));
+}
+
 // 周期分组（默认值；用户可在设置里改勾选，未勾的档不提问）
 export const JEV_DEFAULT_GROUPS = {
+  scalp: ['5m', '15m', '1h'],
   short: ['5m', '15m', '1h'],
   mid: ['4h', '1d'],
   long: ['7d', '30d']
@@ -62,6 +101,7 @@ export const JEV_MODES = {
 export const JEV_DEFAULT_TEMPLATE = '';
 
 export const JEV_DEFAULT_QUESTIONS = {
+  scalp: '超短线（约 2 小时，交易执行口径）方向如何？只依据上面给出的状态档位判断；不确定就选「中性」。',
   short: '短线（数小时至 1 天）方向如何？只依据上面给出的状态档位判断。',
   mid: '中线（数日至 1 周）方向如何？只依据上面给出的状态档位判断。',
   long: '长线（数周至 1 月）方向如何？只依据上面给出的状态档位判断。',
@@ -366,7 +406,7 @@ export function buildJevBody(cfg, stateText, opts = {}) {
     if (enabled[h] === false) continue;
     questions[h] = { type: 'score', instructions: qs[h], criteria: (opts.levels || JEV_LEVELS).slice() };
   }
-  if (Object.keys(questions).length === 0) throw new Error('至少勾选一个周期档（短/中/长）');
+  if (Object.keys(questions).length === 0) throw new Error('至少勾选一个周期档（超短/短/中/长）');
   if (enabled.driver !== false) {
     questions.driver = { type: 'choice', instructions: qs.driver, criteria: Object.assign({}, JEV_DRIVERS) };
   }
@@ -444,7 +484,7 @@ export function parseJevResponse(json, opts = {}) {
   const d = ans.driver;
   if (d && d.type === 'choice' && d.choice) out.driver = String(d.choice);
   else if (d && d.noul != null) out.driver = null;
-  if (!Object.keys(out.horizons).length) { out.err = 'answers 中没有可识别的 short/mid/long 档'; return out; }
+  if (!Object.keys(out.horizons).length) { out.err = 'answers 中没有可识别的 scalp/short/mid/long 档'; return out; }
   out.ok = true;
   return out;
 }

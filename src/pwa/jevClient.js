@@ -8,8 +8,8 @@ import { saveApiKey, getApiKey, hasApiKey, clearApiKey } from '../auth/apiKeySto
 import { decisionCall, probeDecisionShapes, estimateTokens } from '../ai/llmClient.js';
 import {
   JEV_HORIZON_IDS, JEV_WINDOW_MS, JEV_DEFAULT_GROUPS, JEV_LEVELS, JEV_MODES,
-  JEV_DEFAULT_QUESTIONS, JEV_DEFAULT_TEMPLATE,
-  buildJevState, buildJevBody, parseJevResponse, jevSamplesFor
+  JEV_DEFAULT_QUESTIONS, JEV_DEFAULT_TEMPLATE, JEV_SCALP_BARS, JEV_HORIZON_NAMES,
+  buildJevState, buildJevBody, parseJevResponse, jevSamplesFor, calibrateScalpBars
 } from '../engine/jevState.js';
 import { winLossByAtr, atrClose, volumeDivergence, supportResistance } from '../engine/indicators.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_DAYS } from '../engine/jevState.js';
@@ -26,11 +26,49 @@ const DEC_CAP = 400;             // 明细上限（超出裁掉最旧）
 
 // 每个档的评估口径：evalTf = 用于判盈亏的 K 线周期；bars = 到期所需的前向根数
 // TP/SL 与项目标准一致（THRESH.BT_TP_ATR / BT_SL_ATR）→ 与因子消融/回测同源
+// ⭐ scalp（超短）：15m × N 根，与 SRSI 卫星实际出场量级对齐（唯一用于裁决「Jev 能否纠正 SRSI」的档）。
+//     N 默认写死 JEV_SCALP_BARS=8（2h）；只能由用户显式确认后经 cfg.scalpBars 覆盖。
 export const JEV_EVAL = {
+  scalp: { tf: '15m', bars: JEV_SCALP_BARS },
   short: { tf: '1h', bars: 24 },
   mid: { tf: '4h', bars: 30 },
   long: { tf: '1d', bars: 30 }
 };
+
+// 用户显式应用过的超短档根数（内存缓存，避免在结算循环里每条记录读一次 localStorage）
+let _scalpBars = null;
+function invalidateScalpCache() { _scalpBars = null; }
+/** 当前生效的超短档根数（默认 JEV_SCALP_BARS；仅当用户显式应用过才不同） */
+export function scalpBarsNow() {
+  if (_scalpBars != null) return _scalpBars;
+  try {
+    const v = readJevCfg().scalpBars;
+    _scalpBars = (typeof v === 'number' && isFinite(v) && v > 0) ? Math.round(v) : JEV_SCALP_BARS;
+  } catch (e) { _scalpBars = JEV_SCALP_BARS; }
+  return _scalpBars;
+}
+/** 用户显式确认后应用新的超短档根数（clamp 4~32 偶数）；这是唯一允许更改 N 的入口 */
+export function setScalpBars(n) {
+  let v = Math.round(Number(n));
+  if (!isFinite(v)) return scalpBarsNow();
+  v = Math.max(4, Math.min(32, v));
+  if (v % 2 !== 0) v += 1;
+  const c = readJevCfg(); c.scalpBars = v;
+  writeJevCfg(c);
+  _scalpBars = v;               // 会话内立即生效（即便落盘失败也会记入 status().storageErr）
+  return v;
+}
+/** 用卫星真实持仓（S.closed 中 src='srsiAuto'）建议的 N（样本<20 → null；仅建议，不自动应用） */
+export function scalpBarsSuggestion() {
+  try { return calibrateScalpBars(S().closed); } catch (e) { return null; }
+}
+/** 某档的评估口径（scalp 的 bars 随用户确认的 N 变化；其余为常量） */
+function evOf(h) {
+  const base = JEV_EVAL[h];
+  if (!base) return null;
+  if (h === 'scalp') return { tf: base.tf, bars: scalpBarsNow() };
+  return base;
+}
 
 let _status = { lastErr: null, storageErr: null, lastRun: 0, running: false, lastResult: null, keyPresent: false };
 
@@ -42,8 +80,9 @@ export function defaultJevCfg() {
     enabled: false,
     baseUrl: 'http://localhost:3460/v1',   // 生产由用户填自己的 Jev 地址
     model: 'jev-latest',
-    horizons: { short: true, mid: true, long: true },
+    horizons: { scalp: true, short: true, mid: true, long: true },
     groups: JSON.parse(JSON.stringify(JEV_DEFAULT_GROUPS)),
+    scalpBars: JEV_SCALP_BARS,   // 超短档根数（默认写死 8；只有用户显式确认才改）
     newsSrc: '',                  // 新闻源（可选）：RSS 直链或包裹代理 https://代理/?url={url}；空=开发走 /rss-proxy，生产=未知
     freq: '1h',                  // 15m | 1h | 4h | 1d | manual
     mode: 'off',                 // off | learn | apply
@@ -96,6 +135,7 @@ export function readJevCfg() {
 }
 
 export function writeJevCfg(cfg) {
+  invalidateScalpCache();
   return _safeSet(LSK, JSON.stringify(cfg || {}));
 }
 
@@ -432,8 +472,13 @@ export async function runJevOnce(opts = {}) {
     const ctx = opts.ctx || await collectJevContext(sym, opts);
     const enabled = cfg.horizons || {};
     const merged = [];
-    for (const h of JEV_HORIZON_IDS) {
-      if (enabled[h] === false) continue;
+    // ⭐ 超短档（scalp）**不单独发状态块**：它复用「短」档上下文（同 5m/15m/1h + 共振/体制/波动/趋势），
+    //    避免在 1 次调用里重复发送一份几乎相同的档位文本（省输入 tokens；判断依据不变）。
+    //    仅当用户把其它档全关了、只剩超短时，才为它单独构建一块（否则 prompt 会没有上下文档位）。
+    const askIds = JEV_HORIZON_IDS.filter(h => enabled[h] !== false);
+    const ctxIds = askIds.filter(h => h !== 'scalp');
+    const blockIds = ctxIds.length ? ctxIds : askIds;
+    for (const h of blockIds) {
       const inp = gatherJevInput(sym, h, ctx);
       const s2 = buildJevState(inp);
       merged.push({ h, text: s2.text, missing: s2.missing });
@@ -470,7 +515,8 @@ export async function runJevOnce(opts = {}) {
     // 记录每个档的入场价 + ATR（用于到期判盈亏）
     for (const h of JEV_HORIZON_IDS) {
       if (!rec.dirs[h]) continue;
-      const ev = JEV_EVAL[h];
+      const ev = evOf(h);
+      if (!ev) continue;
       const s = S();
       const closes = (s.klines && s.klines[sym] && s.klines[sym][ev.tf]) || null;
       const ind = (s.indicators && s.indicators[sym] && s.indicators[sym][ev.tf]) || null;
@@ -507,7 +553,7 @@ export async function runJevOnce(opts = {}) {
 function resolveHorizonContext(rec, h) {
   const dir = rec && rec.dirs && rec.dirs[h];
   if (!dir || dir.strength == null) return { ok: false, reason: 'flat' };
-  const ev = JEV_EVAL[h];
+  const ev = evOf(h);
   if (!ev) return { ok: false, reason: 'no-eval' };
   const side = dir.strength >= JEV_SIDE_THR ? 1 : dir.strength <= -JEV_SIDE_THR ? -1 : 0;
   if (!side) return { ok: false, reason: 'flat', ev };
@@ -741,7 +787,7 @@ export function buildJevSignalEvent(rec, opts = {}) {
     : null;
   const parts = JEV_HORIZON_IDS.filter(h => rec.dirs[h] && rec.dirs[h].strength != null).map(h => {
     const d = rec.dirs[h];
-    const nm = h === 'short' ? '短' : h === 'mid' ? '中' : '长';
+    const nm = JEV_HORIZON_NAMES[h] || h;
     return nm + ' ' + (d.label || '—') + ' ' + (Math.round(d.strength) >= 0 ? '+' : '') + Math.round(d.strength);
   });
   if (!parts.length) return null;

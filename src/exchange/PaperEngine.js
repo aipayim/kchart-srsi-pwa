@@ -309,7 +309,7 @@ export class PaperEngine extends ExchangeAdapter {
 
   _recordClosed({ pos, pnl, reason, price }) {
     const S = this.S;
-    S.closed.push({ t: Date.now(), sym: pos.sym, side: pos.side, lev: pos.lev, sub: pos.sid, pnl: Math.round(pnl * 100) / 100, reason, entry: pos.entry, exit: price, src: pos.src || 'manual', marginMode: pos.marginMode || 'usdt' });
+    S.closed.push({ t: Date.now(), openT: pos.openTime || 0, sym: pos.sym, side: pos.side, lev: pos.lev, sub: pos.sid, pnl: Math.round(pnl * 100) / 100, reason, entry: pos.entry, exit: price, src: pos.src || 'manual', marginMode: pos.marginMode || 'usdt' });
     // v1.6.22：成交明细有界保留（THRESH.CLOSED_MAX）——防止用户数据无界增长吃光配额（且盈亏页不再渲染上万行）
     if (S.closed.length > THRESH.CLOSED_MAX) S.closed.splice(0, S.closed.length - THRESH.CLOSED_MAX);
     this._emitOrder({

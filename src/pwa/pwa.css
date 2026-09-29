@@ -788,6 +788,13 @@ body.pwa .jev-tag.ok{color:var(--green);border-color:rgba(46,204,113,.45)}
 body.pwa .jev-tag.bad{color:var(--red);border-color:rgba(255,82,82,.45)}
 body.pwa .jev-tag.mute{color:var(--text2)}
 body.pwa .jev-row-b{font-size:9.5px;color:var(--text2);line-height:1.55;margin-top:2px}
+/* 超短档（默认收起，不喧宾夺主）：它是 Jev×SRSI 裁决口径档 */
+body.pwa .jev-scalp{border-top:1px dashed var(--border);margin-top:5px;padding-top:3px}
+body.pwa .jev-scalp-h{display:flex;flex-wrap:wrap;gap:6px;align-items:center;cursor:pointer;list-style:none;font-size:10px;color:var(--text2)}
+body.pwa .jev-scalp-h::-webkit-details-marker{display:none}
+body.pwa .jev-scalp-h .jev-hname{color:#a78bfa}
+body.pwa .jev-scalp-hint{margin-left:auto;font-size:9px;color:#6B7688}
+body.pwa .jev-scalp[open] .jev-scalp-hint{color:var(--text2)}
 body.pwa .jev-tsev{font-family:var(--mono)}
 body.pwa .jev-foot{font-size:9.5px;color:var(--text2);margin-top:6px;border-top:1px solid var(--border);padding-top:5px}
 body.pwa .jev-foot2{font-size:9px;color:#6B7688;margin-top:3px}

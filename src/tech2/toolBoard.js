@@ -116,18 +116,18 @@ export function buildToolBoardModel(input = {}) {
   // 展示层（无方向）
   push('live', '实盘信号', '成交', '实际成交标记（SRSI 15m · Alpha 1h·日线）', 'none');
   push('monitor', '实时监测', '—', '11 条规则链只读镜像（不产生交易信号）', 'none');
-  // v1.6.62：Jev（LLM）多空判断（短/中/长三档；只显示+本地学习，不接交易）
+  // v1.6.62：Jev（LLM）多空判断（超短/短/中/长四档；只显示+本地学习，不接交易）
   {
     const jev = input.jev || null;
     const rs = (jev && Array.isArray(jev.rows)) ? jev.rows : [];
     const m = (id) => rs.find(x => x.id === id) || null;
     const fmt = (x) => (x && x.strength != null) ? ((x.label || '—') + ' ' + (Math.round(x.strength) >= 0 ? '+' : '') + Math.round(x.strength)) : '—';
     const concl = jev && jev.enabled
-      ? ('短 ' + fmt(m('short')) + ' · 中 ' + fmt(m('mid')) + ' · 长 ' + fmt(m('long')) + (jev.modeText ? '（TSEV ' + jev.modeText + '）' : ''))
+      ? ('超短 ' + fmt(m('scalp')) + ' · 短 ' + fmt(m('short')) + ' · 中 ' + fmt(m('mid')) + ' · 长 ' + fmt(m('long')) + (jev.modeText ? '（TSEV ' + jev.modeText + '）' : ''))
       : '未启用（设置 → Jev 判断）';
     const s = m('short');
     const dir = (s && s.strength != null) ? (s.strength >= 15 ? 'long' : s.strength <= -15 ? 'short' : 'flat') : 'none';
-    push('jev', '🧠 Jev 判断', '短/中/长', concl, dir);
+    push('jev', '🧠 Jev 判断', '超短/短/中/长', concl, dir);
   }
 
   rows.sort((a, b) => TOOL_ORDER.indexOf(a.id) - TOOL_ORDER.indexOf(b.id));

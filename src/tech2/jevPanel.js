@@ -6,7 +6,7 @@
 //   ③ 三行长/中/短强度滑块（−100…+100：启用 Jev 时 = Jev 强度；关 Jev 后 = 本机 TSEV 已学偏置）
 //
 // 固定标注「模型判断·非交易建议·未接入执行」（红线）。
-import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_MODES, JEV_DRIVERS, JEV_WINDOW_MS } from '../engine/jevState.js';
+import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_MODES, JEV_DRIVERS, JEV_WINDOW_MS, JEV_SCALP_BARS } from '../engine/jevState.js';
 
 export const JEV_DISCLAIMER = '模型判断 · 非交易建议 · 未接入执行（只做显示与本地学习）';
 
@@ -235,7 +235,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   const limit = Math.max(1, opts.limit || 10);
   const all = (decisions || []).filter(r => r && (!sym || r.sym === sym));
   // 「下一批到期」：遍历**全部**本币记录（不只显示的 limit 条）——直接回答「还要等多久」
-  const pend = { short: 0, mid: 0, long: 0 };
+  const pend = {};
+  for (const h of JEV_HORIZON_IDS) pend[h] = 0;
   let nextMs = null, overdue = 0;
   for (const r of all) {
     if (!r || r.matured || !r.dirs) continue;
@@ -321,8 +322,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   return {
     rows, summary: sum, limit, maturityNote: MATURITY_NOTE, preview: prev,
     pendingByHorizon: pend,
-    pendingTotal: pend.short + pend.mid + pend.long,
-    nextMs: (pend.short + pend.mid + pend.long) ? nextMs : null,
+    pendingTotal: JEV_HORIZON_IDS.reduce((a, h) => a + (pend[h] || 0), 0),
+    nextMs: JEV_HORIZON_IDS.some(h => pend[h]) ? nextMs : null,
     overdue
   };
 }
@@ -330,7 +331,7 @@ export function buildJevHistory(decisions, sym, opts = {}) {
 const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', noentry: '⚠', flat: '–' };
 const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', noentry: 'expired', flat: 'flat' };
 // 到期口径（与 jevClient.JEV_EVAL + winLossByAtr 同源）——直接回答用户「要等多久才有结果」
-export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习 · 判断时缺 K 线的档在到期时用行情回推入场价，仍无法判定的标「⚠ 无法判定」且不计样本' +
+export const MATURITY_NOTE = '到期口径：超短 ≈' + (JEV_SCALP_BARS * 15 / 60) + 'h（15m×' + JEV_SCALP_BARS + '·SRSI 出场口径）· 短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习 · 判断时缺 K 线的档在到期时用行情回推入场价，仍无法判定的标「⚠ 无法判定」且不计样本' +
   '；未到期档显示「浮±x%（n/m）」或「已触止盈/止损」= 实时预览，仅看当前浮动，不计入任何统计';
 
 /** 历史列表 HTML（纯函数）：时间 + 三档结果 + 驱动/置信度 */
@@ -344,7 +345,7 @@ export function renderJevHistoryHtml(hist) {
   const sumTxt = '全部 ' + (s.calls || 0) + ' 条判断：已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
     (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.noEntry ? ' · <span style="color:#f59e0b">无法判定 ' + s.noEntry + '</span>' : '') + (s.flat ? ' · 中性 ' + s.flat : '');
-  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；下方汇总为全部记录，单位「档」= 短/中/长）──</div>' +
+  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；下方汇总为全部记录，单位「档」= 超短/短/中/长）──</div>' +
     '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
     (hist.preview && hist.preview.n && (hist.preview.tp || hist.preview.sl || hist.preview.open) ?
       '<div class="jev-hist-note">👀 预览（<b>未到期 · 不计入统计</b>）：' +
@@ -418,6 +419,20 @@ export function renderJevAllHtml(hist, opts = {}) {
   '</details>';
 }
 
+// 超短档（scalp）：默认收起，不喧宾夺主（它是「Jev×SRSI 裁决」用的口径档，与短/中/长方向参考并列）
+function scalpHtml(r, minSample) {
+  const s = r.strength;
+  const tone = toneOf(s);
+  const dirTxt = s == null ? '—' : (r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s));
+  const hit = r.hit || {};
+  const hitTxt = hit.n ? '已判定 ' + hit.n + ' 笔 · 命中 ' + Math.round((hit.winRate || 0) * 100) + '%' : '用于 Jev×SRSI 裁决（15m×' + JEV_SCALP_BARS + '）';
+  const sum = '<summary class="jev-scalp-h"><span class="jev-hname">超短档</span>' +
+    '<span class="jev-dir ' + tone + '">' + dirTxt + '</span>' +
+    '<span class="jev-dim">' + (s != null && r.conf != null ? '置信 ' + Math.round(r.conf * 100) + '% · ' : '') + hitTxt + '</span>' +
+    '<span class="jev-scalp-hint">点击展开</span></summary>';
+  return '<details class="jev-scalp">' + sum + sliderHtml(r) + rowHtml(r, minSample) + '</details>';
+}
+
 /** 面板 HTML（纯函数，可单测） */
 export function renderJevHtml(m) {
   if (!m) return '';
@@ -445,9 +460,12 @@ export function renderJevHtml(m) {
 
   const driver = m.driver ? '<div class="jev-driver">主要驱动：<b>' + m.driver + '</b>' + (JEV_DRIVERS[m.driver] ? '（' + JEV_DRIVERS[m.driver] + '）' : '') + '</div>' : '';
 
-  const sliders = '<div class="jev-sliders">' + m.rows.map(sliderHtml).join('') + '</div>';
+  const mainRows = m.rows.filter(r => r.id !== 'scalp');
+  const scalpRow = m.rows.find(r => r.id === 'scalp') || null;
+  const sliders = '<div class="jev-sliders">' + mainRows.map(sliderHtml).join('') + '</div>';
 
-  const rows = m.rows.map(r => rowHtml(r, m.minSample)).join('');
+  const rows = mainRows.map(r => rowHtml(r, m.minSample)).join('');
+  const scalpBlock = scalpRow ? scalpHtml(scalpRow, m.minSample) : '';
 
   const foot = '<div class="jev-foot">' +
     '本币判断 ' + m.total + ' 条（未到期 ' + m.pending + ' 条）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : (m.inPer1M || m.outPer1M ? ' · 费用 $0' : ' · 费用 $0（未设单价·本地网关免费）')) +
@@ -467,13 +485,13 @@ export function renderJevHtml(m) {
     '<div>3. <b>看准不准</b> → 看下面「最近 N 笔判断」的 ✓命中 / ✗未中；短档约 ' + ((wd && wd.short) || 1) + ' 天后就有结果。</div>' +
     '<div>4. <b>本机 TSEV 权重</b>（只在「学并影响」下影响强度）需要 <b>' + min + ' 个独立样本</b>才会生成。' +
       '<span class="jev-dim">同一前向窗口内的相邻判断高度重叠（不算独立），所以每档约 ' +
-      ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快。</span></div>' +
+      (wd && isFinite(wd.scalp) ? Math.round(wd.scalp * 24) + 'h' : '2h') + '（超短）/ ' + ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快。</span></div>' +
     '<div>5. <b>为什么 Jev 不能像经典因子那样回补历史</b>：历史上没有 Jev 的判断记录；且拿历史状态去问，模型训练数据已含此后行情 → 前视污染，所以只能前向累积。</div>' +
     '<div>6. <b>提示与声音</b>：每次判断都会进「<b>最近信号</b>」列表；但只有<b>短档方向发生变化</b>时才弹提示条/发声' +
       '（避免 15m 频率刷屏）。Jev 的默认音效是<b>静音</b>，可在「设置 → 通知与外观 → 分信号音效 → Jev（LLM）判断」里换成其它音效。</div>' +
     '<div>7. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
     '</div></details>';
-  return head + rel + fill + driver + sliders + rows + hist + howto + foot;
+  return head + rel + fill + driver + sliders + rows + scalpBlock + hist + howto + foot;
 }
 
 /** 设置卡 HTML（纯函数） */
@@ -501,6 +519,10 @@ export function renderJevSetHtml(cfg, extra) {
     '<div class="setting-row"><label>连接</label><button id="jevTest">测试连接</button><span id="jevTestMsg" class="jev-setmsg"></span></div>' +
     '<div class="setting-row"><label>调用频率</label><select id="jevFreq">' + freqOpts + '</select><button id="jevRunNow">立即判断一次</button></div>' +
     '<div class="setting-row"><label>TSEV 学 Jev</label><select id="jevMode">' + modes + '</select></div>' +
+    '<div class="setting-row"><label>超短档根数</label><span class="jev-inline"><b id="jevScalpBars">' + ((c.scalpBars) || JEV_SCALP_BARS) + '</b> 根（15m×N）</span>' +
+      '<button id="jevScalpCal" title="用卫星真实持仓（S.closed 中 src=srsiAuto）的中位数标定 N；样本 <20 时保持默认 8">标定并应用</button>' +
+      '<span id="jevScalpMsg" class="jev-setmsg"></span></div>' +
+    '<div class="jev-dim" style="margin:-2px 0 4px">超短档 N 默认写死 8（2h）——只有你<b>显式点「标定并应用」</b>才会变（样本≥20 笔时才给建议）。<b>一旦应用即写死，不得因结果好坏再改</b>（统计诚实性）。</div>' +
     '<div class="jev-chks">' + hz + '</div>' +
     groupRows +
     '<div class="setting-row"><label>新闻源（可选）</label><input id="jevNews" type="text" style="flex:1;min-width:170px" placeholder="RSS 直链 或 包裹代理 https://代理/?url={url}（空=开发走 /rss-proxy，生产为未知）"></div>' +

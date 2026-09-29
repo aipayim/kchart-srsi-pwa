@@ -24,7 +24,8 @@ import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, render
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon,
-  testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange
+  testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange,
+  scalpBarsNow, scalpBarsSuggestion, setScalpBars
 } from './jevClient.js';
 import { THRESH } from '../engine/thresholds.js';
 import { APP_VERSION, APP_BUILD_TIME } from '../version.generated.js';
@@ -1537,6 +1538,20 @@ function bindJevSettings() {
     await refreshJevData(true);
     renderJevSettings();
     jevSetMsg(r.ok ? '✓ 已完成（见下方面板）' : ('✗ ' + (r.err || '失败')), !!r.ok);
+  });
+  // 超短档 N：仅用户显式点击才应用（样本<20 笔 → 保持默认 8，不给建议）
+  on('jevScalpCal', 'click', () => {
+    const msg = $('jevScalpMsg');
+    const sug = scalpBarsSuggestion();
+    if (sug == null) {
+      const cur = scalpBarsNow();
+      if (msg) { msg.textContent = '样本不足（卫星自动平仓 <20 笔），保持当前 ' + cur + ' 根（2h 口径）'; msg.style.color = '#8899aa'; }
+      return;
+    }
+    const v = setScalpBars(sug);
+    const el = $('jevScalpBars'); if (el) el.textContent = String(v);
+    if (msg) { msg.textContent = '✓ 已应用 ' + v + ' 根（15m×' + v + ' = ' + (v * 15 / 60).toFixed(1) + 'h）'; msg.style.color = '#2ecc71'; }
+    renderJev();
   });
 }
 
