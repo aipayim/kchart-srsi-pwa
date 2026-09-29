@@ -494,6 +494,7 @@ async function schedTest() {
   });
   const h = renderJevHtml(m);
   ok('面板显示数据填充度（真实时）', h.indexOf('盘口 5/5 · 新闻 ✓') > 0);
+  ok('页脚用「本币判断 N 条（未到期 N 条）」避免单位混淆', h.indexOf('本币判断') > 0 && h.indexOf('未到期') > 0);
   const h2 = renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} }, fill: null }));
   ok('面板无填充度时提示拉不到不影响判断', h2.indexOf('不影响 Jev 判断') > 0);
 
@@ -564,10 +565,26 @@ async function schedTest() {
 
   const html = renderJevHistoryHtml(h);
   ok('历史 HTML 含标题与笔数', html.indexOf('最近 3 笔判断') > 0);
-  ok('历史 HTML 含汇总行（命中率/待回填）', /已判定 2 档 · 命中 1 · 未中 1 · 命中率 50%/.test(html) && /待回填 3/.test(html));
+  ok('历史 HTML 含汇总行（命中率/待回填档数）', /已判定 2 档 · 命中 1 · 未中 1 · 命中率 50%/.test(html) && /待回填 \d+ 档/.test(html));
   ok('历史 HTML 每档带符号与盈亏', html.indexOf('✗ -1.20%') > 0 && html.indexOf('✓ +2.40%') > 0 && html.indexOf('⏳ 待回填') > 0 && html.indexOf('○ 未触发') > 0);
   ok('历史 HTML 带时间/驱动/置信', /class="sig-ev-t">\d\d:\d\d</.test(html) && html.indexOf('驱动 技术面') > 0 && html.indexOf('置信 78%/54%/56%') > 0);
   ok('renderJevHistoryHtml 空输入返回空串', renderJevHistoryHtml(null) === '' && renderJevHistoryHtml({ rows: [] }) === '');
+  // v1.6.63：汇总不再重复「待回填」，并给出「最近一批到期时间」+ 单位说明
+  ok('汇总行内只出现一次「待回填」', (() => { const m = html.match(/<div class="jev-hist-sum">([^<]*)</); return !!m && (m[1].match(/待回填/g) || []).length === 1; })());
+  ok('汇总给出「最近一批预计…出结果」', /最近一批预计 /.test(html) && /出结果/.test(html));
+  ok('标题写明单位「档」= 短/中/长', html.indexOf('单位「档」= 短/中/长') > 0);
+  ok('history 暴露 pendingByHorizon / pendingTotal / nextMs', (() => {
+    const hh = buildJevHistory([{ ts: 1000, sym: 'BTCUSDT', dirs: { short: { strength: -40 }, mid: { strength: 30 }, long: { strength: 3 } } }], 'BTCUSDT', { limit: 5 });
+    return hh.pendingByHorizon.short === 1 && hh.pendingByHorizon.mid === 1 && hh.pendingByHorizon.long === 0 && hh.pendingTotal === 2 && hh.nextMs === 1000 + JEV_WINDOW_MS.short;
+  })());
+  ok('逾期未结算 → overdue>0 并给出提示', (() => {
+    const hh = buildJevHistory([{ ts: Date.now() - 40 * 86400000, sym: 'BTCUSDT', dirs: { short: { strength: -40 } } }], 'BTCUSDT', { limit: 5 });
+    return hh.overdue === 1 && renderJevHistoryHtml(hh).indexOf('应已到期但尚未结算') > 0;
+  })());
+  ok('全部已判定 → nextMs=null 且不显示到期行', (() => {
+    const hh = buildJevHistory([{ ts: 1, sym: 'BTCUSDT', dirs: { short: { strength: -40 } }, outcomes: { short: { win: 1 } } }], 'BTCUSDT', { limit: 5 });
+    return hh.nextMs === null && !/最近一批预计/.test(renderJevHistoryHtml(hh));
+  })());
   ok('历史 HTML 附到期口径说明（回答要等多久）', html.indexOf('到期口径') > 0 && html.indexOf('短 ≈24h') > 0 && html.indexOf('到期未触发不计胜负') > 0);
 
   const m = buildJevModel({

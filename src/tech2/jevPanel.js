@@ -6,7 +6,7 @@
 //   ③ 三行长/中/短强度滑块（−100…+100：启用 Jev 时 = Jev 强度；关 Jev 后 = 本机 TSEV 已学偏置）
 //
 // 固定标注「模型判断·非交易建议·未接入执行」（红线）。
-import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_MODES, JEV_DRIVERS } from '../engine/jevState.js';
+import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_MODES, JEV_DRIVERS, JEV_WINDOW_MS } from '../engine/jevState.js';
 
 export const JEV_DISCLAIMER = '模型判断 · 非交易建议 · 未接入执行（只做显示与本地学习）';
 
@@ -232,8 +232,24 @@ function rowHtml(r, minSample) {
  */
 export function buildJevHistory(decisions, sym, opts = {}) {
   const limit = Math.max(1, opts.limit || 10);
-  const rows = (decisions || [])
-    .filter(r => r && (!sym || r.sym === sym))
+  const all = (decisions || []).filter(r => r && (!sym || r.sym === sym));
+  // 「下一批到期」：遍历**全部**本币记录（不只显示的 limit 条）——直接回答「还要等多久」
+  const pend = { short: 0, mid: 0, long: 0 };
+  let nextMs = null, overdue = 0;
+  for (const r of all) {
+    if (!r || r.matured || !r.dirs) continue;
+    for (const h of JEV_HORIZON_IDS) {
+      const d = r.dirs[h];
+      if (!d || d.strength == null) continue;
+      if (!(d.strength >= 15 || d.strength <= -15)) continue;        // 中性档不会结算
+      if (r.outcomes && r.outcomes[h]) continue;                     // 已判定
+      pend[h] = (pend[h] || 0) + 1;
+      const due = (r.ts || 0) + (JEV_WINDOW_MS[h] || 0);
+      if (due <= Date.now()) { overdue++; if (nextMs == null || due < nextMs) nextMs = due; }
+      else if (nextMs == null || due < nextMs) nextMs = due;
+    }
+  }
+  const rows = all
     .slice(0, limit)
     .map(r => {
       const oc = r.outcomes || {};
@@ -276,7 +292,13 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   }
   sum.winRate = sum.decided ? sum.win / sum.decided : null;
   sum.avgPnl = sum.pnlN ? sum.pnls / sum.pnlN : null;
-  return { rows, summary: sum, limit, maturityNote: MATURITY_NOTE };
+  return {
+    rows, summary: sum, limit, maturityNote: MATURITY_NOTE,
+    pendingByHorizon: pend,
+    pendingTotal: pend.short + pend.mid + pend.long,
+    nextMs: (pend.short + pend.mid + pend.long) ? nextMs : null,
+    overdue
+  };
 }
 
 const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', flat: '–' };
@@ -288,11 +310,15 @@ export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5�
 export function renderJevHistoryHtml(hist) {
   if (!hist || !hist.rows || !hist.rows.length) return '';
   const s = hist.summary || {};
+  const pendTxt = (hist.pendingTotal
+    ? ' · 待回填 ' + hist.pendingTotal + ' 档' + (hist.nextMs ? '（最近一批预计 ' + fmtTime(hist.nextMs) + ' 出结果）' : '')
+    : '');
   const sumTxt = '已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
-    ' · 待回填 ' + (s.pending || 0) + (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.flat ? ' · 中性 ' + s.flat : '');
-  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行）──</div>' +
-    '<div class="jev-hist-sum">' + sumTxt + '</div>' +
+    (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.flat ? ' · 中性 ' + s.flat : '');
+  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；单位「档」= 短/中/长）──</div>' +
+    '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
+    (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
     '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
   const rows = hist.rows.map(r => {
     const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
@@ -351,7 +377,7 @@ export function renderJevHtml(m) {
   const rows = m.rows.map(r => rowHtml(r, m.minSample)).join('');
 
   const foot = '<div class="jev-foot">' +
-    '样本 ' + m.total + ' 条（待回填 ' + m.pending + '）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : (m.inPer1M || m.outPer1M ? ' · 费用 $0' : ' · 费用 $0（未设单价·本地网关免费）')) +
+    '本币判断 ' + m.total + ' 条（未到期 ' + m.pending + ' 条）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : (m.inPer1M || m.outPer1M ? ' · 费用 $0' : ' · 费用 $0（未设单价·本地网关免费）')) +
   '</div>' +
   (m.latestErr ? '<div class="jev-err">⚠ 上次调用失败：' + m.latestErr + '</div>' : '') +
   (!m.enabled ? '<div class="jev-hint">未启用：不产生调用与样本。到「设置 → Jev 判断（LLM）」开启。</div>' :
