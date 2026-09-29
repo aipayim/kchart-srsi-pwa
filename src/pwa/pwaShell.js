@@ -20,7 +20,7 @@ import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, 
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
 import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
-import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory } from '../tech2/jevPanel.js';
+import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevAllHtml } from '../tech2/jevPanel.js';
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken,
@@ -1315,14 +1315,14 @@ function jevSym() {
   return (cfg && cfg.symbol) || (globalThis.S && globalThis.S.sel) || null;
 }
 
-async function refreshJevData(force) {
+async function refreshJevData(force, ttlMs) {
   const sym = jevSym();
   const now = Date.now();
-  if (!force && _jevCache.sym === sym && now - _jevCache.at < 15000) return;
+  if (!force && _jevCache.sym === sym && now - _jevCache.at < (ttlMs || 15000)) return;
   if (_jevCache.loading) return;
   _jevCache.loading = true;
   try {
-    const list = await listDecisions(60);
+    const list = await listDecisions(400);   // 设置页要看「所有明细」；盯盘面板仍只渲染最近 10 条
     const stats = jevStats(list, sym);
     let tok = false;
     try { tok = await hasJevToken(); } catch (e) { tok = false; }
@@ -1343,6 +1343,7 @@ function renderJev() {
   const sym = jevSym();
   if (!sym) { card.style.display = 'none'; return; }
   card.style.display = '';
+  try { renderJevSetHistory(true); } catch (e) { /* 明细渲染失败不影响面板 */ }
   const latest = (_jevCache.sym === sym ? _jevCache.decisions : []).find(r => r.sym === sym) || null;
   const stats = (_jevCache.sym === sym ? _jevCache.stats : null) || jevStats([], sym);
   const st = jevStatus();
@@ -1371,12 +1372,44 @@ function renderJev() {
   }
 }
 
+// 设置页「所有 Jev 明细」：默认收起（记忆 pwa_jev_all_open）；展开后可 全部/已判定/待回填 过滤
+let _jevAllSig = '';
+function renderJevSetHistory(force) {
+  const wrap = $('jevAllWrap');
+  if (!wrap) return;
+  let open = false;
+  try { open = localStorage.getItem('pwa_jev_all_open') === '1'; } catch (e) { open = false; }
+  const hist = buildJevHistory(_jevCache.decisions, null, { limit: 400 });   // 全币种
+  const rows = hist.rows || [];
+  // 签名守卫：2s 周期刷新时内容未变则不重建 DOM（否则展开状态/滚动位置会每 2s 被重置）
+  const sig = rows.length + '|' + rows.filter(r => r.st === 'decided').length + '|' +
+    (rows.length ? rows[0].ts : 0) + '|' + (rows.length ? rows[rows.length - 1].ts : 0) + '|' + (open ? 1 : 0);
+  if (!force && sig === _jevAllSig) return;
+  _jevAllSig = sig;
+  wrap.innerHTML = renderJevAllHtml(hist, { open });
+  const box = wrap.querySelector('#jevAllBox');
+  if (box) {
+    box.addEventListener('toggle', () => { try { localStorage.setItem('pwa_jev_all_open', box.open ? '1' : '0'); } catch (e) {} });
+  }
+  const body = wrap.querySelector('.jev-all-body');
+  if (body) {
+    wrap.querySelectorAll('.jev-flt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const f = btn.getAttribute('data-flt') || 'all';
+        body.setAttribute('data-flt', f);
+        wrap.querySelectorAll('.jev-flt').forEach(b2 => b2.classList.toggle('on', b2 === btn));
+      });
+    });
+  }
+}
+
 function renderJevSettings() {
   const box = $('pwaJevSetBody');
-  if (!box || box.__built) { if (box) updateJevSetValues(); return; }
+  if (!box || box.__built) { if (box) updateJevSetValues(); renderJevSetHistory(); return; }
   box.__built = true;
   box.innerHTML = renderJevSetHtml(readJevCfg(), { hasToken: _jevCache.hasToken });
   updateJevSetValues();
+  renderJevSetHistory();
   bindJevSettings();
   hasJevToken().then(v => {
     _jevCache.hasToken = v;
@@ -1658,6 +1691,11 @@ export function refreshShell() {
   mountBtSection();
   if (_curTab === 'trade') { renderTrade(); renderTrades(); return; }
   if (_curTab === 'portfolio') { try { renderAdaptivePwa(document.getElementById('pwaAdaptiveBody')); } catch (e) {} return; }
+  if (_curTab === 'settings') {      // 设置页：刷新 Jev 明细（默认收起；节流读 IndexedDB）
+    try { renderJevSetHistory(); } catch (e) { /* 明细刷新失败不影响其它 */ }
+    try { refreshJevData(false, 5000); } catch (e) { /* 忽略 */ }
+    return;
+  }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
   const now = Date.now();
   // 基石(Alpha)信号**按币对**取：切币对后不再显示上一个币对的旧值（2026-09-18 修复）

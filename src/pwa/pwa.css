@@ -833,3 +833,18 @@ body.pwa .jev-howto{margin:6px 0 2px;font-size:10px;color:var(--text2)}
 body.pwa .jev-howto summary{cursor:pointer;color:var(--accent);font-size:10px}
 body.pwa .jev-howto-b{margin-top:4px;line-height:1.65;font-size:9.5px}
 body.pwa .jev-howto-b b{color:var(--text)}
+
+/* v1.6.65：设置页「所有 Jev 明细」（默认收起；展开后过滤 全部/已判定/待回填） */
+body.pwa .jev-all { margin: 6px 0 4px; }
+body.pwa .jev-all-sum { cursor: pointer; font-size: 12px; color: var(--text); padding: 4px 2px; user-select: none; }
+body.pwa .jev-all-sum:hover { color: var(--accent); }
+body.pwa .jev-all-hint { color: var(--text2); font-size: 10px; margin-left: 6px; }
+body.pwa .jev-all-body { max-height: min(52vh, 460px); overflow: auto; padding: 4px 2px 2px; }
+body.pwa .jev-all-flt { display: flex; gap: 6px; padding: 2px 2px 6px; position: sticky; top: 0; background: var(--card); z-index: 2; }
+body.pwa .jev-all-flt .jev-flt { font-size: 11px; padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border); background: transparent; color: var(--text2); cursor: pointer; }
+body.pwa .jev-all-flt .jev-flt.on { color: var(--accent); border-color: var(--accent); }
+body.pwa #jevAllWrap .jev-all-body[data-flt="decided"] .jev-all-row.st-pending { display: none; }
+body.pwa #jevAllWrap .jev-all-body[data-flt="pending"] .jev-all-row.st-decided { display: none; }
+body.pwa .jev-all-note { padding: 4px 2px 0; }
+body.pwa .jev-all-empty { font-size: 11px; color: var(--text2); padding: 4px 2px; }
+body.pwa #jevAllWrap .sig-ev { display: flex; align-items: center; gap: 6px; font-size: 11px; }

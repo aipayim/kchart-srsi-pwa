@@ -11,7 +11,7 @@ import {
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
 import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent } from '../src/pwa/jevClient.js';
-import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
+import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, renderJevAllHtml, historyRowHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
 import { SOUND_KIND_GROUPS, ALL_SIGNAL_KINDS, defaultSoundFor } from '../src/pwa/signalSounds.js';
@@ -742,6 +742,26 @@ async function schedTest() {
   const onFlat = buildToolBoardModel(Object.assign({}, base, { jev: { enabled: true, rows: [{ id: 'short', strength: 4, label: '中性' }] } }));
   ok('短档中性 → 工具一览标为中/无方向', onFlat.allRows.find(r => r.id === 'jev').dir === 'none' || onFlat.allRows.find(r => r.id === 'jev').dir === 'flat');
   ok('工具一览渲染包含 Jev 行', renderToolBoardHtml(on).indexOf('Jev 判断') > 0);
+})();
+
+// ============ 设置页「所有 Jev 明细」（v1.6.65：默认收起 + 过滤） ============
+(function jevAll() {
+  const mk = (ts, sym, st, win) => ({ ts, sym, driver: '技术面', dirs: { short: { strength: -40, label: '偏空', conf: 0.8 } }, outcomes: win != null ? { short: { win, pnlPct: 1.1 } } : null, matured: win != null });
+  const decs = [mk(1700000000000, 'BTCUSDT', 'decided', 1), mk(1699999000000, 'ETHUSDT', 'pending', null)];
+  const h = buildJevHistory(decs, null, { limit: 400 });
+  ok('buildJevHistory 行带回 sym（设置页跨币种显示需要）', h.rows[0].sym === 'BTCUSDT' && h.rows[1].sym === 'ETHUSDT');
+  ok('buildJevHistory 行 st：有判定→decided，否则 pending', h.rows[0].st === 'decided' && h.rows[1].st === 'pending');
+  const html = renderJevAllHtml(h, { open: false });
+  ok('⭐ 明细块默认收起（<details> 无 open）', html.indexOf('<details class="jev-all" id="jevAllBox">') >= 0 && html.indexOf('id="jevAllBox" open') < 0);
+  ok('open=true 时才展开', renderJevAllHtml(h, { open: true }).indexOf('id="jevAllBox" open') > 0);
+  ok('summary 显示总数/已判定/待回填', /所有 Jev 明细（共 2 条判断 · 已判定 1 · 待回填 1）/.test(html));
+  ok('三个过滤按钮（全部/已判定/待回填）', /data-flt="all"/.test(html) && /data-flt="decided"/.test(html) && /data-flt="pending"/.test(html));
+  ok('行挂 st-decided / st-pending 类（供 CSS 过滤）', /jev-all-row st-decided/.test(html) && /jev-all-row st-pending/.test(html));
+  ok('明细行显示币种（跨币种列表）', html.indexOf('BTCUSDT · 驱动') > 0 && html.indexOf('ETHUSDT · 驱动') > 0);
+  ok('明细块含到期口径说明与「无法判定」释义', html.indexOf('到期口径') > 0 && html.indexOf('无法判定') > 0);
+  ok('空数据给出引导文案（不报错）', renderJevAllHtml(null) === '' || renderJevAllHtml({ rows: [] }).indexOf('暂无 Jev 判断记录') > 0);
+  ok('historyRowHtml 无 horizons → 空串', historyRowHtml(null) === '' && historyRowHtml({ ts: 1 }) === '');
+  ok('renderJevSetHtml 含明细容器 #jevAllWrap', renderJevSetHtml({ enabled: true, freq: '1h', mode: 'learn', horizons: { short: true }, groups: {}, price: {}, spend: {} }, {}).indexOf('id="jevAllWrap"') > 0);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============

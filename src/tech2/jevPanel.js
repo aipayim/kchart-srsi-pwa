@@ -273,15 +273,18 @@ export function buildJevHistory(decisions, sym, opts = {}) {
         }
         return {
           id: h.id, name: h.name, side, strength: s, label: d.label || (side === 'long' ? '偏多' : side === 'short' ? '偏空' : '中性'),
-          conf: d.conf != null ? d.conf : null, status, pnl, bars, tf, sideNum: side === 'long' ? 1 : side === 'short' ? -1 : 0
+          conf: d.conf != null ? d.conf : null, status, pnl, bars, tf, sideNum: side === 'long' ? 1 : side === 'short' ? -1 : 0,
+          reason: (o && o.reason) || null
         };
       }).filter(Boolean);
       // 主方向（用于行左侧色条）：取第一档有方向的；均为中性→灰
       const main = horizons.find(x => x.side !== 'flat') || null;
       return {
-        ts: r.ts, model: r.model || null, driver: r.driver || null, ms: r.ms || null,
+        ts: r.ts, sym: r.sym || null, model: r.model || null, driver: r.driver || null, ms: r.ms || null,
         inTok: r.inTok || 0, outTok: r.outTok || 0, err: r.err || null, matured: !!r.matured,
-        horizons, mainSide: main ? main.side : 'flat'
+        horizons, mainSide: main ? main.side : 'flat',
+        // 行状态（供「所有明细」筛选）：有任一档已判定 → decided，否则 pending
+        st: horizons.some(h => h.status === 'win' || h.status === 'loss' || h.status === 'noentry') ? 'decided' : 'pending'
       };
     });
   // 汇总（按档计）
@@ -323,30 +326,60 @@ export function renderJevHistoryHtml(hist) {
     '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
     (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
     '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
-  const rows = hist.rows.map(r => {
-    const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
-    const icon = r.mainSide === 'long' ? '▲' : r.mainSide === 'short' ? '▼' : '·';
-    const chips = r.horizons.map(h => {
-      const c = h.status === 'win' ? '#2ecc71' : h.status === 'loss' ? '#ff6b6b' : '#8899aa';
-      const dirTxt = h.side === 'flat' ? '中性' : h.label + ' ' + (h.strength >= 0 ? '+' : '') + h.strength;
-      const tail = h.status === 'pending' ? ' 待回填'
-        : h.status === 'expired' ? ' 未触发'
-        : h.status === 'noentry' ? ' 无法判定'
-          : h.status === 'flat' ? ''
-            : (h.pnl != null ? ' ' + fmtPct(h.pnl, 2) : '');
-      return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '">' + h.name + ' ' + dirTxt + ' ' + HIST_SYM[h.status] + tail + '</i>';
-    }).join('');
-    const confs = r.horizons.map(h => h.conf != null ? Math.round(h.conf * 100) + '%' : '—').join('/');
-    const meta = [r.driver ? '驱动 ' + r.driver : null, '置信 ' + confs,
-      r.err ? '⚠ ' + String(r.err).slice(0, 40) : null].filter(Boolean).join(' · ');
-    return '<div class="sig-ev sig-ev-signal" style="border-left-color:' + col + '">' +
-      '<span class="sig-ev-t">' + fmtTime(r.ts) + '</span>' +
-      '<span class="sig-ev-i" style="color:' + col + '">' + icon + '</span>' +
-      '<span class="jev-hist-chips">' + chips + '</span>' +
-      '<span class="sig-ev-d">' + meta + '</span>' +
-    '</div>';
+  return head + hist.rows.map(r => historyRowHtml(r)).join('');
+}
+
+/** 历史/明细的单行 HTML（纯函数，供「最近 N 笔」与「所有明细」共用） */
+export function historyRowHtml(r, opts = {}) {
+  if (!r || !r.horizons) return '';
+  const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
+  const icon = r.mainSide === 'long' ? '▲' : r.mainSide === 'short' ? '▼' : '·';
+  const chips = r.horizons.map(h => {
+    const c = h.status === 'win' ? '#2ecc71' : h.status === 'loss' ? '#ff6b6b' : h.status === 'noentry' ? '#f59e0b' : '#8899aa';
+    const dirTxt = h.side === 'flat' ? '中性' : h.label + ' ' + (h.strength >= 0 ? '+' : '') + h.strength;
+    const tail = h.status === 'pending' ? ' 待回填'
+      : h.status === 'expired' ? ' 未触发'
+      : h.status === 'noentry' ? ' 无法判定'
+        : h.status === 'flat' ? ''
+          : (h.pnl != null ? ' ' + fmtPct(h.pnl, 2) : '');
+    return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '" title="' + (h.tf || '') + (h.bars ? ' · ' + h.bars + ' 根' : '') + (h.reason === 'no-entry' ? ' · 判断时缺 K 线，已按行情回推/无法判定' : '') + '">' +
+      h.name + ' ' + dirTxt + ' ' + HIST_SYM[h.status] + tail + '</i>';
   }).join('');
-  return head + rows;
+  const confs = r.horizons.map(h => h.conf != null ? Math.round(h.conf * 100) + '%' : '—').join('/');
+  const meta = [opts.showSym && r.sym ? r.sym : null, r.driver ? '驱动 ' + r.driver : null, '置信 ' + confs,
+    r.err ? '⚠ ' + String(r.err).slice(0, 40) : null].filter(Boolean).join(' · ');
+  return '<div class="sig-ev sig-ev-signal jev-all-row ' + (r.st === 'decided' ? 'st-decided' : 'st-pending') + '" style="border-left-color:' + col + '">' +
+    '<span class="sig-ev-t">' + fmtTime(r.ts) + '</span>' +
+    '<span class="sig-ev-i" style="color:' + col + '">' + icon + '</span>' +
+    '<span class="jev-hist-chips">' + chips + '</span>' +
+    '<span class="sig-ev-d">' + meta + '</span>' +
+  '</div>';
+}
+
+/**
+ * 「所有 Jev 明细」块（纯函数）：默认收起（<details>），展开后可按 全部/已判定/待回填 过滤。
+ * 用于设置页 Jev 卡片——查看全部历史判断（滚到底，上限 = IndexedDB 容量 400）。
+ */
+export function renderJevAllHtml(hist, opts = {}) {
+  if (!hist || !hist.rows || !hist.rows.length) {
+    return '<div class="jev-all-empty">暂无 Jev 判断记录（启用后会按频率自动写入；也可点上方「立即判断一次」）。</div>';
+  }
+  const rows = hist.rows;
+  const decided = rows.filter(r => r.st === 'decided').length;
+  const pending = rows.length - decided;
+  const open = !!opts.open;
+  const head = '<summary class="jev-all-sum">📜 所有 Jev 明细（共 ' + rows.length + ' 条判断 · 已判定 ' + decided + ' · 待回填 ' + pending + '）<span class="jev-all-hint">点击展开 / 收起</span></summary>';
+  const flt = '<div class="jev-all-flt">' +
+    '<button type="button" class="jev-flt on" data-flt="all">全部 ' + rows.length + '</button>' +
+    '<button type="button" class="jev-flt" data-flt="decided">已判定 ' + decided + '</button>' +
+    '<button type="button" class="jev-flt" data-flt="pending">待回填 ' + pending + '</button>' +
+  '</div>';
+  const body = rows.map(r => historyRowHtml(r, { showSym: true })).join('');
+  return '<details class="jev-all" id="jevAllBox"' + (open ? ' open' : '') + '>' + head +
+    '<div class="jev-all-body" data-flt="all">' + flt + body + '</div>' +
+    '<div class="jev-dim jev-all-note">' + MATURITY_NOTE + ' · 上限 ' + rows.length + ' 条（IndexedDB 容量 400）。<br>' +
+    '「待回填」= 该档还没走满到期根数；「未触发」= 到期时 TP/SL 都没到（不计胜负）；「无法判定」= 判断时缺该档 K 线。</div>' +
+  '</details>';
 }
 
 /** 面板 HTML（纯函数，可单测） */
@@ -437,6 +470,7 @@ export function renderJevSetHtml(cfg, extra) {
     '<div class="setting-row"><label>新闻源（可选）</label><input id="jevNews" type="text" style="flex:1;min-width:170px" placeholder="RSS 直链 或 包裹代理 https://代理/?url={url}（空=开发走 /rss-proxy，生产为未知）"></div>' +
     '<div class="setting-row"><label>单价 ($/1M tokens)</label><span class="jev-inline">入 <input id="jevIn" type="number" min="0" step="any" style="width:64px"> 出 <input id="jevOut" type="number" min="0" step="any" style="width:64px"></span></div>' +
     '<div class="jev-dim" style="margin:2px 0 4px">累计：' + (spend.calls || 0) + ' 次调用 · ' + ((spend.inTok || 0) + (spend.outTok || 0)) + ' tokens · ' + ((spend.cost || 0) ? '$' + spend.cost.toFixed(4) : '$0（本地网关免费）') + '</div>' +
+    '<div id="jevAllWrap"></div>' +
     '<details class="jev-adv"><summary>高级：请求体 JSON 模板（{{model}} / {{state}} 占位符；留空用内置）</summary>' +
       '<textarea id="jevTpl" spellcheck="false" placeholder="留空 = 内置（一次调用问短/中/长 + 驱动）"></textarea>' +
       '<div class="jev-dim">上游 schema 变更时，可在这里改形状而无需等更新（配合「探测形状」）。</div></details>' +
