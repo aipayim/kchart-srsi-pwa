@@ -10,7 +10,7 @@ import {
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary } from '../src/engine/jevState.js';
-import { collectJevContext, jevSchedulerTick } from '../src/pwa/jevClient.js';
+import { collectJevContext, jevSchedulerTick, planMaturation } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
 
@@ -547,6 +547,7 @@ async function schedTest() {
   ok('历史 HTML 每档带符号与盈亏', html.indexOf('✗ -1.20%') > 0 && html.indexOf('✓ +2.40%') > 0 && html.indexOf('⏳ 待回填') > 0 && html.indexOf('○ 未触发') > 0);
   ok('历史 HTML 带时间/驱动/置信', /class="sig-ev-t">\d\d:\d\d</.test(html) && html.indexOf('驱动 技术面') > 0 && html.indexOf('置信 78%/54%/56%') > 0);
   ok('renderJevHistoryHtml 空输入返回空串', renderJevHistoryHtml(null) === '' && renderJevHistoryHtml({ rows: [] }) === '');
+  ok('历史 HTML 附到期口径说明（回答要等多久）', html.indexOf('到期口径') > 0 && html.indexOf('短 ≈24h') > 0 && html.indexOf('到期未触发不计胜负') > 0);
 
   const m = buildJevModel({
     sym: 'BTCUSDT', cfg: { enabled: true, mode: 'learn', freq: '15m', price: { inPer1M: 5, outPer1M: 30 } }, hasToken: true,
@@ -557,6 +558,48 @@ async function schedTest() {
   ok('无历史时不渲染列表', renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} } })).indexOf('mar-sep') < 0);
   ok('设了单价 → 费用不再写「未设单价」', renderJevHtml(m).indexOf('未设单价') < 0);
   ok('未设单价 → 费用标「未设单价·本地网关免费」', renderJevHtml(buildJevModel({ cfg: { enabled: true, spend: { calls: 1 } }, stats: { byHorizon: {}, learned: {} } })).indexOf('未设单价') > 0);
+})();
+
+// ============ 回填幂等性（v1.6.59 关键修复：样本不得重复喂） ============
+(function maturity() {
+  const mkEval = (matured) => (rec, h) => {
+    if (!matured.includes(h)) return null;
+    if (h === 'mid') return { win: 0, side: 1, pnlPct: null, bars: 30, tf: '4h' };
+    return { win: rec.dirs[h].strength < 0 ? 1 : -1, side: rec.dirs[h].strength < 0 ? -1 : 1, pnlPct: 1.5, bars: 5, tf: '1h' };
+  };
+  const rec = {
+    sym: 'BTCUSDT', ts: 1,
+    dirs: { short: { strength: -40 }, mid: { strength: 30 }, long: { strength: 0 } },
+    samples: [{ horizon: 'short', side: 'short' }, { horizon: 'mid', side: 'long' }, { horizon: 'long', side: 'long' }]
+  };
+  const p1 = planMaturation(rec, mkEval(['short']));
+  ok('planMaturation：只有短档到期 → toFeed 只含短', p1.toFeed.length === 1 && p1.toFeed[0].horizon === 'short');
+  ok('planMaturation：看空档 win=1 → hit=true（方向判对了）', p1.toFeed[0].hit === true && p1.toFeed[0].win === 1);
+  ok('planMaturation：未到期档不喂也不标记', p1.fed.mid === undefined && p1.fed.short === true);
+  ok('planMaturation：中性档不产生样本（不进 toFeed）', !p1.toFeed.some(x => x.horizon === 'long'));
+  ok('planMaturation：还有未到期档 → allDone=false', p1.allDone === false && p1.anyOutcome === true);
+
+  // 关键：第二次调用（带持久化的 fed）绝不得重复喂
+  rec.fed = p1.fed; rec.outcomes = p1.outcomes;
+  const p2 = planMaturation(rec, mkEval(['short']));
+  ok('planMaturation 幂等：第二次不再喂已喂过的档（防重复计数）', p2.toFeed.length === 0);
+
+  // 中档到期但 win=0（到期未触发）→ 标记已喂但不计入样本
+  const p3 = planMaturation(rec, mkEval(['short', 'mid']));
+  ok('planMaturation：win=0 的档标记已喂但不入样本', p3.fed.mid === true && !p3.toFeed.some(x => x.horizon === 'mid'));
+
+  // 全部到期 → allDone
+  const p4 = planMaturation({ dirs: { short: { strength: -40 }, mid: { strength: 30 } }, samples: [] }, mkEval(['short', 'mid']));
+  ok('planMaturation：方向档全到期 → allDone=true 且可结算', p4.allDone === true && p4.anyOutcome === true && Object.keys(p4.outcomes).length === 2);
+
+  // 全中性记录：无方向档 → allDone=true（直接结算）、无 outcome
+  const p5 = planMaturation({ dirs: { short: { strength: 5 }, mid: { strength: 0 } }, samples: [] }, mkEval([]));
+  ok('planMaturation：全中性 → allDone=true / anyOutcome=false', p5.allDone === true && p5.anyOutcome === false);
+
+  // 看多档 win=-1 → hit=false
+  const p6 = planMaturation({ dirs: { short: { strength: 40 } }, samples: [{ horizon: 'short', side: 'long' }] }, mkEval(['short']));
+  ok('planMaturation：看多档 win=−1 → hit=false', p6.toFeed.length === 1 && p6.toFeed[0].hit === false);
+  ok('planMaturation 空输入安全', planMaturation(null, mkEval([])).toFeed.length === 0 && planMaturation(null, mkEval([])).allDone === true);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============

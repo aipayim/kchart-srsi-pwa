@@ -501,7 +501,7 @@ export function evalDecisionHorizon(rec, h) {
   const dir = rec && rec.dirs && rec.dirs[h];
   if (!dir || dir.strength == null) return null;
   const ev = JEV_EVAL[h];
-  const side = dir.strength >= 15 ? 1 : dir.strength <= -15 ? -1 : 0;
+  const side = dir.strength >= JEV_SIDE_THR ? 1 : dir.strength <= -JEV_SIDE_THR ? -1 : 0;
   if (!side) return null;
   const e = rec.entry && rec.entry[h];
   if (!e || !(e.price > 0) || !(e.atr > 0)) return null;
@@ -528,41 +528,70 @@ export function evalDecisionHorizon(rec, h) {
   return { win: r.win, side, pnlPct: r.pnlPct, bars: r.barsHeld, tf: ev.tf, exitDir: r.exitDir };
 }
 
-/** 回填所有到期记录；把样本喂给本机 TSEV（localLoop.recordJevSample）。返回 {matured, fed} */
+// 方向档阈值（|强度| ≥ 此值才算「有方向」；与 jevState.jevSide 保持一致）
+export const JEV_SIDE_THR = 15;
+
+/**
+ * 纯函数：算出该记录本次应回填的结果与应喂的样本。
+ * ⭐ `rec.fed`（已喂过的档）保证**每个档的样本只喂一次**、绝不会重复计数。
+ *   —— v1.6.59 修复：旧实现只要 `rec.matured` 为 false 就在**每个 5min tick** 重喂已到期档的样本
+ *   （短档 24h 到期、长档 30 天到期 ⇒ 短档样本会被重复喂上千次，直接污染 TSEV 命中率）。
+ * ⭐ `hit = (win === 1)`：`evalDecisionHorizon` 把 Jev 判的方向作为 `winLossByAtr.direction` 传入，
+ *   所以 `win=1` **本身就是「判对了」**（做空时 win=1 = 价格先跌到 TP）。
+ *   —— v1.6.59 修复：旧实现写成 `(win===1 && side==='long') || (win===-1 && side==='short')`，
+ *   **把所有做空判断的胜败弄反了**（会反向学习）。
+ * ⭐ 中性档（|强度| < JEV_SIDE_THR）**不参与评估/结算** → 否则「全是中性」的记录会永远挂在「待回填」。
+ */
+export function planMaturation(rec, evalFn) {
+  const outcomes = {};
+  let allDone = true;
+  for (const h of JEV_HORIZON_IDS) {
+    const d = rec && rec.dirs && rec.dirs[h];
+    if (!d || d.strength == null) continue;
+    if (!(d.strength >= JEV_SIDE_THR || d.strength <= -JEV_SIDE_THR)) continue;   // 中性档不结算
+    const o = evalFn(rec, h);
+    if (!o) { allDone = false; continue; }
+    outcomes[h] = o;
+  }
+  const fed = Object.assign({}, (rec && rec.fed) || {});
+  const toFeed = [];
+  for (const smp of ((rec && rec.samples) || [])) {
+    if (!smp || !smp.horizon || fed[smp.horizon]) continue;
+    const o = outcomes[smp.horizon];
+    if (!o) continue;                        // 该档尚未到期 → 下次再看
+    fed[smp.horizon] = true;                 // 无论胜败，只看一次
+    if (o.win === 0) continue;               // 到期未触发 → 不计入样本
+    toFeed.push(Object.assign({}, smp, { win: o.win, hit: o.win === 1 }));
+  }
+  return { outcomes, allDone, fed, toFeed, anyOutcome: Object.keys(outcomes).length > 0 };
+}
+
+/** 回填所有到期记录；每个样本只喂一次。返回 {matured, fed} */
 export async function matureDecisions() {
   const d = await db();
   if (!d) return { matured: 0, fed: 0 };
   const all = await listDecisions(9999);
   const localLoop = globalThis.__localTsev || null;
+  const canFeed = !!(localLoop && typeof localLoop.recordJevSample === 'function');
   let matured = 0, fed = 0;
   for (const rec of all) {
     if (rec.matured) continue;
-    const outcomes = {};
-    let allDone = true;
-    for (const h of JEV_HORIZON_IDS) {
-      if (!rec.dirs || !rec.dirs[h] || rec.dirs[h].strength == null) continue;
-      const o = evalDecisionHorizon(rec, h);
-      if (!o) { allDone = false; continue; }
-      outcomes[h] = o;
-    }
-    if (!Object.keys(outcomes).length && !allDone) {
+    const plan = planMaturation(rec, evalDecisionHorizon);
+    if (!plan.anyOutcome && !plan.allDone) {
       // 可能因 K 线滚出窗口永远无法判定 → 超过 120 天标记为过期
       if (Date.now() - rec.ts > 120 * 86400000) { rec.matured = true; rec.outcomes = {}; rec.expired = true; await putDecision(rec); matured++; }
       continue;
     }
-    // 喂样本：仅已判定的档
-    if (rec.samples && rec.samples.length && localLoop && typeof localLoop.recordJevSample === 'function') {
-      for (const smp of rec.samples) {
-        const o = outcomes[smp.horizon];
-        if (!o || o.win === 0) continue;
-        const hit = (o.win === 1 && smp.side === 'long') || (o.win === -1 && smp.side === 'short');
+    if (canFeed && plan.toFeed.length) {
+      for (const smp of plan.toFeed) {
         const sideNum = smp.side === 'long' ? 1 : -1;
-        try { localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, hit ? 1 : 0); fed++; } catch (e) { /* 单条失败不影响其它 */ }
+        try { localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0); fed++; } catch (e) { /* 单条失败不影响其它 */ }
       }
     }
-    rec.outcomes = outcomes;
-    rec.matured = allDone;
-    if (allDone) matured++;
+    rec.fed = plan.fed;
+    rec.outcomes = plan.outcomes;
+    rec.matured = plan.allDone;
+    if (plan.allDone) matured++;
     await putDecision(rec);
   }
   return { matured, fed };

@@ -253,11 +253,13 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   }
   sum.winRate = sum.decided ? sum.win / sum.decided : null;
   sum.avgPnl = sum.pnlN ? sum.pnls / sum.pnlN : null;
-  return { rows, summary: sum, limit };
+  return { rows, summary: sum, limit, maturityNote: MATURITY_NOTE };
 }
 
 const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', flat: '–' };
 const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', flat: 'flat' };
+// 到期口径（与 jevClient.JEV_EVAL + winLossByAtr 同源）——直接回答用户「要等多久才有结果」
+export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习';
 
 /** 历史列表 HTML（纯函数）：时间 + 三档结果 + 驱动/置信度 */
 export function renderJevHistoryHtml(hist) {
@@ -267,7 +269,8 @@ export function renderJevHistoryHtml(hist) {
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
     ' · 待回填 ' + (s.pending || 0) + (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.flat ? ' · 中性 ' + s.flat : '');
   const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行）──</div>' +
-    '<div class="jev-hist-sum">' + sumTxt + '</div>';
+    '<div class="jev-hist-sum">' + sumTxt + '</div>' +
+    '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
   const rows = hist.rows.map(r => {
     const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
     const icon = r.mainSide === 'long' ? '▲' : r.mainSide === 'short' ? '▼' : '·';

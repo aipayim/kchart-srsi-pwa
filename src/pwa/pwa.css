@@ -819,3 +819,4 @@ body.pwa .jev-hc.loss{border-color:rgba(255,82,82,.45);background:rgba(255,82,82
 body.pwa .jev-hc.pending{opacity:.75}
 body.pwa .jev-hc.expired,body.pwa .jev-hc.flat{color:#8899aa}
 body.pwa [data-acc="jev"] .sig-alerts{max-height:min(46vh,420px)}
+body.pwa .jev-hist-note{font-size:9px;color:#6B7688;margin:0 0 4px;line-height:1.5}
