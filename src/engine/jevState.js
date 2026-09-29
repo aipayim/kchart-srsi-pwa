@@ -251,15 +251,15 @@ export function buildJevState(inp) {
   // ② 盘口与订单流
   const fl = it.flow || {};
   const frTxt = fl.fundingRate != null
-    ? pct1(fl.fundingRate * 100) + '/期' + (fl.frTrend ? '（' + fl.frTrend + '）' : '') + (fl.fundingRate > 0 ? ' → 多头拥挤（空头收费）' : fl.fundingRate < 0 ? ' → 空头拥挤（多头收费）' : '')
-    : '未知';
+    ? pct1(fl.fundingRate * 100) + '/期' + (fl.frTrend ? '（' + fl.frTrend + '）' : '') + (fl.fundingRate > 0 ? ' → 多头拥挤（空头收费）' : fl.fundingRate < 0 ? ' → 空头拥挤（多头收费）' : '') +
+      (fl.basisPct != null ? ' · 基差 ' + pct1(fl.basisPct) : '')
+    : (fl.basisPct != null ? '未知 · 基差 ' + pct1(fl.basisPct) : '未知');
   const oiTxt = fl.oi != null ? (fl.oiTrend ? fl.oiTrend + '（' + fmtNum(fl.oi) + '）' : fmtNum(fl.oi)) : '未知';
   const tkTxt = fl.taker != null ? '主动买/卖 = ' + Number(fl.taker).toFixed(3) + (fl.taker >= 1.05 ? '（买盘主动）' : fl.taker <= 0.95 ? '（卖盘主动）' : '（均衡）') : '未知';
   const lsTxt = fl.longRatio != null ? '多头账户占比 ' + Number(fl.longRatio).toFixed(1) + '%' : '未知';
   const whaleTxt = fl.whale != null ? fl.whale : '未知';
   const liqTxt = fl.liq != null ? fl.liq : '未知';
   if (frTxt === '未知' && oiTxt === '未知' && tkTxt === '未知') missing.push('盘口/订单流');
-
   // ③ 外部语义
   const ex = it.ext || {};
   const newsTxt = ex.news
@@ -473,6 +473,73 @@ export function tfReadings(closes, highs, lows, vols, opts = {}) {
     band: kd ? srsiBandText(kd[0], opts.ob, opts.os) : null
   };
   return out;
+}
+
+/**
+ * 解析盘口/订单流 API 原始回包（纯函数，可单测）。入参均可为 null：
+ *   premium = /fapi/v1/premiumIndex 对象；oi = openInterestHist 数组；
+ *   lsGlobal = globalLongShortAccountRatio 数组；lsTop = topLongShortAccountRatio 数组；
+ *   taker = takerlongshortRatio 数组；prevRate = 上一次 fundingRate
+ * 注意：Binance 的 longAccount 是 **0~1 小数**（0.5399=53.99%）→ 必须归一化（§5.12 踩坑）。
+ */
+export function parseJevFlow(inp) {
+  const it = inp || {};
+  const out = { filled: {}, filledN: 0, totalN: 5 };
+  const lastEl = (a) => (Array.isArray(a) && a.length ? a[a.length - 1] : null);
+  const numOf = (v) => (v == null || v === '' ? null : (isFinite(+v) ? +v : null));
+
+  const p = it.premium;
+  if (p) {
+    const fr = numOf(p.lastFundingRate);
+    if (fr != null) { out.fundingRate = fr; out.filled.funding = true; }
+    if (p.nextFundingTime != null) out.fundingNextTs = +p.nextFundingTime || null;
+    const mk = numOf(p.markPrice), ix = numOf(p.indexPrice);
+    if (mk != null) out.markPrice = mk;
+    if (ix != null && mk != null && ix > 0) { out.indexPrice = ix; out.basisPct = (mk - ix) / ix * 100; out.filled.basis = true; }
+  }
+  const pr = numOf(it.prevRate);
+  if (out.fundingRate != null && pr != null && pr !== out.fundingRate) {
+    const d = out.fundingRate - pr;
+    if (Math.abs(d) > 1e-12) { out.frTrend = d > 0 ? '较上次↑' : '较上次↓'; out.frDelta = d; }
+  }
+
+  const oiArr = Array.isArray(it.oi) ? it.oi : null;
+  if (oiArr && oiArr.length) {
+    const a = numOf(oiArr[0].sumOpenInterest), b = numOf(lastEl(oiArr).sumOpenInterest);
+    if (b != null) { out.oi = b; out.filled.oi = true; }
+    if (a != null && b != null && a > 0) { out.oiChangePct = (b - a) / a * 100; out.oiChangeBars = oiArr.length; }
+  }
+
+  const norm = (v) => { const x = numOf(v); if (x == null) return null; return x <= 1 ? x * 100 : x; };
+  const lg = lastEl(it.lsGlobal);
+  if (lg) { const v = norm(lg.longAccount); if (v != null) { out.longRatio = v; out.filled.ls = true; } }
+  const lt = lastEl(it.lsTop);
+  if (lt) { const v = norm(lt.longAccount); if (v != null) out.topLongRatio = v; }
+  const tk = lastEl(it.taker);
+  if (tk) { const v = numOf(tk.buySellRatio); if (v != null) { out.taker = v; out.filled.taker = true; } }
+
+  out.filledN = Object.keys(out.filled).length;
+  return out;
+}
+
+/** 数据填充度摘要（面板显示用，纯函数）：配合「缺就写未知」的诚实口径 */
+export function flowFillSummary(flow, ext) {
+  const f = flow || {};
+  const items = [
+    ['资金费率', !!(f.filled && f.filled.funding)],
+    ['基差', !!(f.filled && f.filled.basis)],
+    ['持仓量', !!(f.filled && f.filled.oi)],
+    ['多空比', !!(f.filled && f.filled.ls)],
+    ['主动买卖', !!(f.filled && f.filled.taker)]
+  ];
+  const missing = items.filter(x => !x[1]).map(x => x[0]);
+  const have = items.length - missing.length;
+  const news = !!(ext && ext.news);
+  return {
+    flow: { have, total: items.length, missing },
+    news,
+    text: '盘口 ' + have + '/' + items.length + (missing.length ? '（缺：' + missing.join('·') + '）' : '') + ' · 新闻 ' + (news ? '✓' : '未知')
+  };
 }
 
 /** 收集器辅助：量价背离 + 支撑阻力（复用 indicators 纯函数） */

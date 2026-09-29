@@ -8,7 +8,9 @@ import {
   resonanceText, timeWindow, buildJevState, renderTemplate, buildJevBody,
   parseJevResponse, jevSamplesFor, scoreToStrength, strengthLabel, jevSide
 } from '../src/engine/jevState.js';
-import { decisionEndpoint, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
+import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
+import { parseJevFlow, flowFillSummary } from '../src/engine/jevState.js';
+import { collectJevContext, jevSchedulerTick } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
 
@@ -168,12 +170,28 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
 // ============ 决策端点 URL / 调用（mock fetch） ============
 (function endpoint() {
   const savedLoc = globalThis.location;
-  globalThis.location = { origin: 'http://localhost:5173', port: '5173' };
+  globalThis.location = { origin: 'http://localhost:5173', hostname: 'localhost', port: '5173' };
   ok('decisionEndpoint 本机其它端口 → /llm-proxy', decisionEndpoint({ baseUrl: 'http://localhost:3460/v1' }) === 'http://localhost:5173/llm-proxy/decisions');
   ok('decisionEndpoint 同端口不代理', decisionEndpoint({ baseUrl: 'http://localhost:5173/v1' }) === 'http://localhost:5173/v1/decisions');
   ok('decisionEndpoint 完整端点不重复拼', decisionEndpoint({ baseUrl: 'https://x/v1/decisions' }) === 'https://x/v1/decisions');
   ok('decisionEndpoint 远端直连', decisionEndpoint({ baseUrl: 'https://api.jev.ai/v1' }) === 'https://api.jev.ai/v1/decisions');
   ok('decisionEndpoint 空值回落代理（相对路径）', decisionEndpoint({}) === '/llm-proxy/decisions');
+  if (savedLoc === undefined) delete globalThis.location; else globalThis.location = savedLoc;
+
+  // v1.6.55：生产页面填 localhost → 必须给出可行动报错，而不是发一个必被 405 的请求
+  globalThis.location = { origin: 'https://srsi.openapi.im', hostname: 'srsi.openapi.im', port: '' };
+  const p1 = decisionEndpointInfo({ baseUrl: 'http://localhost:3460/v1' });
+  ok('决策端点：生产页面 + localhost base → 不可用且带可行动提示', p1.url === '' && /localhost 只能由/.test(p1.err) && /https/.test(p1.err));
+  ok('decisionEndpoint 不可用时返回空串', decisionEndpoint({ baseUrl: 'http://localhost:3460/v1' }) === '');
+  const p2 = decisionEndpointInfo({ baseUrl: '' });
+  ok('决策端点：生产页面 + 空 base → 提示必须填自己的端点', p2.url === '' && /必须填你自己的 Jev 端点/.test(p2.err));
+  const p3 = decisionEndpointInfo({ baseUrl: 'https://api.jev.ai/v1' });
+  ok('决策端点：生产页面 + 远端 https → 直连', p3.url === 'https://api.jev.ai/v1/decisions' && p3.err === null);
+  const p4 = decisionEndpointInfo({ baseUrl: 'http://192.168.1.9:3460/v1' });
+  ok('决策端点：生产页面 + 局域网 IP → 直连（由浏览器 CORS/混合内容把关）', p4.url === 'http://192.168.1.9:3460/v1/decisions' && p4.err === null);
+  globalThis.location = { origin: 'http://localhost:5173', hostname: 'localhost', port: '5173' };
+  const p5 = decisionEndpointInfo({ baseUrl: 'http://127.0.0.1:3460/v1' });
+  ok('决策端点：本机页面 + 本机 base → 走 /llm-proxy', p5.url === 'http://localhost:5173/llm-proxy/decisions' && p5.proxied === true);
   if (savedLoc === undefined) delete globalThis.location; else globalThis.location = savedLoc;
 })();
 
@@ -338,6 +356,106 @@ async function fetchTests2() {
   }
 })();
 
+// ============ 盘口/订单流解析 + 采集（v1.6.55） ============
+(function flowParse() {
+  const full = parseJevFlow({
+    premium: { markPrice: 100.5, indexPrice: 100, lastFundingRate: 0.0001, nextFundingTime: 1 },
+    oi: [{ sumOpenInterest: '1000' }, { sumOpenInterest: '1010' }],
+    lsGlobal: [{ longAccount: 0.5399 }],
+    lsTop: [{ longAccount: '0.61' }],
+    taker: [{ buySellRatio: '1.12' }],
+    prevRate: 0.00005
+  });
+  ok('parseJevFlow 五项全填', full.filledN === 5 && full.filled.funding && full.filled.basis && full.filled.oi && full.filled.ls && full.filled.taker);
+  ok('parseJevFlow longAccount 0~1 小数 → 百分比', near(full.longRatio, 53.99) && near(full.topLongRatio, 61));
+  ok('parseJevFlow 已是百分数不重复 ×100', near(parseJevFlow({ lsGlobal: [{ longAccount: 53.9 }] }).longRatio, 53.9));
+  ok('parseJevFlow 基差计算', near(full.basisPct, 0.5));
+  ok('parseJevFlow OI 变化%', near(full.oiChangePct, 1) && full.oiChangeBars === 2);
+  ok('parseJevFlow frTrend 比上次', full.frTrend === '较上次↑' && near(full.frDelta, 0.00005));
+  ok('parseJevFlow 无 prevRate 不给 trend', parseJevFlow({ premium: { lastFundingRate: 0.0001 } }).frTrend === undefined);
+  const empty = parseJevFlow(null);
+  ok('parseJevFlow 空输入安全', empty.filledN === 0 && empty.fundingRate === undefined && empty.longRatio === undefined);
+  const partial = parseJevFlow({ premium: { lastFundingRate: '-0.0002' } });
+  ok('parseJevFlow 部分可用（负费率）', partial.filledN === 1 && partial.fundingRate === -0.0002 && partial.filled.basis === undefined);
+  ok('parseJevFlow 非法值不当数字', parseJevFlow({ taker: [{ buySellRatio: 'abc' }] }).taker === undefined);
+  ok('parseJevFlow 不抛异常（全垃圾）', !!parseJevFlow({ oi: 5, lsGlobal: 'x', taker: {} }));
+
+  ok('flowFillSummary 全有', flowFillSummary(full, { news: {} }).text === '盘口 5/5 · 新闻 ✓');
+  const fs2 = flowFillSummary(parseJevFlow({ premium: { lastFundingRate: 0.0001 } }), null);
+  ok('flowFillSummary 含缺口清单', fs2.flow.have === 1 && fs2.flow.missing.indexOf('持仓量') >= 0 && fs2.text.indexOf('缺：') > 0 && fs2.news === false);
+  ok('flowFillSummary 空输入安全', flowFillSummary(null, null).flow.have === 0 && /新闻 未知/.test(flowFillSummary(null, null).text));
+})();
+
+async function contextTest() {
+  const savedFetch = globalThis.fetch;
+  const urls = [];
+  const ok2 = (o) => ({ ok: true, status: 200, text: async () => JSON.stringify(o), json: async () => o });
+  globalThis.fetch = async (url) => {
+    urls.push(url);
+    if (url.indexOf('premiumIndex') >= 0) return ok2({ symbol: 'BTCUSDT', markPrice: 100.5, indexPrice: 100, lastFundingRate: 0.0001, nextFundingTime: 1 });
+    if (url.indexOf('openInterestHist') >= 0) return ok2([{ sumOpenInterest: '1000' }, { sumOpenInterest: '1010' }]);
+    if (url.indexOf('globalLongShortAccountRatio') >= 0) return ok2([{ longAccount: 0.5399 }]);
+    if (url.indexOf('topLongShortAccountRatio') >= 0) return ok2([{ longAccount: '0.61' }]);
+    if (url.indexOf('takerlongshortRatio') >= 0) return ok2([{ buySellRatio: '1.12' }]);
+    return { ok: false, status: 404, text: async () => '' };
+  };
+  try {
+    const ctx = await collectJevContext('BTCUSDT', { flowOpts: { force: true } });
+    ok('collectJevContext 拉 5 个盘口接口', urls.filter(u => /fapi\/v1\/premiumIndex|futures\/data\//.test(u)).length === 5);
+    ok('collectJevContext 填出 flow 各字段', near(ctx.flow.fundingRate, 0.0001) && near(ctx.flow.basisPct, 0.5) && near(ctx.flow.longRatio, 53.99) && near(ctx.flow.taker, 1.12));
+    ok('collectJevContext OI 趋势文字', /上升 1\.00%/.test(ctx.flow.oiTrend || ''));
+    ok('collectJevContext 大户 vs 散户对比文字', /大户更偏多/.test(ctx.flow.whale || ''));
+    ok('collectJevContext fill 摘要', ctx.fill && ctx.fill.flow.have === 5 && ctx.fill.news === false);
+
+    // 盘口全部失败 → flow 空但绝不抛错（拿不到就是未知，不影响 Jev 判断）
+    globalThis.fetch = async () => ({ ok: false, status: 451, text: async () => '' });
+    const ctx2 = await collectJevContext('ETHUSDT', { flowOpts: { force: true } });
+    ok('collectJevContext 全失败 → flow 空 + 不抛错', Object.keys(ctx2.flow).length === 0 && ctx2.fill.flow.have === 0);
+    ok('collectJevContext 全失败时 errs 有记录', Array.isArray(ctx2.errs));
+  } finally { globalThis.fetch = savedFetch; }
+}
+
+// ============ 调度节流（1h 频率内不重复触发） ============
+async function schedTest() {
+  const savedFetch = globalThis.fetch;
+  let posts = 0;
+  globalThis.fetch = async () => { posts++; return { ok: false, status: 400, text: async () => '{}', json: async () => ({}) }; };
+  const jev = await import('../src/pwa/jevClient.js');
+  try {
+    // 未启用（Node 无 localStorage）→ 不触发
+    for (let i = 0; i < 5; i++) jev.jevSchedulerTick();
+    await new Promise(r => setTimeout(r, 50));
+    ok('调度：未启用时不发请求', posts === 0 && jev.__jevSchedState().lastAttempt === 0);
+
+    // 注入内存 localStorage，开启 Jev（1h）
+    const store = {};
+    globalThis.localStorage = {
+      getItem: k => (k in store ? store[k] : null),
+      setItem: (k, v) => { store[k] = String(v); },
+      removeItem: k => { delete store[k]; },
+      key: i => Object.keys(store)[i] || null,
+      get length() { return Object.keys(store).length; }
+    };
+    const { patchJevCfg } = await import('../src/pwa/jevClient.js');
+    patchJevCfg({ enabled: true, freq: '1h', baseUrl: 'https://api.jev.ai/v1' });
+    jev.jevSchedulerTick();
+    const first = jev.__jevSchedState().lastAttempt;
+    ok('调度：启用后首次 tick 即触发一次尝试', first > 0);
+    for (let i = 0; i < 30; i++) jev.jevSchedulerTick();
+    await new Promise(r => setTimeout(r, 60));
+    ok('调度：1h 频率内后续 30 次 tick 不再触发（失败也不刷屏）', jev.__jevSchedState().lastAttempt === first);
+
+    // manual 模式永不自动跑
+    patchJevCfg({ freq: 'manual' });
+    const before = jev.__jevSchedState().lastAttempt;
+    for (let i = 0; i < 5; i++) jev.jevSchedulerTick();
+    ok('调度：manual 模式不自动调用', jev.__jevSchedState().lastAttempt === before);
+  } finally {
+    globalThis.fetch = savedFetch;
+    delete globalThis.localStorage;
+  }
+}
+
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============
 (function cfg() {
   const c = readJevCfg();
@@ -346,6 +464,8 @@ async function fetchTests2() {
   ok('readJevCfg 默认分组', c.groups.short.join(',') === '5m,15m,1h' && c.groups.long.join(',') === '7d,30d');
 })();
 
+await contextTest();
+await schedTest();
 await fetchTests();
 
 console.log(`\n=== jev.test: ${passed} passed, ${failed} failed ===`);

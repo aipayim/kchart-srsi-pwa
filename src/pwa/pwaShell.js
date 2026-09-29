@@ -1331,7 +1331,8 @@ function renderJev() {
   try { const m = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }; freqMs = m[cfg.freq] || 0; } catch (e) {}
   const model = buildJevModel({
     sym, cfg, latest, decisions: _jevCache.decisions, stats, status: st,
-    hasToken: _jevCache.hasToken, freqMs, now: Date.now()
+    hasToken: _jevCache.hasToken, freqMs, now: Date.now(),
+    fill: cfg.lastFill || null, flow: cfg.flow || null
   });
   const html = renderJevHtml(model);
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
@@ -1373,6 +1374,7 @@ function updateJevSetValues() {
   set('jevMode', c.mode || 'off');
   set('jevIn', c.price && c.price.inPer1M || 0);
   set('jevOut', c.price && c.price.outPer1M || 0);
+  set('jevNews', c.newsSrc || '');
   const tpl = $('jevTpl'); if (tpl) tpl.value = c.template || '';
 }
 
@@ -1381,6 +1383,16 @@ function jevSetMsg(msg, ok) {
   if (!el) return;
   el.textContent = msg;
   el.style.color = ok === false ? '#ff8a8a' : ok === true ? '#2ecc71' : '#8899aa';
+}
+function jevTokMsg(msg, ok) {
+  const el = $('jevTokMsg');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok === false ? '#ff8a8a' : ok === true ? '#2ecc71' : '#8899aa';
+}
+// 非安全上下文（http://非localhost）浏览器不提供 crypto.subtle → 加密保存不可能成功，给出可行动提示
+function jevCryptoOk() {
+  try { return !!(globalThis.crypto && globalThis.crypto.subtle && globalThis.crypto.subtle.importKey); } catch (e) { return false; }
 }
 
 function bindJevSettings() {
@@ -1399,6 +1411,7 @@ function bindJevSettings() {
   on('jevIn', 'change', (e) => { const c = readJevCfg(); patchJevCfg({ price: Object.assign({}, c.price, { inPer1M: parseFloat(e.target.value) || 0 }) }); });
   on('jevOut', 'change', (e) => { const c = readJevCfg(); patchJevCfg({ price: Object.assign({}, c.price, { outPer1M: parseFloat(e.target.value) || 0 }) }); });
   on('jevTpl', 'change', (e) => patchJevCfg({ template: e.target.value }));
+  on('jevNews', 'change', (e) => patchJevCfg({ newsSrc: e.target.value.trim() }));
   // 勾选档 / 周期分组（事件委托）
   box.addEventListener('change', (e) => {
     const t = e.target;
@@ -1421,20 +1434,31 @@ function bindJevSettings() {
   on('jevTokenSave', 'click', async () => {
     const inp = $('jevToken');
     const v = inp ? inp.value.trim() : '';
-    if (!v) { jevSetMsg('Token 为空（未修改）', null); return; }
+    if (!v) { jevTokMsg('请先输入 Token（留空不会修改已保存的 Token）', false); return; }
+    if (!jevCryptoOk()) {
+      jevTokMsg('✗ 当前页面不是安全上下文（浏览器未提供 crypto.subtle）→ 无法加密保存。请改用 http://localhost:5173 或 https 地址打开本页。', false);
+      return;
+    }
     try {
+      jevTokMsg('保存中…', null);
       await setJevToken(v);
-      if (inp) inp.value = '';
+      if (inp) { inp.value = ''; inp.placeholder = '已保存（留空=不修改）'; }
       _jevCache.hasToken = true;
-      jevSetMsg('Token 已加密保存到本机（IndexedDB）', true);
+      jevTokMsg('✓ Token 已加密保存到本机（IndexedDB）', true);
       renderJev();
-    } catch (e) { jevSetMsg('保存失败：' + String((e && e.message) || e), false); }
+    } catch (e) { jevTokMsg('✗ 保存失败：' + String((e && e.message) || e), false); }
   });
   on('jevTokenClear', 'click', async () => {
-    try { await setJevToken(''); _jevCache.hasToken = false; jevSetMsg('Token 已清除', true); renderJev(); }
-    catch (e) { jevSetMsg('清除失败：' + String((e && e.message) || e), false); }
+    try {
+      await setJevToken('');
+      _jevCache.hasToken = false;
+      const inp = $('jevToken'); if (inp) { inp.value = ''; inp.placeholder = '未填写'; }
+      jevTokMsg('✓ Token 已清除', true);
+      renderJev();
+    } catch (e) { jevTokMsg('✗ 清除失败：' + String((e && e.message) || e), false); }
   });
   on('jevTest', 'click', async () => {
+    if (!jevCryptoOk()) { jevSetMsg('✗ 当前页面非安全上下文，浏览器会拦截加密与部分请求；请用 https 或 http://localhost 打开', false); return; }
     jevSetMsg('测试中…', null);
     const r = await testJevConnection();
     if (r.ok) {

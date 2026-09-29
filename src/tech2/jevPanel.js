@@ -120,6 +120,8 @@ export function buildJevModel(inp) {
     stats,
     pending: stats.pending || 0,
     total: stats.n || 0,
+    fill: it.fill || null,
+    flow: it.flow || null,
     spend: { calls: spend.calls || 0, inTok: spend.inTok || 0, outTok: spend.outTok || 0, cost: spend.cost || 0 },
     status: it.status || {}
   };
@@ -185,6 +187,11 @@ export function renderJevHtml(m) {
     '<b class="up">同向 ' + m.relation.agree + '</b> · <b class="down">相反 ' + m.relation.differ + '</b> · ' +
     '中性 ' + m.relation.na + ' · 样本不足 ' + m.relation.nodata + '</div>';
 
+  // 数据填充度（诚实口径：拿不到就写未知，不影响判断/学习）
+  const fill = m.fill
+    ? '<div class="jev-fill">数据：' + m.fill.text + '</div>'
+    : '<div class="jev-fill jev-dim">数据：盘口/新闻未采集（点「立即判断一次」会一并拉取；拉不到即为未知，不影响 Jev 判断）</div>';
+
   const driver = m.driver ? '<div class="jev-driver">主要驱动：<b>' + m.driver + '</b>' + (JEV_DRIVERS[m.driver] ? '（' + JEV_DRIVERS[m.driver] + '）' : '') + '</div>' : '';
 
   const sliders = '<div class="jev-sliders">' + m.rows.map(sliderHtml).join('') + '</div>';
@@ -199,7 +206,7 @@ export function renderJevHtml(m) {
     !m.hasToken ? '<div class="jev-err">⚠ 已启用但未填写 Token（Token 只存本机加密库）</div>' : '') +
   '<div class="jev-foot2">' + JEV_DISCLAIMER + '</div>';
 
-  return head + rel + driver + sliders + rows + foot;
+  return head + rel + fill + driver + sliders + rows + foot;
 }
 
 /** 设置卡 HTML（纯函数） */
@@ -223,15 +230,19 @@ export function renderJevSetHtml(cfg, extra) {
       '<button id="jevProbe" title="依次试 5 种请求形状，看哪种被接受">探测形状</button></div>' +
     '<div class="setting-row"><label>Token</label><input id="jevToken" type="password" autocomplete="off" spellcheck="false" style="flex:1;min-width:150px" placeholder="' + (ex.hasToken ? '已保存（留空=不修改）' : '未填写') + '">' +
       '<button id="jevTokenSave">保存</button><button id="jevTokenClear">清除</button></div>' +
+    '<div class="setting-row"><label></label><span id="jevTokMsg" class="jev-setmsg">' + (ex.hasToken ? '✓ 已保存（AES-GCM 加密，只存本机 IndexedDB）' : '未填写 Token') + '</span></div>' +
     '<div class="setting-row"><label>连接</label><button id="jevTest">测试连接</button><span id="jevTestMsg" class="jev-setmsg"></span></div>' +
     '<div class="setting-row"><label>调用频率</label><select id="jevFreq">' + freqOpts + '</select><button id="jevRunNow">立即判断一次</button></div>' +
     '<div class="setting-row"><label>TSEV 学 Jev</label><select id="jevMode">' + modes + '</select></div>' +
     '<div class="jev-chks">' + hz + '</div>' +
     groupRows +
+    '<div class="setting-row"><label>新闻源（可选）</label><input id="jevNews" type="text" style="flex:1;min-width:170px" placeholder="RSS 直链 或 包裹代理 https://代理/?url={url}（空=开发走 /rss-proxy，生产为未知）"></div>' +
     '<div class="setting-row"><label>单价 ($/1M tokens)</label><span class="jev-inline">入 <input id="jevIn" type="number" min="0" step="any" style="width:64px"> 出 <input id="jevOut" type="number" min="0" step="any" style="width:64px"></span></div>' +
     '<div class="jev-dim" style="margin:2px 0 4px">累计：' + (spend.calls || 0) + ' 次调用 · ' + ((spend.inTok || 0) + (spend.outTok || 0)) + ' tokens · ' + ((spend.cost || 0) ? '$' + spend.cost.toFixed(4) : '$0（本地网关免费）') + '</div>' +
     '<details class="jev-adv"><summary>高级：请求体 JSON 模板（{{model}} / {{state}} 占位符；留空用内置）</summary>' +
       '<textarea id="jevTpl" spellcheck="false" placeholder="留空 = 内置（一次调用问短/中/长 + 驱动）"></textarea>' +
       '<div class="jev-dim">上游 schema 变更时，可在这里改形状而无需等更新（配合「探测形状」）。</div></details>' +
-    '<div class="jev-dim" style="margin-top:4px">Token 只存本机 IndexedDB（AES-GCM 加密），不进 localStorage/日志/提示词。' + JEV_DISCLAIMER + '</div>';
+    '<div class="jev-dim" style="margin-top:6px">Token 只存本机 IndexedDB（AES-GCM 加密），不进 localStorage/日志/提示词。<br>' +
+    'base_url：本机开发可填 http://localhost:3460/v1；手机/其它设备必须填它访问得到的 https Jev 地址（localhost 只指访问者自己）。<br>' +
+    JEV_DISCLAIMER + '</div>';
 }

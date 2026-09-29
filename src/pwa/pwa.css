@@ -806,3 +806,5 @@ body.pwa .jev-setmsg{font-size:10px;color:var(--text2);flex:1;min-width:90px;lin
 body.pwa .jev-adv{margin-top:6px;font-size:10.5px;color:var(--text2)}
 body.pwa .jev-adv summary{cursor:pointer;color:var(--accent)}
 body.pwa .jev-adv textarea{width:100%;min-height:90px;margin-top:5px;background:var(--card2);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:6px;font-family:var(--mono);font-size:10px;line-height:1.45;resize:vertical}
+body.pwa .jev-fill{font-size:9.5px;color:var(--text2);margin:2px 0 3px;line-height:1.5}
+body.pwa .jev-fill:not(.jev-dim){color:#9db2c8}

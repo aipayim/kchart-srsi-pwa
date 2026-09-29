@@ -12,6 +12,9 @@ import {
   buildJevState, buildJevBody, parseJevResponse, jevSamplesFor
 } from '../engine/jevState.js';
 import { winLossByAtr, atrClose, volumeDivergence, supportResistance } from '../engine/indicators.js';
+import { parseJevFlow, flowFillSummary } from '../engine/jevState.js';
+import { fetchJevFlow, fetchJevNews } from './data.js';
+import { newsSentiment } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
 
 const LSK = 'pwa_jev';
@@ -40,11 +43,14 @@ export function defaultJevCfg() {
     model: 'jev-latest',
     horizons: { short: true, mid: true, long: true },
     groups: JSON.parse(JSON.stringify(JEV_DEFAULT_GROUPS)),
+    newsSrc: '',                  // 新闻源（可选）：RSS 直链或包裹代理 https://代理/?url={url}；空=开发走 /rss-proxy，生产=未知
     freq: '1h',                  // 15m | 1h | 4h | 1d | manual
     mode: 'off',                 // off | learn | apply
     template: JEV_DEFAULT_TEMPLATE,
     questions: Object.assign({}, JEV_DEFAULT_QUESTIONS),
     price: { inPer1M: 0, outPer1M: 0 },   // 单价（$/1M tokens）；本地网关 = 0
+    flow: null,                   // 最近一次采集到的盘口（缓存，供面板展示填充度）
+    lastFill: null,
     spend: { calls: 0, inTok: 0, outTok: 0, cost: 0 },
     autoMature: true
   };
@@ -116,6 +122,12 @@ export async function jevCallCfg() {
 
 export async function setJevToken(token) {
   if (!token) { await clearApiKey('LLM'); _status.keyPresent = false; return true; }
+  // 非安全上下文（http:// + 非 localhost）浏览器不提供 crypto.subtle → 加密库无法工作，显式报错而非静默失败
+  if (!(globalThis.crypto && globalThis.crypto.subtle)) {
+    const e = new Error('当前页面不是安全上下文（无 crypto.subtle），无法加密保存 Token → 请用 https 或 http://localhost 打开');
+    _status.lastErr = e.message;
+    throw e;
+  }
   await saveApiKey({ exchange: 'LLM', apiKey: token, secret: '' });
   _status.keyPresent = true;
   return true;
@@ -316,11 +328,12 @@ function atrTxt(p, m) {
 }
 function bandOf(k) { return k >= 80 ? '上带' : k <= 20 ? '下带' : '中带'; }
 
-/** 采集完整输入（纯数据） */
-export function gatherJevInput(sym, group) {
+/** 采集完整输入（纯数据）。ctx = 预先取好的 {flow, ext}（避免每档重复联网） */
+export function gatherJevInput(sym, group, ctx) {
   const cfg = (kapi() && kapi().getConfig) ? kapi().getConfig() : {};
   const s = S();
-  const tfs = (readJevCfg().groups && readJevCfg().groups[group]) || JEV_DEFAULT_GROUPS[group] || [];
+  const jcfg = readJevCfg();
+  const tfs = (jcfg.groups && jcfg.groups[group]) || JEV_DEFAULT_GROUPS[group] || [];
   const tf = {};
   for (const t of tfs) {
     try { tf[t] = readingsFor(sym, t); } catch (e) { tf[t] = null; }
@@ -359,7 +372,47 @@ export function gatherJevInput(sym, group) {
     const api = kapi();
     if (api && api.__horizonTrend) trend = api.__horizonTrend(sym);
   } catch (e) { trend = null; }
-  return { sym, group, tfs, tf, resonance, vd, sr, regime, volQ, trend, macro, flow: {}, ext: {}, now: Date.now() };
+  return { sym, group, tfs, tf, resonance, vd, sr, regime, volQ, trend, macro, flow: (ctx && ctx.flow) || {}, ext: (ctx && ctx.ext) || {}, now: Date.now() };
+}
+
+/**
+ * 一次性采集「盘口/订单流 + 外部语义」上下文（联网，带缓存；失败只影响对应子项）。
+ * 拿不到就留给 buildJevState 写「未知」——**不会影响 Jev 判断与学习本身**（提示词已声明未知项由模型自行知识补全）。
+ */
+export async function collectJevContext(sym, opts = {}) {
+  const cfg = readJevCfg();
+  const ctx = { flow: {}, ext: {}, fill: null, errs: [] };
+  try {
+    const raw = await fetchJevFlow(sym, opts.flowOpts);
+    const f = parseJevFlow(raw);
+    const flow = {};
+    if (f.fundingRate != null) { flow.fundingRate = f.fundingRate; flow.frTrend = f.frTrend || null; }
+    if (f.basisPct != null) flow.basisPct = f.basisPct;
+    if (f.oi != null) {
+      flow.oi = f.oi;
+      if (f.oiChangePct != null) {
+        const mins = (f.oiChangeBars || 1) * 5;
+        flow.oiTrend = (f.oiChangePct >= 0 ? '上升' : '下降') + ' ' + Math.abs(f.oiChangePct).toFixed(2) + '%（近' + mins + 'm）';
+      }
+    }
+    if (f.longRatio != null) flow.longRatio = f.longRatio;
+    if (f.taker != null) flow.taker = f.taker;
+    if (f.topLongRatio != null) {
+      flow.whale = '大户多空账户多占比 ' + f.topLongRatio.toFixed(1) + '%' +
+        (f.longRatio != null ? '（散户 ' + f.longRatio.toFixed(1) + '%，' + (f.topLongRatio > f.longRatio ? '大户更偏多' : f.topLongRatio < f.longRatio ? '大户更偏空' : '一致') + '）' : '');
+    }
+    ctx.flow = flow;
+    ctx.rawFlow = f;
+  } catch (e) { ctx.errs.push('盘口: ' + String((e && e.message) || e)); }
+  try {
+    const news = await fetchJevNews(cfg.newsSrc, opts.newsOpts);
+    if (news && news.items && news.items.length) {
+      const sent = newsSentiment(news.items);
+      ctx.ext.news = { sentiment: sent.sentiment, bullishCount: sent.bullishCount, bearishCount: sent.bearishCount, title: news.items[0] && news.items[0].title, source: news.source };
+    }
+  } catch (e) { ctx.errs.push('新闻: ' + String((e && e.message) || e)); }
+  ctx.fill = flowFillSummary(ctx.rawFlow, ctx.ext);
+  return ctx;
 }
 
 // ---------------------------------------------------------------------------
@@ -374,16 +427,13 @@ export async function runJevOnce(opts = {}) {
   if (!cc.apiKey) return { ok: false, err: '未填写 Token' };
   _status.running = true;
   try {
-    const input = gatherJevInput(sym, opts.group || 'short');
-    const st = buildJevState(input);
-    // 关键：把「已勾选的档」合并进同一次调用（一次调用问短/中/长）
+    // 一次性取盘口/新闻（避免每档重复联网）；拿不到就是「未知」
+    const ctx = opts.ctx || await collectJevContext(sym, opts);
     const enabled = cfg.horizons || {};
     const merged = [];
     for (const h of JEV_HORIZON_IDS) {
       if (enabled[h] === false) continue;
-      const g = cfg.groups[h] || JEV_DEFAULT_GROUPS[h];
-      const inp = gatherJevInput(sym, h);
-      inp.group = h;
+      const inp = gatherJevInput(sym, h, ctx);
       const s2 = buildJevState(inp);
       merged.push({ h, text: s2.text, missing: s2.missing });
     }
@@ -403,6 +453,8 @@ export async function runJevOnce(opts = {}) {
     cfg.spend.outTok = (cfg.spend.outTok || 0) + outTok;
     cfg.spend.cost = (cfg.spend.cost || 0) + cost;
     cfg.lastRunTs = Date.now();
+    cfg.flow = ctx.flow || null;
+    cfg.lastFill = ctx.fill || null;
     writeJevCfg(cfg);
     // 落库（含待回填样本）
     const samples = (cfg.mode && cfg.mode !== 'off') ? jevSamplesFor(parsed, sym, Date.now()) : [];
@@ -579,23 +631,31 @@ export async function tickJevMature(force) {
 // ---------------------------------------------------------------------------
 // 自动调度（由 kchartApp 的每秒循环调用；内部按 frequency + lastRunTs 节流）
 // ---------------------------------------------------------------------------
-const FREQ_MS = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000, manual: 0 };
-let _schedBusy = false;
+const FREQ_MS = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000, manual: 0 };let _schedBusy = false;
+let _schedLastAttempt = 0;   // 无论成败都记（防失败时每秒重试刷屏）
 const _listeners = [];
 export function onJevChange(cb) { if (typeof cb === 'function') _listeners.push(cb); }
 function emitJevChange() { for (const cb of _listeners) { try { cb(); } catch (e) { /* 单个订阅者失败不影响其它 */ } } }
 
-/** 到点则自动跑一轮判断（手动模式不自动跑）。永不抛错、不写控制台。 */
+/** 到点则自动跑一轮判断（手动模式不自动跑）。启用后立即跑第一次，之后按频率。永不抛错、不写控制台。 */
 export function jevSchedulerTick() {
   let cfg;
   try { cfg = readJevCfg(); } catch (e) { return; }
   if (!cfg.enabled) return;
   const ms = FREQ_MS[cfg.freq] || 0;
   if (!ms) return;
-  if (Date.now() - (cfg.lastRunTs || 0) < ms) return;
+  const now = Date.now();
+  const last = Math.max(cfg.lastRunTs || 0, _schedLastAttempt);
+  if (now - last < ms) return;
   if (_schedBusy) return;
   _schedBusy = true;
+  _schedLastAttempt = now;
   runJevOnce({}).finally(() => { _schedBusy = false; emitJevChange(); });
+}
+
+/** 测试钩子：调度器内部状态（仅用于单测断言节流行为） */
+export function __jevSchedState() {
+  return { busy: _schedBusy, lastAttempt: _schedLastAttempt };
 }
 
 export function jevStatus() {

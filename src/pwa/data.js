@@ -345,3 +345,80 @@ export async function refreshPrice(sym) {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Jev 用：盘口/订单流（资金费 · 标记价/基差 · 持仓量 · 多空比 · 主动买卖）
+// 全部走同一端点机制（group='fapi'）；任一子项失败只影响该项（缺失就是「未知」，不编造）。
+// 结果在内存里缓存 60s； Jev 判断频率最低也是 15m，不会造成额外压力。
+// ---------------------------------------------------------------------------
+const JEV_FLOW_TTL = 60000;
+const _jevFlowCache = {};      // sym -> {t, data}
+const _jevLevCache = {};       // sym -> 上一次 fundingRate（用于「较上次↑/↓」）
+
+export async function fetchJevFlow(sym, opts = {}) {
+  const now = Date.now();
+  const c = _jevFlowCache[sym];
+  if (!opts.force && c && now - c.t < JEV_FLOW_TTL) return c.data;
+  const period = opts.period || '5m';
+  const grab = async (path) => { try { return await fetchApiData(path, 'fapi', opts.timeout || 8000); } catch (e) { return null; } };
+  const [premium, oi, lsGlobal, lsTop, taker] = await Promise.all([
+    grab('/fapi/v1/premiumIndex?symbol=' + sym),
+    grab('/futures/data/openInterestHist?symbol=' + sym + '&period=' + period + '&limit=6'),
+    grab('/futures/data/globalLongShortAccountRatio?symbol=' + sym + '&period=' + period + '&limit=1'),
+    grab('/futures/data/topLongShortAccountRatio?symbol=' + sym + '&period=' + period + '&limit=1'),
+    grab('/futures/data/takerlongshortRatio?symbol=' + sym + '&period=' + period + '&limit=1')
+  ]);
+  const data = { premium, oi, lsGlobal, lsTop, taker, prevRate: _jevLevCache[sym], t: now };
+  if (premium && premium.lastFundingRate != null) _jevLevCache[sym] = +premium.lastFundingRate;
+  _jevFlowCache[sym] = { t: now, data };
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// Jev 用：新闻情绪（可选）。CoinDesk RSS 无 CORS 头 → 只能经代理：
+//   ① 本地开发：站点自身 /rss-proxy（vite 代理）
+//   ② 用户自填「新闻源」：RSS 直链（需该源允许跨域）或包裹代理模板 https://代理/?url={url}
+// 全失败返回 null（Jev 状态里写「未知」，并用自身知识补）
+// ---------------------------------------------------------------------------
+const JEV_NEWS_TTL = 10 * 60000;
+let _jevNewsCache = { t: 0, data: null };
+const NEWS_UPSTREAM = 'https://www.coindesk.com/arc/outboundfeeds/rss/';
+
+function _newsUrl(src) {
+  const s = String(src || '').trim();
+  if (s) {
+    if (s.includes('{url}')) return s.replace('{url}', encodeURIComponent(NEWS_UPSTREAM));
+    return s;
+  }
+  if (typeof location !== 'undefined' && /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(location.hostname || '')) {
+    return location.origin + '/rss-proxy';
+  }
+  return null;
+}
+
+function _parseRss(xml) {
+  if (typeof DOMParser === 'undefined' || !xml) return [];
+  const doc = new DOMParser().parseFromString(xml, 'text/xml');
+  return Array.from(doc.querySelectorAll('item')).slice(0, 25).map(it => ({
+    title: (it.querySelector('title') && it.querySelector('title').textContent) || '',
+    desc: (it.querySelector('description') && it.querySelector('description').textContent) || '',
+    category: Array.from(it.querySelectorAll('category')).map(c => c.textContent || '')
+  })).filter(x => x.title);
+}
+
+/** RSS 源解析（独立小函数，返回值含 title/desc/category，供 indicators.newsSentiment 复用） */
+export async function fetchJevNews(src, opts = {}) {
+  const now = Date.now();
+  if (!opts.force && _jevNewsCache.data && now - _jevNewsCache.t < JEV_NEWS_TTL) return _jevNewsCache.data;
+  const url = _newsUrl(src);
+  if (!url) return null;
+  try {
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) return null;
+    const items = _parseRss(await resp.text());
+    if (!items.length) return null;
+    const data = { items, source: url, t: now };
+    _jevNewsCache = { t: now, data };
+    return data;
+  } catch (e) { return null; }
+}

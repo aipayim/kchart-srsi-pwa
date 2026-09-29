@@ -197,16 +197,52 @@ export function freqToMs(freq) {
 //   响应 { model, answers: { <id>: { type, choice|score, confidence, probabilities, legend } }, usage:{input_tokens,output_tokens} }
 // ---------------------------------------------------------------------------
 
-/** 决策端点 URL：本机自定义端口自动走 Vite 代理 /llm-proxy（目标 = 网关根 + /v1） */
-export function decisionEndpoint(cfg) {
+/**
+ * 解析决策端点：返回 { url, err, isLocalBase, pageLocal, proxied }。
+ *
+ * 关键区分（2026-09-29 线上事故修复）：`/llm-proxy` **只在本地开发页面**存在（Vite dev server 代理）。
+ * 生产站点（如 https://srsi.openapi.im）没有该路径 → 对 POST 返回 **405 Method Not Allowed**。
+ * 所以：
+ *  - 页面本身是本机（localhost/127.0.0.1）→ 本机 base_url 走 `/llm-proxy`；
+ *  - 页面不是本机 → 本机 base_url **不可能**可用（localhost 只指访问者自己的设备），直接给出可行动的报错，
+ *    而不是发出一个必被 405 的请求。
+ */
+export function decisionEndpointInfo(cfg) {
   let base = ((cfg && cfg.baseUrl) || '').trim().replace(/\/+$/, '');
-  if (base && typeof location !== 'undefined') {
-    const m = base.match(/^https?:\/\/(localhost|127\.0\.0\.1):(\d+)/i);
-    if (m && String(m[2]) !== String(location.port)) base = location.origin + '/llm-proxy';
+  const hasLoc = typeof location !== 'undefined' && !!location;
+  const host = (hasLoc && (location.hostname || '')) || '';
+  const originLocal = hasLoc && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])([:/]|$)/i.test(location.origin || '');
+  const pageLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(host) || originLocal;
+  const isLocalBase = /^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/i.test(base);
+  if (isLocalBase && !pageLocal) {
+    return {
+      url: '', err: 'base_url 填的是 localhost/127.0.0.1，但当前页面不是本机（' + (hasLoc ? location.origin : '非浏览器') +
+        '）——localhost 只能由“本机浏览器”访问。请改填手机/其它设备也访问得到的 Jev 地址：' +
+        '①局域网 http://<电脑IP>:端口 仅当页面本身也是 http:// 时可用（https 页面会被浏览器按混合内容拦截）；' +
+        '②推荐 https://你的域名/v1（反代/内网穿透，需服务端返回 CORS allow-origin）；③或在“开发者”填完整 https 端点。',
+      isLocalBase: true, pageLocal: false, proxied: false
+    };
   }
-  if (!base) base = '/llm-proxy';
-  if (/\/decisions$/i.test(base)) return base;
-  return base + '/decisions';
+  if (isLocalBase && pageLocal) {
+    // 与页面同端口 → 用户显式指向本页自身的后端，直连；其它本机端口 → 走 Vite 代理 /llm-proxy
+    const m = base.match(/^https?:\/\/(?:localhost|127\.0\.0\.1):(\d+)/i);
+    if (!m || String(m[1]) !== String((hasLoc && location.port) || '')) base = ((hasLoc && location.origin) || '') + '/llm-proxy';
+  }
+  if (!base) {
+    if (pageLocal) return { url: '/llm-proxy/decisions', err: null, isLocalBase: false, pageLocal: true, proxied: true };
+    return {
+      url: '', err: '未填写 base_url（生产环境必须填你自己的 Jev 端点，如 https://你的域名/v1）',
+      isLocalBase: false, pageLocal: false, proxied: false
+    };
+  }
+  const url = /\/decisions$/i.test(base) ? base : base + '/decisions';
+  return { url, err: null, isLocalBase: false, pageLocal, proxied: isLocalBase };
+}
+
+/** 决策端点 URL：本机自定义端口自动走 Vite 代理 /llm-proxy（目标 = 网关根 + /v1）；不可用时返回 '' */
+export function decisionEndpoint(cfg) {
+  const i = decisionEndpointInfo(cfg);
+  return i.url || '';
 }
 
 const DECISION_PROBE_SHAPES = [
@@ -222,7 +258,9 @@ const DECISION_PROBE_SHAPES = [
  * @returns {Promise<{json:Object, ms:number, usage:Object|null}>}
  */
 export async function decisionCall(cfg, body) {
-  const url = decisionEndpoint(cfg);
+  const info = decisionEndpointInfo(cfg);
+  if (!info.url) { const e = new Error(info.err || '决策端点不可用'); e.status = 0; throw e; }
+  const url = info.url;
   const apiKey = ((cfg && cfg.apiKey) || '').trim();
   if (!apiKey) throw new Error('缺少 Token（请在设置中填写 Jev Token）');
   const timeoutMs = (cfg && cfg.timeoutMs) || 45000;
@@ -276,6 +314,20 @@ export async function probeDecisionShapes(cfg, stateText, questionText, opts = {
   const state = stateText || '(探测用 state) 价格 100，趋势向上。';
   const q = questionText || '接下来偏多还是偏空？';
   const shapes = opts.shapes || DECISION_PROBE_SHAPES;
+  // 端点本身不可用（如生产页面填了 localhost）→ 不必再发 5 个必被拒的请求
+  const info = decisionEndpointInfo(cfg);
+  if (!info.url) {
+    return {
+      ok: false, winner: null, endpointErr: info.err,
+      results: shapes.map(s => ({ label: s.label, ok: false, status: 0, error: info.err }))
+    };
+  }
+  if (!((cfg && cfg.apiKey) || '').trim()) {
+    return {
+      ok: false, winner: null, endpointErr: '未填写 Token',
+      results: shapes.map(s => ({ label: s.label, ok: false, status: 0, error: '未填写 Token' }))
+    };
+  }
   const out = [];
   for (const s of shapes) {
     const body = { model, state, questions: s.questions(q) };
