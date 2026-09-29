@@ -225,6 +225,17 @@ async function fetchTests() {
     const p = await probeDecisionShapes({ baseUrl: 'https://api.jev.ai/v1', apiKey: 'k' }, 'st', 'q');
     ok('probeDecisionShapes 返回 5 个候选形状', p.results.length === 5);
     ok('probeDecisionShapes 记录 winner', p.ok === true && !!p.winner);
+
+    // 端点不可用 → 短路：不发请求、带 endpointErr（不回一堆 405/ERR）
+    const savedLoc2 = globalThis.location;
+    globalThis.location = { origin: 'https://srsi.openapi.im', hostname: 'srsi.openapi.im', port: '' };
+    const n0 = calls.length;
+    const p2 = await probeDecisionShapes({ baseUrl: 'http://localhost:3460/v1', apiKey: 'k' }, 'st', 'q');
+    ok('probeDecisionShapes 端点不可用 → 短路不发请求', calls.length === n0 && p2.ok === false && p2.results.length === 5);
+    ok('probeDecisionShapes 短路时带 endpointErr（可行动提示）', /localhost 只能由/.test(p2.endpointErr || '') && p2.results.every(x => x.status === 0));
+    const p3 = await probeDecisionShapes({ baseUrl: 'https://api.jev.ai/v1', apiKey: '' }, 'st', 'q');
+    ok('probeDecisionShapes 无 Token → 短路并说明', calls.length === n0 && /未填写 Token/.test(p3.endpointErr || ''));
+    if (savedLoc2 === undefined) delete globalThis.location; else globalThis.location = savedLoc2;
   } finally {
     globalThis.fetch = savedFetch;
   }

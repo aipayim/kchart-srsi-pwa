@@ -1467,14 +1467,15 @@ function bindJevSettings() {
       jevSetMsg('✓ 连接成功 ' + r.ms + 'ms · ' + (r.model || '') + (parts.length ? ' · ' + parts.join(' ') : ''), true);
     } else {
       const probe = (r.probe && r.probe.results || []).map(x => x.label + '=' + (x.ok ? '200' : (x.status || 'ERR'))).join(' · ');
-      jevSetMsg('✗ ' + (r.err || '失败') + (probe ? ' ｜ 形状探测：' + probe : ''), false);
-    }
+      jevSetMsg('✗ ' + (r.err || '失败') + (probe ? ' ｜ 形状探测：' + probe : ''), false);    }
   });
   on('jevProbe', 'click', async () => {
     jevSetMsg('探测中…', null);
     const p = await probeJevShapes();
+    // 端点本身不可用（如生产页面填了 localhost / 未填 base_url）→ 直接显示原因，不堆 5 个 ERR
+    if (p && p.endpointErr) { jevSetMsg('✗ ' + p.endpointErr, false); return; }
     const txt = (p.results || []).map(x => x.label + '=' + (x.ok ? '200✓' : (x.status || 'ERR'))).join(' · ');
-    jevSetMsg(p.ok ? ('✓ 接受的形状：' + p.winner + ' ｜ ' + txt) : ('✗ 无候选形状被接受 ｜ ' + (txt || p.err || '')), !!p.ok);
+    jevSetMsg(p.ok ? ('✓ 接受的形状：' + p.winner + ' ｜ ' + txt) : ('✗ 无候选形状被接受 ｜ ' + (txt || '')), !!p.ok);
   });
   on('jevRunNow', 'click', async () => {
     jevSetMsg('调用中…（约 1-5s）', null);
