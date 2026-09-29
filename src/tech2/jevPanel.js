@@ -420,7 +420,8 @@ export function renderJevAllHtml(hist, opts = {}) {
 }
 
 // 超短档（scalp）：默认收起，不喧宾夺主（它是「Jev×SRSI 裁决」用的口径档，与短/中/长方向参考并列）
-function scalpHtml(r, minSample) {
+// open：展开状态由调用方持久化（面板每秒重建，若不记住就会被“秒收”）
+function scalpHtml(r, minSample, open) {
   const s = r.strength;
   const tone = toneOf(s);
   const dirTxt = s == null ? '—' : (r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s));
@@ -430,7 +431,7 @@ function scalpHtml(r, minSample) {
     '<span class="jev-dir ' + tone + '">' + dirTxt + '</span>' +
     '<span class="jev-dim">' + (s != null && r.conf != null ? '置信 ' + Math.round(r.conf * 100) + '% · ' : '') + hitTxt + '</span>' +
     '<span class="jev-scalp-hint">点击展开</span></summary>';
-  return '<details class="jev-scalp">' + sum + sliderHtml(r) + rowHtml(r, minSample) + '</details>';
+  return '<details class="jev-scalp"' + (open ? ' open' : '') + '>' + sum + sliderHtml(r) + rowHtml(r, minSample) + '</details>';
 }
 
 /** 面板 HTML（纯函数，可单测） */
@@ -465,7 +466,7 @@ export function renderJevHtml(m) {
   const sliders = '<div class="jev-sliders">' + mainRows.map(sliderHtml).join('') + '</div>';
 
   const rows = mainRows.map(r => rowHtml(r, m.minSample)).join('');
-  const scalpBlock = scalpRow ? scalpHtml(scalpRow, m.minSample) : '';
+  const scalpBlock = scalpRow ? scalpHtml(scalpRow, m.minSample, !!m.scalpOpen) : '';
 
   const foot = '<div class="jev-foot">' +
     '本币判断 ' + m.total + ' 条（未到期 ' + m.pending + ' 条）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : (m.inPer1M || m.outPer1M ? ' · 费用 $0' : ' · 费用 $0（未设单价·本地网关免费）')) +

@@ -1359,8 +1359,15 @@ function renderJev() {
     // v1.6.67：盯盘面板只给显示的 10 笔算「未到期预览」（10×3 次轻量计算；设置页 400 条不算，避免卡顿）
     history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10, previewFn: previewDecisionHorizon })
   });
-  const html = renderJevHtml(model);
+  const _scalpOpen = (() => { try { return localStorage.getItem('pwa_jev_scalp_open') === '1'; } catch (e) { return false; } })();
+  const html = renderJevHtml(Object.assign({}, model, { scalpOpen: _scalpOpen }));
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+  // 超短档展开状态持久化：面板每秒重建（fmtAgo 含秒），不记住就会被「秒收」
+  const _sc = box.querySelector('details.jev-scalp');
+  if (_sc && !_sc.__openBound) {
+    _sc.__openBound = true;
+    _sc.addEventListener('toggle', () => { try { localStorage.setItem('pwa_jev_scalp_open', _sc.open ? '1' : '0'); } catch (e) {} });
+  }
   const pill = $('pwaJevPill');
   if (pill) {
     const anyDir = model.rows.some(r => r.strength != null && Math.abs(r.strength) >= 15);

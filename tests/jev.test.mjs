@@ -329,6 +329,10 @@ async function fetchTests2() {
   ok('renderJevHtml 含免责声明', html.indexOf(JEV_DISCLAIMER) >= 0);
   ok('renderJevHtml 含三行主滑块（超短另置折叠）', (html.match(/jev-slider/g) || []).length >= 3);
   ok('⭐ renderJevHtml 超短档默认收起（<details> 无 open）', html.indexOf('<details class="jev-scalp">') > 0 && html.indexOf('<details class="jev-scalp" open') < 0);
+  // ⭐ 回归：面板每秒重建（fmtAgo 含秒）→ 展开状态必须由调用方持久化，否则点开即被「秒收」
+  ok('⭐ scalpOpen=true → <details class="jev-scalp" open>（展开不丢）', renderJevHtml(Object.assign({}, model, { scalpOpen: true })).indexOf('<details class="jev-scalp" open>') > 0);
+  ok('⭐ scalpOpen=false/缺省 → 仍默认收起', renderJevHtml(Object.assign({}, model, { scalpOpen: false })).indexOf('<details class="jev-scalp" open') < 0);
+  ok('⭐ scalpOpen 不影响其它内容（仅 <details> 属性差异）', renderJevHtml(Object.assign({}, model, { scalpOpen: true })).replace('<details class="jev-scalp" open>', '<details class="jev-scalp">') === html);
   ok('⭐ 超短档行标「超短档」且提示可展开', html.indexOf('超短档') > 0 && html.indexOf('点击展开') > 0);
   ok('renderJevHtml 含关系条', html.indexOf('Jev × TSEV 关系') >= 0);
   ok('renderJevHtml 含驱动', html.indexOf('主要驱动') >= 0);
