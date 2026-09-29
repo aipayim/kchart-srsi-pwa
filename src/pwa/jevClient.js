@@ -7,12 +7,12 @@
 import { saveApiKey, getApiKey, hasApiKey, clearApiKey } from '../auth/apiKeyStore.js';
 import { decisionCall, probeDecisionShapes, estimateTokens } from '../ai/llmClient.js';
 import {
-  JEV_HORIZON_IDS, JEV_DEFAULT_GROUPS, JEV_LEVELS, JEV_MODES,
+  JEV_HORIZON_IDS, JEV_WINDOW_MS, JEV_DEFAULT_GROUPS, JEV_LEVELS, JEV_MODES,
   JEV_DEFAULT_QUESTIONS, JEV_DEFAULT_TEMPLATE,
   buildJevState, buildJevBody, parseJevResponse, jevSamplesFor
 } from '../engine/jevState.js';
 import { winLossByAtr, atrClose, volumeDivergence, supportResistance } from '../engine/indicators.js';
-import { parseJevFlow, flowFillSummary } from '../engine/jevState.js';
+import { parseJevFlow, flowFillSummary, JEV_WINDOW_DAYS } from '../engine/jevState.js';
 import { fetchJevFlow, fetchJevNews } from './data.js';
 import { newsSentiment } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -532,17 +532,72 @@ export function evalDecisionHorizon(rec, h) {
 export const JEV_SIDE_THR = 15;
 
 /**
+ * 纯函数：跨记录做「**独立窗口**」去重 —— 同一 (币, 档) 在同一个前向窗口内只取 **1** 条样本。
+ *
+ * 为什么必须做（统计口径，非可选）：短档 24h 窗口、15m 调用间隔 ⇒ 一个窗口内最多 96 笔判断，
+ * 它们命中与否**几乎完全由同一段行情决定**（高度正相关）。直接拿原始笔数当 n 会把有效样本量
+ * 高估 ~96 倍 → `|z| ≥ 1.5` 的显著性检验失去意义（拿 1~2 个独立观测的噪声当成「学到的权重」）。
+ * 去重后 `n` ≈ 独立观测数，与项目既有的 `LOCAL_FACTOR_MIN` / `Z_THRESH` 门槛才自洽。
+ *
+ * @param {Array} records 决策记录（含 ts/sym/dirs/fed）
+ * @param {Object} opts { anchors?:{['sym|h']:[ts]}, windows?:{short,mid,long} }
+ * @returns {{plan:Object, anchors:Object}} plan[i] = 该记录**有资格喂样**的档列表
+ */
+export function planIndependentFeeds(records, opts = {}) {
+  const windows = opts.windows || JEV_WINDOW_MS;
+  const anchors = {};
+  const seed = opts.anchors || {};
+  for (const k in seed) anchors[k] = (seed[k] || []).slice();
+  const plan = {};
+  const list = (records || []).map((r, i) => ({ r, i }))
+    .sort((a, b) => ((a.r && a.r.ts) || 0) - ((b.r && b.r.ts) || 0));   // 时间升序 ⇒ 锚点稳定
+  for (const it of list) {
+    const r = it.r, i = it.i;
+    const out = [];
+    plan[i] = out;
+    if (!r || !r.sym || !r.dirs) continue;
+    for (const h of JEV_HORIZON_IDS) {
+      const d = r.dirs[h];
+      if (!d || d.strength == null) continue;
+      if (!(d.strength >= JEV_SIDE_THR || d.strength <= -JEV_SIDE_THR)) continue;   // 中性档不产生样本
+      if (r.fed && r.fed[h]) continue;                                             // 已处理过
+      const key = r.sym + '|' + h;
+      const win = windows[h] || 0;
+      const arr = anchors[key] || (anchors[key] = []);
+      if (win > 0 && arr.some(t => Math.abs(t - r.ts) < win)) continue;             // 同窗口已有锚点 → 不算独立
+      arr.push(r.ts);
+      out.push(h);
+    }
+  }
+  return { plan, anchors };
+}
+
+/** 从记录里收集「已喂样本」的窗口锚点（`rec.win[h]` = 实际喂样时的时间戳） */
+export function collectAnchors(records) {
+  const anchors = {};
+  for (const r of (records || [])) {
+    if (!r || !r.win) continue;
+    for (const h in r.win) {
+      const k = r.sym + '|' + h;
+      (anchors[k] || (anchors[k] = [])).push(r.win[h]);
+    }
+  }
+  return anchors;
+}
+
+/**
  * 纯函数：算出该记录本次应回填的结果与应喂的样本。
- * ⭐ `rec.fed`（已喂过的档）保证**每个档的样本只喂一次**、绝不会重复计数。
- *   —— v1.6.59 修复：旧实现只要 `rec.matured` 为 false 就在**每个 5min tick** 重喂已到期档的样本
- *   （短档 24h 到期、长档 30 天到期 ⇒ 短档样本会被重复喂上千次，直接污染 TSEV 命中率）。
+ * ⭐ `rec.fed`（已处理的档）保证**每个档只处理一次**、绝不重复计数。
+ *   —— v1.6.59：旧实现只要 `rec.matured` 为 false 就在**每个 5min tick** 重喂已到期档的样本
+ *   （短档 24h 到期、长档 30 天到期 ⇒ 短档样本会被重复喂上千次）。
  * ⭐ `hit = (win === 1)`：`evalDecisionHorizon` 把 Jev 判的方向作为 `winLossByAtr.direction` 传入，
  *   所以 `win=1` **本身就是「判对了」**（做空时 win=1 = 价格先跌到 TP）。
- *   —— v1.6.59 修复：旧实现写成 `(win===1 && side==='long') || (win===-1 && side==='short')`，
- *   **把所有做空判断的胜败弄反了**（会反向学习）。
- * ⭐ 中性档（|强度| < JEV_SIDE_THR）**不参与评估/结算** → 否则「全是中性」的记录会永远挂在「待回填」。
+ *   —— v1.6.59：旧式写成 `(win===1&&long)||(win===-1&&short)`，**把所有做空判断的胜败弄反了**。
+ * ⭐ 中性档（|强度| < `JEV_SIDE_THR`）**不参与评估/结算** → 否则「全是中性」的记录永远挂在「待回填」。
+ * ⭐ `opts.eligible`（独立窗口去重的结果）：不在其中者**标记已处理但不喂样**。
  */
-export function planMaturation(rec, evalFn) {
+export function planMaturation(rec, evalFn, opts = {}) {
+  const eligibleSet = opts.eligible ? new Set(opts.eligible) : null;
   const outcomes = {};
   let allDone = true;
   for (const h of JEV_HORIZON_IDS) {
@@ -559,8 +614,9 @@ export function planMaturation(rec, evalFn) {
     if (!smp || !smp.horizon || fed[smp.horizon]) continue;
     const o = outcomes[smp.horizon];
     if (!o) continue;                        // 该档尚未到期 → 下次再看
-    fed[smp.horizon] = true;                 // 无论胜败，只看一次
+    fed[smp.horizon] = true;                 // 无论胜败、无论是否独立，只处理一次
     if (o.win === 0) continue;               // 到期未触发 → 不计入样本
+    if (eligibleSet && !eligibleSet.has(smp.horizon)) continue;   // 同窗口已有锚点 → 不重复计入
     toFeed.push(Object.assign({}, smp, { win: o.win, hit: o.win === 1 }));
   }
   return { outcomes, allDone, fed, toFeed, anyOutcome: Object.keys(outcomes).length > 0 };
@@ -573,19 +629,27 @@ export async function matureDecisions() {
   const all = await listDecisions(9999);
   const localLoop = globalThis.__localTsev || null;
   const canFeed = !!(localLoop && typeof localLoop.recordJevSample === 'function');
+  // 独立窗口去重（跨记录）：同 (币,档) 每个前向窗口只喂 1 条 → n ≈ 独立观测数
+  const indep = planIndependentFeeds(all, { anchors: collectAnchors(all) });
   let matured = 0, fed = 0;
-  for (const rec of all) {
+  for (let i = 0; i < all.length; i++) {
+    const rec = all[i];
     if (rec.matured) continue;
-    const plan = planMaturation(rec, evalDecisionHorizon);
+    const plan = planMaturation(rec, evalDecisionHorizon, { eligible: (indep.plan || {})[i] || [] });
     if (!plan.anyOutcome && !plan.allDone) {
       // 可能因 K 线滚出窗口永远无法判定 → 超过 120 天标记为过期
       if (Date.now() - rec.ts > 120 * 86400000) { rec.matured = true; rec.outcomes = {}; rec.expired = true; await putDecision(rec); matured++; }
       continue;
     }
     if (canFeed && plan.toFeed.length) {
+      rec.win = rec.win || {};
       for (const smp of plan.toFeed) {
         const sideNum = smp.side === 'long' ? 1 : -1;
-        try { localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0); fed++; } catch (e) { /* 单条失败不影响其它 */ }
+        try {
+          localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0);
+          fed++;
+          rec.win[smp.horizon] = rec.ts;      // 作为该窗口的锚点（供下次独立窗口去重）
+        } catch (e) { /* 单条失败不影响其它 */ }
       }
     }
     rec.fed = plan.fed;
@@ -653,6 +717,7 @@ export function jevStats(decisions, sym) {
       } catch (e) { /* 忽略 */ }
       out.weightsSource = 'local';
       out.minSample = 50;
+      out.windowDays = JEV_WINDOW_DAYS;
     }
   } catch (e) { /* 学习信息缺失不影响统计 */ }
   // 样本数（未成熟样本数）

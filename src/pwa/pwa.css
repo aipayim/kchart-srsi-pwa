@@ -822,3 +822,14 @@ body.pwa [data-acc="jev"] .sig-alerts{max-height:min(46vh,420px)}
 body.pwa .jev-hist-note{font-size:9px;color:#6B7688;margin:0 0 4px;line-height:1.5}
 body.pwa .jev-fam{font-size:9.5px;color:#9db2c8;margin:0 0 4px;line-height:1.5;padding:3px 5px;border-radius:5px;background:rgba(34,211,238,.06);border:1px solid rgba(34,211,238,.18)}
 body.pwa .jev-fam b{color:var(--accent)}
+body.pwa .jev-thr{display:inline-block;vertical-align:middle;width:56px;height:6px;margin:0 5px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden}
+body.pwa .jev-thr i{display:block;height:100%;border-radius:3px;transition:width .4s ease}
+body.pwa .jev-thr i.long{background:var(--green)}
+body.pwa .jev-thr i.short{background:var(--red)}
+body.pwa .jev-thr i.flat{background:#f59e0b}
+body.pwa .jev-tsevline{font-size:9.5px;color:#9db2c8;line-height:1.6;margin-top:1px}
+body.pwa .jev-hitline{font-size:9.5px;line-height:1.5}
+body.pwa .jev-howto{margin:6px 0 2px;font-size:10px;color:var(--text2)}
+body.pwa .jev-howto summary{cursor:pointer;color:var(--accent);font-size:10px}
+body.pwa .jev-howto-b{margin-top:4px;line-height:1.65;font-size:9.5px}
+body.pwa .jev-howto-b b{color:var(--text)}

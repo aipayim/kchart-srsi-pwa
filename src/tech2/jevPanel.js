@@ -65,10 +65,10 @@ export function isStale(ts, freqMs, now) {
 export function jevTsevRelation(jevStrength, tsev) {
   const side = jevStrength == null ? null : (jevStrength >= 15 ? 'long' : jevStrength <= -15 ? 'short' : null);
   const w = side ? (side === 'long' ? tsev && tsev.long : tsev && tsev.short) : null;
-  if (side == null) return { side: null, w: null, relation: 'na', text: '中性（无方向，不参与对比）' };
-  if (w == null || !isFinite(w)) return { side, w: null, relation: 'nodata', text: '本机 TSEV 尚无该方向样本（需累积到训练门槛才开始生效）' };
-  if (w > 0) return { side, w, relation: 'agree', text: '本机 TSEV 认同该方向（该方向历史命中偏高）' };
-  return { side, w, relation: 'differ', text: '本机 TSEV 反向（该方向历史命中偏低）→ 谨慎' };
+  if (side == null) return { side: null, w: null, relation: 'na', text: '中性：无方向，不参与对比' };
+  if (w == null || !isFinite(w)) return { side, w: null, relation: 'nodata', text: '暂未参与' };
+  if (w > 0) return { side, w, relation: 'agree', text: '同向：本机历史显示该方向命中偏高' };
+  return { side, w, relation: 'differ', text: '相反：本机历史显示该方向命中偏低 → 谨慎' };
 }
 
 /**
@@ -128,6 +128,7 @@ export function buildJevModel(inp) {
     total: stats.n || 0,
     history: it.history || null,
     minSample: stats.minSample || 50,
+    windowDays: stats.windowDays || null,
     local: stats.local || null,
     inPer1M: pIn,
     outPer1M: pOut,
@@ -141,7 +142,7 @@ export function buildJevModel(inp) {
 const relBadge = (rel) => {
   if (rel.relation === 'agree') return '<span class="jev-tag ok">同向</span>';
   if (rel.relation === 'differ') return '<span class="jev-tag bad">相反</span>';
-  if (rel.relation === 'nodata') return '<span class="jev-tag mute">样本不足</span>';
+  if (rel.relation === 'nodata') return '<span class="jev-tag mute">未学</span>';
   return '<span class="jev-tag mute">中性</span>';
 };
 
@@ -193,14 +194,35 @@ function tsevLineHtml(r, minSample) {
 function rowHtml(r, minSample) {
   const s = r.strength;
   const tone = toneOf(s);
+  const min = minSample || 50;
+  const t = r.tsev || {};
+  const p = r.prog || {};
+  const hasW = (t.long != null || t.short != null);
+  const nL = (p.long && p.long.n) || 0, nS = (p.short && p.short.n) || 0;
+  const barPct = Math.max(0, Math.min(100, Math.round(Math.max(nL, nS) / min * 100)));
+  const barCol = tone === 'long' ? 'long' : tone === 'short' ? 'short' : 'flat';
   const confTxt = r.conf != null ? '置信 ' + Math.round(r.conf * 100) + '%' : '置信 —';
-  return '<div class="jev-row' + (r.stale ? ' stale' : '') + '">' +
-    '<div class="jev-row-h"><span class="jev-hname">' + r.name + '线</span>' +
-      '<span class="jev-dir ' + tone + '">' + (s == null ? '—' : r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s)) + '</span>' +
-      '<span class="jev-conf">' + confTxt + '</span>' + relBadge(r.rel) + '</div>' +
-    '<div class="jev-row-b">' + r.rel.text + '<br><span class="jev-tsev">' + tsevLineHtml(r, minSample) + '</span>' +
-      (r.hit.n ? ' · 历史命中 ' + Math.round(r.hit.winRate * 100) + '%(' + r.hit.wins + '/' + r.hit.n + ')' + (r.hit.avgPnl != null ? ' · 均 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 暂无已判定样本') +
-    '</div></div>';
+  // 行 1：方向 / 置信 / 关系徒章
+  const l1 = '<div class="jev-row-h"><span class="jev-hname">' + r.name + '线</span>' +
+    '<span class="jev-dir ' + tone + '">' + (s == null ? '—' : r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s)) + '</span>' +
+    '<span class="jev-conf">' + confTxt + '</span>' + relBadge(r.rel) + '</div>';
+  // 行 2：本机 TSEV 状态（**把门槛说清楚**）
+  const l2 = hasW
+    ? '<div class="jev-tsevline">本机 TSEV 已生效：w<sub>多</sub> ' + (t.long != null ? t.long.toFixed(2) : '—') +
+      ' · w<sub>空</sub> ' + (t.short != null ? t.short.toFixed(2) : '—') +
+      '<span class="jev-dim">（' + r.rel.text + '）</span></div>'
+    : '<div class="jev-tsevline">本机 TSEV 独立样本：看多 ' + nL + '/' + min + ' · 看空 ' + nS + '/' + min +
+      '<span class="jev-thr"><i class="' + barCol + '" style="width:' + barPct + '%"></i></span>' +
+      '<span class="jev-dim">满 ' + min + ' 个才生效</span></div>';
+  // 行 3：该档历史命中（到期后才有）
+  const l3 = '<div class="jev-dim jev-hitline">该档已判定 ' + (r.hit.n || 0) + ' 笔' +
+    (r.hit.n ? ' · 命中 ' + Math.round(r.hit.winRate * 100) + '%（' + r.hit.wins + '/' + r.hit.n + '）' + (r.hit.avgPnl != null ? ' · 均盈亏 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 命中 —（尚未到期）') +
+    ((r.hit.expired || 0) ? ' · 未触发 ' + r.hit.expired : '') + '</div>';
+  // 行 4（仅当无权重且 Jev 有方向）：说清「为什么现在不参与」
+  const l4 = (!hasW && r.rel.side && !r.stale)
+    ? '<div class="jev-dim" style="font-size:9px">→ 本机 TSEV 还没学到「看' + (r.rel.side === 'long' ? '多' : '空') + '」这个因子，暂不参与强度</div>'
+    : '';
+  return '<div class="jev-row' + (r.stale ? ' stale' : '') + '">' + l1 + '<div class="jev-row-b">' + l2 + l3 + l4 + '</div></div>';
 }
 
 /**
@@ -319,14 +341,8 @@ export function renderJevHtml(m) {
 
   // 数据填充度（诚实口径：拿不到就写未知，不影响判断/学习）
   const fill = m.fill
-    ? '<div class="jev-fill">数据：' + m.fill.text + '</div>'
-    : '<div class="jev-fill jev-dim">数据：盘口/新闻未采集（点「立即判断一次」会一并拉取；拉不到即为未知，不影响 Jev 判断）</div>';
-  // 因子族说明：本机 TSEV 里「经典纪律因子」的历史样本与「Jev 因子」是**分开计**的
-  const loc = m.local || null;
-  const fam = loc && (loc.sampleCount || loc.factorCount)
-    ? '<div class="jev-fam">本机 TSEV 共 <b>' + loc.sampleCount + '</b> 条样本 / 已学 <b>' + loc.factorCount + '</b> 个<b>经典纪律因子</b>' +
-      '（首开时用近 4 年历史 walk-forward 回补所得）· <b>Jev 因子另计</b>（Jev 无法回补历史，只能前向累积）</div>'
-    : (loc ? '<div class="jev-fam jev-dim">本机 TSEV 尚未回补（或本机 loop 未开启）→ 设置页可查看本机 loop 状态</div>' : '');
+    ? '<div class="jev-fill">本币数据：' + m.fill.text + '</div>'
+    : '<div class="jev-fill jev-dim">本币数据：盘口/新闻未采集（点「立即判断一次」会一并拉取；拉不到即为未知，不影响 Jev 判断）</div>';
 
   const driver = m.driver ? '<div class="jev-driver">主要驱动：<b>' + m.driver + '</b>' + (JEV_DRIVERS[m.driver] ? '（' + JEV_DRIVERS[m.driver] + '）' : '') + '</div>' : '';
 
@@ -343,7 +359,20 @@ export function renderJevHtml(m) {
   '<div class="jev-foot2">' + JEV_DISCLAIMER + '</div>';
 
   const hist = m.history ? renderJevHistoryHtml(m.history) : '';
-  return head + rel + fill + fam + driver + sliders + rows + hist + foot;
+  const min = m.minSample || 50;
+  const wd = m.windowDays || null;
+  const howto = '<details class="jev-howto"><summary>❓ 这个面板怎么看</summary>' +
+    '<div class="jev-howto-b">' +
+    '<div>1. <b>三行滑块</b>=各档强度（−100…+100）。<b>J</b>=Jev 已计入；<b>T</b>=只看本机 TSEV；<b>–</b>=无数据。</div>' +
+    '<div>2. <b>「学并影响 / 只学不影响」</b>：前者滑块用 Jev 强度，后者只看本机 TSEV（Jev 读数仅展示）。</div>' +
+    '<div>3. <b>看准不准</b> → 看下面「最近 N 笔判断」的 ✓命中 / ✗未中；短档约 ' + ((wd && wd.short) || 1) + ' 天后就有结果。</div>' +
+    '<div>4. <b>本机 TSEV 权重</b>（只在「学并影响」下影响强度）需要 <b>' + min + ' 个独立样本</b>才会生成。' +
+      '<span class="jev-dim">同一前向窗口内的相邻判断高度重叠（不算独立），所以每档约 ' +
+      ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快。</span></div>' +
+    '<div>5. <b>为什么 Jev 不能像经典因子那样回补历史</b>：历史上没有 Jev 的判断记录；且拿历史状态去问，模型训练数据已含此后行情 → 前视污染，所以只能前向累积。</div>' +
+    '<div>6. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
+    '</div></details>';
+  return head + rel + fill + driver + sliders + rows + hist + howto + foot;
 }
 
 /** 设置卡 HTML（纯函数） */

@@ -9,8 +9,8 @@ import {
   parseJevResponse, jevSamplesFor, scoreToStrength, strengthLabel, jevSide
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
-import { parseJevFlow, flowFillSummary } from '../src/engine/jevState.js';
-import { collectJevContext, jevSchedulerTick, planMaturation } from '../src/pwa/jevClient.js';
+import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
+import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
 
@@ -506,9 +506,12 @@ async function schedTest() {
     stats: { byHorizon: {}, learned: {}, local: { sampleCount: 12029, factorCount: 4 }, minSample: 50, n: 0, pending: 0 },
     now: Date.now(), freqMs: 3600000
   }));
-  ok('面板说明本机 TSEV 经典因子样本数', hFam.indexOf('12029') > 0 && hFam.indexOf('经典纪律因子') > 0);
-  ok('面板明确 Jev 因子另计且无法回补历史', hFam.indexOf('Jev 因子另计') > 0 && hFam.indexOf('无法回补历史') > 0);
-  ok('无本机 loop 数据时不显示规模数字', renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} } })).indexOf('经典纪律因子') < 0);
+  // v1.6.61：不再显示 localLoop 的**全局**样本数（那是所有币合计，放在单币面板下会让人以为串味）
+  ok('面板不再出现全局「经典纪律因子」样本数', hFam.indexOf('经典纪律因子') < 0 && hFam.indexOf('12029') < 0);
+  ok('面板带「怎么看」折叠说明（6 条）', hFam.indexOf('jev-howto') > 0 && hFam.indexOf('这个面板怎么看') > 0);
+  ok('说明里写清 50 个独立样本门槛', hFam.indexOf('50 个独立样本') > 0);
+  ok('说明里写清提高频率不会加快生效', hFam.indexOf('不会') > 0 && hFam.indexOf('独立') > 0);
+  ok('说明里写清不能回补历史的原因', hFam.indexOf('前视污染') > 0);
 
   // 三态开关的可见差异 + 样本进度（回答「怎样才能生效」）
   const mk = (mode) => buildJevModel({
@@ -522,7 +525,9 @@ async function schedTest() {
   ok('apply 面板写「已计入」且无 ghost', hApply.indexOf('（已计入）') > 0 && hApply.indexOf('jev-sld-ghost') < 0);
   ok('learn 面板写「未计入」且带 ghost 标记', hLearn.indexOf('未计入') > 0 && hLearn.indexOf('jev-sld-ghost') > 0);
   ok('三态提示语随模式变化', hApply.indexOf('「学并影响」') > 0 && hLearn.indexOf('「只学不影响」') > 0 && renderJevHtml(mk('off')).indexOf('「关」') > 0);
-  ok('未达门槛时显示样本进度 n/50', hLearn.indexOf('样本 看多 1/50（命中 100%） · 看空 0/50') > 0);
+  ok('未达门槛时显示「独立样本 n/50」', hLearn.indexOf('独立样本：看多 1/50 · 看空 0/50') > 0);
+  ok('明确写「满 50 个才生效」+ 进度条', hLearn.indexOf('满 50 个才生效') > 0 && hLearn.indexOf('jev-thr') > 0);
+  ok('已生效时显示 w 与来源说明', renderJevHtml(buildJevModel({ sym: 'BTCUSDT', cfg: { enabled: true, mode: 'apply', freq: '1h' }, hasToken: true, latest: { ts: Date.now(), dirs: { short: { strength: 60, conf: 0.7, label: '偏多' } } }, stats: { byHorizon: {}, learned: { short: { long: 0.5, short: -0.4 } }, progress: {}, minSample: 50, n: 1, pending: 0 }, now: Date.now(), freqMs: 3600000 })).indexOf('本机 TSEV 已生效') > 0);
 })();
 
 // ============ 最近 N 笔判断历史（v1.6.58） ============
@@ -612,6 +617,42 @@ async function schedTest() {
   const p6 = planMaturation({ dirs: { short: { strength: 40 } }, samples: [{ horizon: 'short', side: 'long' }] }, mkEval(['short']));
   ok('planMaturation：看多档 win=−1 → hit=false', p6.toFeed.length === 1 && p6.toFeed[0].hit === false);
   ok('planMaturation 空输入安全', planMaturation(null, mkEval([])).toFeed.length === 0 && planMaturation(null, mkEval([])).allDone === true);
+})();
+
+// ============ 独立窗口去重（v1.6.61：统计口径修正） ============
+(function independence() {
+  const H = 3600e3, W = JEV_WINDOW_MS;
+  const base = 1700000000000;
+  const mk = (ts, h, st) => ({ id: 'r' + ts, ts, sym: 'BTCUSDT', dirs: { [h || 'short']: { strength: st == null ? -40 : st } }, samples: [{ horizon: h || 'short', side: 'short' }] });
+  ok('窗口常量：短 1 天 / 中 5 天 / 长 30 天', JEV_WINDOW_MS.short === 86400000 && JEV_WINDOW_MS.mid === 5 * 86400000 && JEV_WINDOW_MS.long === 30 * 86400000);
+
+  const a = planIndependentFeeds([mk(base), mk(base + 15 * 60000), mk(base + 30 * 60000), mk(base + 45 * 60000), mk(base + 60 * 60000)]);
+  ok('15m 间隔 ×5：短档只取 1 条当独立样本', (a.plan[0] || []).join() === 'short' && Object.keys(a.plan).slice(1).every(i => a.plan[i].length === 0));
+  const b = planIndependentFeeds([mk(base), mk(base + 25 * H), mk(base + 50 * H)]);
+  ok('25h 间隔 ×3：各算 1 个独立样本', b.plan[0].length === 1 && b.plan[1].length === 1 && b.plan[2].length === 1);
+  const c = planIndependentFeeds([mk(base, 'mid'), mk(base + 25 * H, 'mid'), mk(base + W.mid + 1000, 'mid')]);
+  ok('中档窗口 5 天：25h 内的被去重、越过窗口的保留', c.plan[0].length === 1 && c.plan[1].length === 0 && c.plan[2].length === 1);
+  const d = planIndependentFeeds([mk(base, 'short'), mk(base, 'mid')]);
+  ok('不同档各自独立计数（同一时刻各留 1 条）', d.plan[0].join() === 'short' && d.plan[1].join() === 'mid');
+  const e = planIndependentFeeds([{ id: 'x', ts: base, sym: 'BTCUSDT', dirs: { short: { strength: 0 } }, samples: [] }, { id: 'y', ts: base + 1000, sym: 'BTCUSDT', dirs: { short: { strength: -40 } }, samples: [] }]);
+  ok('中性档不占窗口（后续同窗口判断仍可作锚点）', e.plan[1].length === 1);
+  const f = planIndependentFeeds([mk(base), mk(base + 25 * H)], { anchors: { 'BTCUSDT|short': [base] } });
+  ok('已有锚点参与去重（重开后不重复喂）', f.plan[0].length === 0 && f.plan[1].length === 1);
+  ok('已处理过的档不再出现（rec.fed）', planIndependentFeeds([Object.assign(mk(base + 25 * H), { fed: { short: true } })]).plan[0].length === 0);
+  ok('空输入安全', planIndependentFeeds(null).plan && Object.keys(planIndependentFeeds(null).plan).length === 0);
+  ok('collectAnchors 从 rec.win 收集锚点', (() => {
+    const an = collectAnchors([{ sym: 'BTCUSDT', win: { short: 111 } }, { sym: 'BTCUSDT', win: { short: 222, mid: 333 } }, null]);
+    return an['BTCUSDT|short'].length === 2 && an['BTCUSDT|mid'].length === 1;
+  })());
+
+  // planMaturation × eligible：标记已处理但不喂样
+  const evfn = () => ({ win: 1, side: 1, pnlPct: 1, bars: 5, tf: '1h' });
+  const p1 = planMaturation(mk(base), evfn, { eligible: [] });
+  ok('planMaturation：不在 eligible → 不喂样但标记已处理', p1.toFeed.length === 0 && p1.fed.short === true && p1.allDone === true);
+  const p2 = planMaturation(mk(base), evfn, { eligible: ['short'] });
+  ok('planMaturation：在 eligible → 正常喂样', p2.toFeed.length === 1 && p2.toFeed[0].hit === true);
+  const p3 = planMaturation(mk(base), evfn);
+  ok('planMaturation：不传 eligible 时全部允许（向后兼容）', p3.toFeed.length === 1);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============

@@ -22,6 +22,17 @@ export const JEV_HORIZONS = [
 ];
 export const JEV_HORIZON_IDS = JEV_HORIZONS.map(h => h.id);
 
+// 各档「前向窗口」天数（= 该档判断要等多久才能结算）—— 到期口径的唯一来源。
+// 也是**独立样本**的间隔：相邻判断若落在同一窗口内，其结果是同一段行情决定的，
+// 不能当独立样本（否则 n 被高估数十倍、z 检验失去意义）。
+// 短 = 1h×24 = 1 天；中 = 4h×30 = 5 天；长 = 1d×30 = 30 天（与 src/pwa/jevClient.js 的 JEV_EVAL 一致）。
+export const JEV_WINDOW_DAYS = { short: 1, mid: 5, long: 30 };
+export const JEV_WINDOW_MS = {
+  short: JEV_WINDOW_DAYS.short * 86400000,
+  mid: JEV_WINDOW_DAYS.mid * 86400000,
+  long: JEV_WINDOW_DAYS.long * 86400000
+};
+
 // 周期分组（默认值；用户可在设置里改勾选，未勾的档不提问）
 export const JEV_DEFAULT_GROUPS = {
   short: ['5m', '15m', '1h'],
