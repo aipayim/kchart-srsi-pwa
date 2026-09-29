@@ -102,7 +102,7 @@ export function buildJevModel(inp) {
       conf: d && d.conf != null ? d.conf : null,
       type: d ? d.type : null,
       tsev, rel, slider, prog,
-      hit: { n: b.n || 0, wins: b.wins || 0, losses: b.losses || 0, winRate: b.winRate != null ? b.winRate : null, avgPnl: b.avgPnl != null ? b.avgPnl : null, expired: b.expired || 0 }
+      hit: { n: b.n || 0, wins: b.wins || 0, losses: b.losses || 0, winRate: b.winRate != null ? b.winRate : null, avgPnl: b.avgPnl != null ? b.avgPnl : null, expired: b.expired || 0, noEntry: b.noEntry || 0 }
     });
   }
   const spend = cfg.spend || {};
@@ -217,7 +217,8 @@ function rowHtml(r, minSample) {
   // 行 3：该档历史命中（到期后才有）
   const l3 = '<div class="jev-dim jev-hitline">该档已判定 ' + (r.hit.n || 0) + ' 笔' +
     (r.hit.n ? ' · 命中 ' + Math.round(r.hit.winRate * 100) + '%（' + r.hit.wins + '/' + r.hit.n + '）' + (r.hit.avgPnl != null ? ' · 均盈亏 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 命中 —（尚未到期）') +
-    ((r.hit.expired || 0) ? ' · 未触发 ' + r.hit.expired : '') + '</div>';
+    ((r.hit.expired || 0) ? ' · 未触发 ' + r.hit.expired : '') +
+    ((r.hit.noEntry || 0) ? ' · <span style="color:#f59e0b">无法判定 ' + r.hit.noEntry + '</span>' : '') + '</div>';
   // 行 4（仅当无权重且 Jev 有方向）：说清「为什么现在不参与」
   const l4 = (!hasW && r.rel.side && !r.stale)
     ? '<div class="jev-dim" style="font-size:9px">→ 本机 TSEV 还没学到「看' + (r.rel.side === 'long' ? '多' : '空') + '」这个因子，暂不参与强度</div>'
@@ -267,6 +268,7 @@ export function buildJevHistory(decisions, sym, opts = {}) {
           if (side === 'flat') status = 'flat';
           else if (o.win === 1) status = 'win';
           else if (o.win === -1) status = 'loss';
+          else if (o.reason === 'no-entry') status = 'noentry';
           else status = 'expired';
         }
         return {
@@ -283,10 +285,11 @@ export function buildJevHistory(decisions, sym, opts = {}) {
       };
     });
   // 汇总（按档计）
-  const sum = { win: 0, loss: 0, pending: 0, expired: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: rows.length };
+  const sum = { win: 0, loss: 0, pending: 0, expired: 0, noEntry: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: rows.length };
   for (const r of rows) {
     for (const h of r.horizons) {
-      sum[h.status] = (sum[h.status] || 0) + 1;
+      const sk = h.status === 'noentry' ? 'noEntry' : h.status;   // noentry→noEntry（键名大小写）
+      sum[sk] = (sum[sk] || 0) + 1;
       if (h.status === 'win' || h.status === 'loss') { sum.decided++; if (h.pnl != null) { sum.pnls += h.pnl; sum.pnlN++; } }
     }
   }
@@ -301,10 +304,10 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   };
 }
 
-const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', flat: '–' };
-const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', flat: 'flat' };
+const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', noentry: '⚠', flat: '–' };
+const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', noentry: 'expired', flat: 'flat' };
 // 到期口径（与 jevClient.JEV_EVAL + winLossByAtr 同源）——直接回答用户「要等多久才有结果」
-export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习';
+export const MATURITY_NOTE = '到期口径：短 ≈24h（1h×24）· 中 ≈5天（4h×30）· 长 ≈30天（1d×30）；TP 2×ATR / SL 1.5×ATR，到期未触发不计胜负 · 样本在到期后才进入 TSEV 学习 · 判断时缺 K 线的档在到期时用行情回推入场价，仍无法判定的标「⚠ 无法判定」且不计样本';
 
 /** 历史列表 HTML（纯函数）：时间 + 三档结果 + 驱动/置信度 */
 export function renderJevHistoryHtml(hist) {
@@ -315,7 +318,7 @@ export function renderJevHistoryHtml(hist) {
     : '');
   const sumTxt = '已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
-    (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.flat ? ' · 中性 ' + s.flat : '');
+    (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.noEntry ? ' · <span style="color:#f59e0b">无法判定 ' + s.noEntry + '</span>' : '') + (s.flat ? ' · 中性 ' + s.flat : '');
   const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；单位「档」= 短/中/长）──</div>' +
     '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
     (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
@@ -328,6 +331,7 @@ export function renderJevHistoryHtml(hist) {
       const dirTxt = h.side === 'flat' ? '中性' : h.label + ' ' + (h.strength >= 0 ? '+' : '') + h.strength;
       const tail = h.status === 'pending' ? ' 待回填'
         : h.status === 'expired' ? ' 未触发'
+        : h.status === 'noentry' ? ' 无法判定'
           : h.status === 'flat' ? ''
             : (h.pnl != null ? ' ' + fmtPct(h.pnl, 2) : '');
       return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '">' + h.name + ' ' + dirTxt + ' ' + HIST_SYM[h.status] + tail + '</i>';

@@ -333,14 +333,39 @@ async function fetchTests2() {
     ok('evalDecisionHorizon 决策 bar 滚出窗口 → null', evalDecisionHorizon(out, 'short') === null);
     const flat = Object.assign({}, base, { dirs: { short: { strength: 3 } } });
     ok('evalDecisionHorizon 中性档 → null', evalDecisionHorizon(flat, 'short') === null);
-    const noatr = Object.assign({}, base, { entry: { short: { tf: ev.tf, price: 100, atr: 0 } } });
-    ok('evalDecisionHorizon 无 ATR → null', evalDecisionHorizon(noatr, 'short') === null);
+    // v1.6.64：entry 缺失/无效必须**可结算**（旧实现 return null ⇒ 该档永久悬挂到 120 天）
+    const noentry = Object.assign({}, base, { ts: times[50] });   // ts 有足够历史 → ATR 可回推
+    delete noentry.entry;
+    const rNoEntry = evalDecisionHorizon(noentry, 'short');
+    ok('⭐ entry 完全缺失 → 用 K 线回推入场价/ATR，仍能判定（看多上涨 → win=1）', !!rNoEntry && rNoEntry.win === 1 && rNoEntry.tf === ev.tf);
+    const noatr = Object.assign({}, base, { ts: times[50], entry: { short: { tf: ev.tf, price: 100, atr: 0 } } });
+    const rNoAtr = evalDecisionHorizon(noatr, 'short');
+    ok('⭐ entry 的 atr=0 → 同样回推（不再永久悬挂）', !!rNoAtr && (rNoAtr.win === 1 || rNoAtr.win === -1));
+    const badAtr = Object.assign({}, base, { entry: { short: { tf: ev.tf, price: 100, atr: NaN } } });
+    ok('回推也拿不到 ATR（入场 bar 之前不足 15 根）→ win=0 + reason=no-entry 结算掉', (() => {
+      const saveCloses = globalThis.S.klines.BTCUSDT[ev.tf], saveTimes = globalThis.S.klinesT.BTCUSDT[ev.tf];
+      globalThis.S.klines.BTCUSDT[ev.tf] = saveCloses.slice(0, 30); globalThis.S.klinesT.BTCUSDT[ev.tf] = saveTimes.slice(0, 30);
+      const r = evalDecisionHorizon(Object.assign({}, badAtr, { ts: saveTimes[1] }), 'short');   // 走满 24 根，但之前只有 2 根
+      globalThis.S.klines.BTCUSDT[ev.tf] = saveCloses; globalThis.S.klinesT.BTCUSDT[ev.tf] = saveTimes;
+      return !!r && r.win === 0 && r.reason === 'no-entry';
+    })());
+    // planMaturation：no-entry 也要落 outcome 并结清（不再 pending）
+    const planNe = planMaturation(Object.assign({}, base, { samples: [{ horizon: 'short', side: 1 }], dirs: { short: { strength: 74 } } }), () => ({ win: 0, side: 1, reason: 'no-entry' }), {});
+    ok('⭐ planMaturation：缺 entry 的档也产出 outcome（不再 allDone=false 永久挂起）', planNe.anyOutcome === true && !!planNe.outcomes.short);
+    ok('⭐ no-entry 不进样本（win=0 → 不喂 TSEV）', planNe.toFeed.length === 0 && planNe.fed.short === true);
 
     const decisions = [
       { sym: 'BTCUSDT', matured: true, dirs: { short: { strength: 74, conf: 0.6 } }, outcomes: { short: { win: 1, pnlPct: 2.5, side: 1 } } },
       { sym: 'BTCUSDT', matured: true, dirs: { short: { strength: 74, conf: 0.4 } }, outcomes: { short: { win: -1, pnlPct: -1.5, side: 1 }, mid: { win: 0, pnlPct: null, side: 1 } } },
       { sym: 'ETHUSDT', matured: false, dirs: { short: { strength: 60 } }, outcomes: {} }
     ];
+    const stNoe = jevStats([{ sym: 'BTCUSDT', matured: true, dirs: { short: { strength: 70, conf: 0.5 } }, outcomes: { short: { win: 0, side: 1, reason: 'no-entry' } } }], 'BTCUSDT');
+    ok('jevStats：win=0 + reason=no-entry → 计入 noEntry（与「到期未触发」分开）', stNoe.byHorizon.short.noEntry === 1 && stNoe.byHorizon.short.expired === 0 && stNoe.byHorizon.short.n === 0);
+    const histNoe = buildJevHistory([{ ts: 1, sym: 'BTCUSDT', driver: '技术面', dirs: { short: { strength: -40, label: '偏空', conf: 0.5 } }, outcomes: { short: { win: 0, side: -1, reason: 'no-entry' } }, matured: true }], 'BTCUSDT', { limit: 5 });
+    ok('历史行：no-entry → ⚠ 无法判定（不是 ⏳ 待回填 / ○ 未触发）', histNoe.rows[0].horizons[0].status === 'noentry');
+    ok('历史汇总：无法判定单独计数且不重复计入未触发', histNoe.summary.noEntry === 1 && histNoe.summary.expired === 0);
+    ok('历史 HTML 含「无法判定」文案', renderJevHistoryHtml(histNoe).indexOf('无法判定') > 0);
+    ok('no-entry 档不算「待回填」（不再计入 pendingTotal）', histNoe.pendingTotal === 0 && histNoe.nextMs === null);
     const st = jevStats(decisions, 'BTCUSDT');
     ok('jevStats 只统计本币', st.n === 2);
     ok('jevStats 命中率/均值盈亏', near(st.byHorizon.short.winRate, 0.5) && near(st.byHorizon.short.avgPnl, 0.5));

@@ -505,8 +505,7 @@ export function evalDecisionHorizon(rec, h) {
   const ev = JEV_EVAL[h];
   const side = dir.strength >= JEV_SIDE_THR ? 1 : dir.strength <= -JEV_SIDE_THR ? -1 : 0;
   if (!side) return null;
-  const e = rec.entry && rec.entry[h];
-  if (!e || !(e.price > 0) || !(e.atr > 0)) return null;
+  let e = rec.entry && rec.entry[h];
   const s = S();
   const closes = (s.klines && s.klines[rec.sym] && s.klines[rec.sym][ev.tf]) || null;
   const times = (s.klinesT && s.klinesT[rec.sym] && s.klinesT[rec.sym][ev.tf]) || null;
@@ -520,6 +519,24 @@ export function evalDecisionHorizon(rec, h) {
   if (idx < 0) return null;                        // 该 bar 已滚出窗口
   const need = Math.min(idx + ev.bars, closes.length - 1);
   if (need - idx < ev.bars) return null;           // 还没走满到期根数
+  // 🐞 修复（v1.6.64）：判断当时的 K 线尚未加载 ⇒ rec.entry[h] 缺失（PWA 渐进拉取，1d 最晚）。
+  // 旧实现直接 return null ⇒ **该档永远不结算**，一直挂到 120 天被静默标过期（样本永久丢失、待回填数只增不减）。
+  // 现改为：到期时用当时的 K 线**回推**入场价 + ATR；实在无法判定（bar 已滚出/数据不足）则返回 win=0 + reason='no-entry'
+  // → 正常结算掉（不喂样本），不再无限期悬挂。
+  if (!e || !(e.price > 0) || !(e.atr > 0)) {
+    let price = null, atr = null;
+    const px = closes[idx];
+    if (Number.isFinite(px) && px > 0) {
+      price = px;
+      try {
+        const a = atrClose(closes.slice(0, idx + 1), 14);
+        const v = a && a[a.length - 1];
+        if (Number.isFinite(v) && v > 0) atr = v;
+      } catch (err) { atr = null; }
+    }
+    if (price && atr) e = { tf: ev.tf, price, atr, derived: true };
+    else return { win: 0, side, pnlPct: null, bars: ev.bars, tf: ev.tf, reason: 'no-entry' };
+  }
   const atrArr = [];
   for (let i = 0; i <= need; i++) atrArr.push(e.atr);   // 用决策时的 ATR 作固定止损/止盈距离
   const r = winLossByAtr(closes.slice(0, need + 1), atrArr, {
@@ -545,6 +562,10 @@ export const JEV_SIDE_THR = 15;
  * @param {Object} opts { anchors?:{['sym|h']:[ts]}, windows?:{short,mid,long} }
  * @returns {{plan:Object, anchors:Object}} plan[i] = 该记录**有资格喂样**的档列表
  */
+
+/** 仅测试用：直写一条判断记录（headless 验证结算链） */
+export async function __putDecisionForTest(rec) { return putDecision(rec); }
+
 export function planIndependentFeeds(records, opts = {}) {
   const windows = opts.windows || JEV_WINDOW_MS;
   const anchors = {};
@@ -719,14 +740,14 @@ export function emitJevSignal(rec) {
 export function jevStats(decisions, sym) {
   const rows = (decisions || []).filter(r => !sym || r.sym === sym);
   const out = { n: rows.length, byHorizon: {}, learned: {}, fedN: 0 };
-  for (const h of JEV_HORIZON_IDS) out.byHorizon[h] = { n: 0, wins: 0, losses: 0, expired: 0, sumPnl: 0, winRate: null, avgPnl: null, conf: 0 };
+  for (const h of JEV_HORIZON_IDS) out.byHorizon[h] = { n: 0, wins: 0, losses: 0, expired: 0, noEntry: 0, sumPnl: 0, winRate: null, avgPnl: null, conf: 0 };
   for (const r of rows) {
     const oc = r.outcomes || {};
     for (const h of JEV_HORIZON_IDS) {
       const o = oc[h];
       if (!o) continue;
       const b = out.byHorizon[h];
-      if (o.win === 0) { b.expired++; continue; }
+      if (o.win === 0) { if (o.reason === 'no-entry') b.noEntry = (b.noEntry || 0) + 1; else b.expired++; continue; }
       b.n++;
       if (o.win === 1) b.wins++; else b.losses++;
       if (o.pnlPct != null) b.sumPnl += o.pnlPct;
