@@ -20,7 +20,7 @@ import { onSignalEvent, recentSignals, renderSignalListHtml, clearSignalEvents, 
 import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, presetById, SOUND_KIND_GROUPS } from './signalSounds.js';
 import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
-import { buildJevModel, renderJevHtml, renderJevSetHtml } from '../tech2/jevPanel.js';
+import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory } from '../tech2/jevPanel.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange
@@ -1332,7 +1332,8 @@ function renderJev() {
   const model = buildJevModel({
     sym, cfg, latest, decisions: _jevCache.decisions, stats, status: st,
     hasToken: _jevCache.hasToken, freqMs, now: Date.now(),
-    fill: cfg.lastFill || null, flow: cfg.flow || null
+    fill: cfg.lastFill || null, flow: cfg.flow || null,
+    history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10 })
   });
   const html = renderJevHtml(model);
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }

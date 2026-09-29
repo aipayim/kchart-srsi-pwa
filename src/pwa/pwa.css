@@ -810,3 +810,12 @@ body.pwa .jev-fill{font-size:9.5px;color:var(--text2);margin:2px 0 3px;line-heig
 body.pwa .jev-fill:not(.jev-dim){color:#9db2c8}
 body.pwa .jev-modehint{font-size:9.5px;color:#9db2c8;margin:0 0 4px;line-height:1.45}
 body.pwa .jev-sld-ghost{position:absolute;top:-1px;bottom:-1px;width:2px;background:repeating-linear-gradient(180deg,#e6f1ff 0 2px,transparent 2px 4px);opacity:.7;border-radius:1px}
+/* Jev 最近 N 笔判断列表 */
+body.pwa .jev-hist-sum{font-size:9.5px;color:#9db2c8;margin:1px 0 4px;line-height:1.5}
+body.pwa .jev-hist-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+body.pwa .jev-hc{font-style:normal;font-size:9.5px;font-family:var(--mono);white-space:nowrap;padding:1px 5px;border-radius:5px;background:rgba(255,255,255,.05);border:1px solid var(--border)}
+body.pwa .jev-hc.win{border-color:rgba(46,204,113,.45);background:rgba(46,204,113,.10)}
+body.pwa .jev-hc.loss{border-color:rgba(255,82,82,.45);background:rgba(255,82,82,.10)}
+body.pwa .jev-hc.pending{opacity:.75}
+body.pwa .jev-hc.expired,body.pwa .jev-hc.flat{color:#8899aa}
+body.pwa [data-acc="jev"] .sig-alerts{max-height:min(46vh,420px)}

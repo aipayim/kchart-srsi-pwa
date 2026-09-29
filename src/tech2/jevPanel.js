@@ -106,6 +106,8 @@ export function buildJevModel(inp) {
     });
   }
   const spend = cfg.spend || {};
+  const pIn = (cfg.price && cfg.price.inPer1M) || 0;
+  const pOut = (cfg.price && cfg.price.outPer1M) || 0;
   return {
     sym: it.sym || '—',
     enabled: !!cfg.enabled,
@@ -124,7 +126,10 @@ export function buildJevModel(inp) {
     stats,
     pending: stats.pending || 0,
     total: stats.n || 0,
+    history: it.history || null,
     minSample: stats.minSample || 50,
+    inPer1M: pIn,
+    outPer1M: pOut,
     fill: it.fill || null,
     flow: it.flow || null,
     spend: { calls: spend.calls || 0, inTok: spend.inTok || 0, outTok: spend.outTok || 0, cost: spend.cost || 0 },
@@ -197,6 +202,97 @@ function rowHtml(r, minSample) {
     '</div></div>';
 }
 
+/**
+ * 构建「最近 N 笔判断」历史（纯函数，可单测）
+ * 一次调用 = 一行（内含短/中/长三档各自的到期结果）；最新在前。
+ * 单档状态：win ✓命中 / loss ✗未中 / pending ⏳待回填 / expired ○到期未触发 / flat –中性不计
+ */
+export function buildJevHistory(decisions, sym, opts = {}) {
+  const limit = Math.max(1, opts.limit || 10);
+  const rows = (decisions || [])
+    .filter(r => r && (!sym || r.sym === sym))
+    .slice(0, limit)
+    .map(r => {
+      const oc = r.outcomes || {};
+      const horizons = JEV_HORIZONS.map(h => {
+        const d = (r.dirs || {})[h.id];
+        if (!d || d.strength == null) return null;
+        const s = Math.round(d.strength);
+        const side = s >= 15 ? 'long' : s <= -15 ? 'short' : 'flat';
+        const o = oc[h.id];
+        let status = 'pending', pnl = null, bars = null, tf = null;
+        if (o) {
+          pnl = (o.pnlPct != null && isFinite(o.pnlPct)) ? o.pnlPct : null;
+          bars = o.bars || null;
+          tf = o.tf || null;
+          if (side === 'flat') status = 'flat';
+          else if (o.win === 1) status = 'win';
+          else if (o.win === -1) status = 'loss';
+          else status = 'expired';
+        }
+        return {
+          id: h.id, name: h.name, side, strength: s, label: d.label || (side === 'long' ? '偏多' : side === 'short' ? '偏空' : '中性'),
+          conf: d.conf != null ? d.conf : null, status, pnl, bars, tf, sideNum: side === 'long' ? 1 : side === 'short' ? -1 : 0
+        };
+      }).filter(Boolean);
+      // 主方向（用于行左侧色条）：取第一档有方向的；均为中性→灰
+      const main = horizons.find(x => x.side !== 'flat') || null;
+      return {
+        ts: r.ts, model: r.model || null, driver: r.driver || null, ms: r.ms || null,
+        inTok: r.inTok || 0, outTok: r.outTok || 0, err: r.err || null, matured: !!r.matured,
+        horizons, mainSide: main ? main.side : 'flat'
+      };
+    });
+  // 汇总（按档计）
+  const sum = { win: 0, loss: 0, pending: 0, expired: 0, flat: 0, decided: 0, pnls: 0, pnlN: 0, calls: rows.length };
+  for (const r of rows) {
+    for (const h of r.horizons) {
+      sum[h.status] = (sum[h.status] || 0) + 1;
+      if (h.status === 'win' || h.status === 'loss') { sum.decided++; if (h.pnl != null) { sum.pnls += h.pnl; sum.pnlN++; } }
+    }
+  }
+  sum.winRate = sum.decided ? sum.win / sum.decided : null;
+  sum.avgPnl = sum.pnlN ? sum.pnls / sum.pnlN : null;
+  return { rows, summary: sum, limit };
+}
+
+const HIST_SYM = { win: '✓', loss: '✗', pending: '⏳', expired: '○', flat: '–' };
+const HIST_CLS = { win: 'win', loss: 'loss', pending: 'pending', expired: 'expired', flat: 'flat' };
+
+/** 历史列表 HTML（纯函数）：时间 + 三档结果 + 驱动/置信度 */
+export function renderJevHistoryHtml(hist) {
+  if (!hist || !hist.rows || !hist.rows.length) return '';
+  const s = hist.summary || {};
+  const sumTxt = '已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
+    (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
+    ' · 待回填 ' + (s.pending || 0) + (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.flat ? ' · 中性 ' + s.flat : '');
+  const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行）──</div>' +
+    '<div class="jev-hist-sum">' + sumTxt + '</div>';
+  const rows = hist.rows.map(r => {
+    const col = r.mainSide === 'long' ? '#2ecc71' : r.mainSide === 'short' ? '#ff6b6b' : '#8899aa';
+    const icon = r.mainSide === 'long' ? '▲' : r.mainSide === 'short' ? '▼' : '·';
+    const chips = r.horizons.map(h => {
+      const c = h.status === 'win' ? '#2ecc71' : h.status === 'loss' ? '#ff6b6b' : '#8899aa';
+      const dirTxt = h.side === 'flat' ? '中性' : h.label + ' ' + (h.strength >= 0 ? '+' : '') + h.strength;
+      const tail = h.status === 'pending' ? ' 待回填'
+        : h.status === 'expired' ? ' 未触发'
+          : h.status === 'flat' ? ''
+            : (h.pnl != null ? ' ' + fmtPct(h.pnl, 2) : '');
+      return '<i class="jev-hc ' + HIST_CLS[h.status] + '" style="color:' + c + '">' + h.name + ' ' + dirTxt + ' ' + HIST_SYM[h.status] + tail + '</i>';
+    }).join('');
+    const confs = r.horizons.map(h => h.conf != null ? Math.round(h.conf * 100) + '%' : '—').join('/');
+    const meta = [r.driver ? '驱动 ' + r.driver : null, '置信 ' + confs,
+      r.err ? '⚠ ' + String(r.err).slice(0, 40) : null].filter(Boolean).join(' · ');
+    return '<div class="sig-ev sig-ev-signal" style="border-left-color:' + col + '">' +
+      '<span class="sig-ev-t">' + fmtTime(r.ts) + '</span>' +
+      '<span class="sig-ev-i" style="color:' + col + '">' + icon + '</span>' +
+      '<span class="jev-hist-chips">' + chips + '</span>' +
+      '<span class="sig-ev-d">' + meta + '</span>' +
+    '</div>';
+  }).join('');
+  return head + rows;
+}
+
 /** 面板 HTML（纯函数，可单测） */
 export function renderJevHtml(m) {
   if (!m) return '';
@@ -229,14 +325,15 @@ export function renderJevHtml(m) {
   const rows = m.rows.map(r => rowHtml(r, m.minSample)).join('');
 
   const foot = '<div class="jev-foot">' +
-    '样本 ' + m.total + ' 条（待回填 ' + m.pending + '）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : ' · 费用 $0（本地网关）') +
+    '样本 ' + m.total + ' 条（待回填 ' + m.pending + '）· 累计 ' + m.spend.calls + ' 次调用 / ' + (m.spend.inTok + m.spend.outTok) + ' tokens' + (m.spend.cost ? ' · 费用 $' + m.spend.cost.toFixed(4) : (m.inPer1M || m.outPer1M ? ' · 费用 $0' : ' · 费用 $0（未设单价·本地网关免费）')) +
   '</div>' +
   (m.latestErr ? '<div class="jev-err">⚠ 上次调用失败：' + m.latestErr + '</div>' : '') +
   (!m.enabled ? '<div class="jev-hint">未启用：不产生调用与样本。到「设置 → Jev 判断（LLM）」开启。</div>' :
     !m.hasToken ? '<div class="jev-err">⚠ 已启用但未填写 Token（Token 只存本机加密库）</div>' : '') +
   '<div class="jev-foot2">' + JEV_DISCLAIMER + '</div>';
 
-  return head + rel + fill + driver + sliders + rows + foot;
+  const hist = m.history ? renderJevHistoryHtml(m.history) : '';
+  return head + rel + fill + driver + sliders + rows + hist + foot;
 }
 
 /** 设置卡 HTML（纯函数） */

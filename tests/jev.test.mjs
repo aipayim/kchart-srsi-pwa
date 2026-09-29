@@ -11,7 +11,7 @@ import {
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary } from '../src/engine/jevState.js';
 import { collectJevContext, jevSchedulerTick } from '../src/pwa/jevClient.js';
-import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
+import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg } from '../src/pwa/jevClient.js';
 
 let passed = 0, failed = 0;
@@ -511,6 +511,52 @@ async function schedTest() {
   ok('learn 面板写「未计入」且带 ghost 标记', hLearn.indexOf('未计入') > 0 && hLearn.indexOf('jev-sld-ghost') > 0);
   ok('三态提示语随模式变化', hApply.indexOf('「学并影响」') > 0 && hLearn.indexOf('「只学不影响」') > 0 && renderJevHtml(mk('off')).indexOf('「关」') > 0);
   ok('未达门槛时显示样本进度 n/50', hLearn.indexOf('样本 看多 1/50（命中 100%） · 看空 0/50') > 0);
+})();
+
+// ============ 最近 N 笔判断历史（v1.6.58） ============
+(function history() {
+  const now = Date.now();
+  const decs = [
+    { ts: now - 60000, sym: 'BTCUSDT', model: 'jev-1.13.0', driver: '技术面', ms: 900, inTok: 2586, outTok: 95, matured: false,
+      dirs: { short: { strength: -37, conf: 0.78, label: '偏空' }, mid: { strength: -6, conf: 0.54, label: '中性' }, long: { strength: 11, conf: 0.56, label: '中性' } },
+      outcomes: null, err: null },
+    { ts: now - 3600000, sym: 'BTCUSDT', driver: '资金面',
+      dirs: { short: { strength: -50, conf: 0.8, label: '偏空' }, mid: { strength: 30, conf: 0.6, label: '偏多' }, long: { strength: 40, conf: 0.5, label: '偏多' } },
+      outcomes: { short: { win: -1, pnlPct: -1.2, bars: 5, tf: '1h' }, mid: { win: 1, pnlPct: 2.4, bars: 12, tf: '4h' }, long: { win: 0, pnlPct: null, bars: 30, tf: '1d' } } },
+    { ts: now - 7200000, sym: 'ETHUSDT', dirs: { short: { strength: -50, conf: 0.8, label: '偏空' } }, outcomes: {} },
+    null,
+    { ts: now - 10800000, sym: 'BTCUSDT', dirs: {}, outcomes: {} }
+  ];
+  const h = buildJevHistory(decs, 'BTCUSDT', { limit: 10 });
+  ok('buildJevHistory 只含本币且去掉空记录', h.rows.length === 3 && h.rows.every(r => !!r.ts));
+  ok('buildJevHistory 保持最新在前', h.rows[0].ts > h.rows[1].ts && h.rows[1].ts > h.rows[2].ts);
+  ok('buildJevHistory 未到期 → pending', h.rows[0].horizons.every(x => x.status === 'pending'));
+  ok('buildJevHistory 已判定：win/loss 分别标出', h.rows[1].horizons[0].status === 'loss' && h.rows[1].horizons[1].status === 'win');
+  ok('buildJevHistory 方向档 win=0 → expired', h.rows[1].horizons[2].status === 'expired');
+  ok('buildJevHistory 中性档不计入胜败', h.rows[0].horizons[1].status === 'pending' && h.rows[0].horizons[1].side === 'flat');
+  ok('buildJevHistory 盈亏与周期透传', h.rows[1].horizons[0].pnl === -1.2 && h.rows[1].horizons[1].tf === '4h');
+  ok('buildJevHistory 主方向取第一档有方向者', h.rows[0].mainSide === 'short' && h.rows[2].mainSide === 'flat');
+  ok('buildJevHistory 汇总按档统计', h.summary.win === 1 && h.summary.loss === 1 && h.summary.expired === 1 && h.summary.pending === 3);
+  ok('buildJevHistory 命中率/均盈亏', near(h.summary.winRate, 0.5) && near(h.summary.avgPnl, 0.6));
+  ok('buildJevHistory limit 生效', buildJevHistory(decs, 'BTCUSDT', { limit: 2 }).rows.length === 2);
+  ok('buildJevHistory 空输入安全', buildJevHistory(null, 'BTCUSDT').rows.length === 0 && buildJevHistory(null, null).summary.decided === 0);
+
+  const html = renderJevHistoryHtml(h);
+  ok('历史 HTML 含标题与笔数', html.indexOf('最近 3 笔判断') > 0);
+  ok('历史 HTML 含汇总行（命中率/待回填）', /已判定 2 档 · 命中 1 · 未中 1 · 命中率 50%/.test(html) && /待回填 3/.test(html));
+  ok('历史 HTML 每档带符号与盈亏', html.indexOf('✗ -1.20%') > 0 && html.indexOf('✓ +2.40%') > 0 && html.indexOf('⏳ 待回填') > 0 && html.indexOf('○ 未触发') > 0);
+  ok('历史 HTML 带时间/驱动/置信', /class="sig-ev-t">\d\d:\d\d</.test(html) && html.indexOf('驱动 技术面') > 0 && html.indexOf('置信 78%/54%/56%') > 0);
+  ok('renderJevHistoryHtml 空输入返回空串', renderJevHistoryHtml(null) === '' && renderJevHistoryHtml({ rows: [] }) === '');
+
+  const m = buildJevModel({
+    sym: 'BTCUSDT', cfg: { enabled: true, mode: 'learn', freq: '15m', price: { inPer1M: 5, outPer1M: 30 } }, hasToken: true,
+    latest: h.rows[0], stats: { byHorizon: {}, learned: {}, n: 3, pending: 3 }, history: h, now, freqMs: 900000
+  });
+  const full = renderJevHtml(m);
+  ok('Jev 面板内嵌历史列表', full.indexOf('最近 3 笔判断') > 0 && full.indexOf('mar-sep') > 0);
+  ok('无历史时不渲染列表', renderJevHtml(buildJevModel({ cfg: { enabled: true }, stats: { byHorizon: {}, learned: {} } })).indexOf('mar-sep') < 0);
+  ok('设了单价 → 费用不再写「未设单价」', renderJevHtml(m).indexOf('未设单价') < 0);
+  ok('未设单价 → 费用标「未设单价·本地网关免费」', renderJevHtml(buildJevModel({ cfg: { enabled: true, spend: { calls: 1 } }, stats: { byHorizon: {}, learned: {} } })).indexOf('未设单价') > 0);
 })();
 
 // ============ 设置读写（Node 无 localStorage → 走默认值） ============
