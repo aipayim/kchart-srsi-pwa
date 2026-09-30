@@ -381,3 +381,105 @@ export function formatReport(r) {
   L.push(r.verdict || '');
   return L.join('\n');
 }
+
+// ============================================================================
+// 观察期检查点（GOAL §10）：样本 / 覆盖率 / 累积速率 / 预计达标日 / 中期检查条款
+// 纯函数（Node 脚本与面板/测试共用；**不改判定线**，只读取 JE_SRSI_DECISION）
+// ============================================================================
+export const JE_SRSI_CHECKPOINT = {
+  MIDTERM_DAYS: 14,          // 第 2 周中期检查（覆盖率 <50% → 先修 P0 时效）
+  MIDTERM_MIN_COVERAGE: 0.5,
+  SECOND_DAYS: 28,           // 第 4 周检查（样本 <100 → 换标的/延长，不改判定线）
+  SECOND_MIN_PAIRS: 100,
+  MIN_DAYS_FOR_RATE: 0.2,    // 跨度 <4.8h 时速率不可靠（不报 ETA，避免用几分钟外推几周）
+  MIN_DAYS_FOR_ETA: 0.5      // 跨度 <12h 时 ETA 标注为低置信
+};
+
+/**
+ * 观察期检查点（纯函数）。
+ * @param pairs 配对样本（P1 导出的 JSON 数组）
+ * @param opts  {now, decision}  now 默认 Date.now()；decision 默认 JE_SRSI_DECISION
+ * @returns {{total,decided,pending,noEntry,coverage,days,groups,increment,enough,
+ *            rate:{reliable,total,same,reverse}, eta:{days,date,bottleneck,lowConfidence}|null,
+ *            midTerm:[{id,ok,text}], nextCheck:{inDays,kind}|null, now}}
+ */
+export function checkpointOf(pairs, opts = {}) {
+  const DEC = opts.decision || JE_SRSI_DECISION;
+  const CP = JE_SRSI_CHECKPOINT;
+  const now = finite(+opts.now) ? +opts.now : Date.now();
+  const st = pairStats(pairs, { minPairs: DEC.MIN_PAIRS, minGroup: DEC.MIN_GROUP });
+  const g = st.groups || {};
+  const same = (g.same && g.same.n) || 0;
+  const reverse = (g.reverse && g.reverse.n) || 0;
+  const days = st.days || 0;
+  const total = st.total || 0;
+  const reliable = days >= CP.MIN_DAYS_FOR_RATE;
+  const rateOf = (n) => (reliable && days > 0) ? +(n / days).toFixed(2) : null;
+  const rate = { reliable, total: rateOf(total), same: rateOf(same), reverse: rateOf(reverse) };
+  // 预计达标：取三个门槛（total / same / reverse）中所需时间最长者作为瓶颈
+  let eta = null;
+  if (total > 0 && reliable) {
+    const need = [];
+    if (total < DEC.MIN_PAIRS && rate.total > 0) need.push({ k: 'total', d: (DEC.MIN_PAIRS - total) / rate.total });
+    if (same < DEC.MIN_GROUP && rate.same > 0) need.push({ k: 'same', d: (DEC.MIN_GROUP - same) / rate.same });
+    if (reverse < DEC.MIN_GROUP && rate.reverse > 0) need.push({ k: 'reverse', d: (DEC.MIN_GROUP - reverse) / rate.reverse });
+    if (!need.length) eta = { days: 0, date: new Date(now).toISOString().slice(0, 10), bottleneck: 'done', lowConfidence: false };
+    else {
+      need.sort((a, b) => b.d - a.d);
+      const d = Math.ceil(need[0].d);
+      eta = { days: d, date: new Date(now + d * 86400000).toISOString().slice(0, 10), bottleneck: need[0].k, lowConfidence: days < CP.MIN_DAYS_FOR_ETA };
+    }
+  }
+  // 中期检查条款（GOAL §10）
+  const midTerm = [];
+  if (days >= CP.MIDTERM_DAYS) {
+    const ok = st.coverage >= CP.MIDTERM_MIN_COVERAGE;
+    midTerm.push({ id: 'coverage', ok, text: '第 2 周检查：Jev 覆盖率 ' + (st.coverage * 100).toFixed(0) + '%（门槛 ≥' + (CP.MIDTERM_MIN_COVERAGE * 100) + '%）' + (ok ? ' ✓ 无需动作' : ' ✗ → 先修 P0 的时效（调用频率/判断速度）') });
+  }
+  if (days >= CP.SECOND_DAYS) {
+    const ok = total >= CP.SECOND_MIN_PAIRS;
+    midTerm.push({ id: 'volume', ok, text: '第 4 周检查：配对样本 ' + total + '（门槛 ≥' + CP.SECOND_MIN_PAIRS + '）' + (ok ? ' ✓ 继续观察' : ' ✗ → 换标的（并齐 ETH/BNB/SOL）或延长，**不改判定线**') });
+  }
+  let nextCheck = null;
+  if (days < CP.MIDTERM_DAYS) nextCheck = { inDays: Math.ceil(CP.MIDTERM_DAYS - days), kind: 'midterm' };
+  else if (days < CP.SECOND_DAYS) nextCheck = { inDays: Math.ceil(CP.SECOND_DAYS - days), kind: 'second' };
+  return {
+    total, decided: st.decided || 0, pending: st.pending || 0, noEntry: st.noEntry || 0,
+    coverage: st.coverage || 0, days, groups: st.groups, increment: st.increment, enough: st.enough,
+    rate, eta, midTerm, nextCheck, now,
+    minPairs: DEC.MIN_PAIRS, minGroup: DEC.MIN_GROUP
+  };
+}
+
+/** 纯文本检查点报告（脚本 stdout 用；面板可复用） */
+export function formatCheckpoint(cp) {
+  if (!cp) return '';
+  const L = [];
+  const pct = (v) => ((v || 0) * 100).toFixed(0) + '%';
+  const d2 = (v) => (v == null ? '—' : v.toFixed(2));
+  L.push('=== Jev×SRSI 观察期检查点 ===');
+  L.push('样本 total ' + cp.total + '（门槛 ' + cp.minPairs + '）· 已判定 ' + cp.decided + ' · 待回填 ' + cp.pending
+    + (cp.noEntry ? ' · 无法判定 ' + cp.noEntry : '') + ' · 覆盖率 ' + pct(cp.coverage) + ' · 跨度 ' + cp.days.toFixed(2) + ' 天');
+  const g = cp.groups || {};
+  for (const k of JE_SRSI_GROUP_KEYS) {
+    const x = g[k] || { n: 0, wins: 0, losses: 0 };
+    L.push('  ' + (JE_SRSI_GROUP_LABELS[k] || k) + ': n=' + x.n + ' 已判定 ' + x.wins + '+' + x.losses
+      + (x.hitRate != null ? ' 命中 ' + pct(x.hitRate) : '') + (k === 'flat' ? '' : '（门槛 ≥' + cp.minGroup + '）'));
+  }
+  L.push('增量（同向 − 反向）: ' + (cp.increment == null ? '—' : ((cp.increment >= 0 ? '+' : '') + cp.increment.toFixed(1) + 'pp')));
+  if (!cp.rate.reliable) {
+    L.push('累积速率: 不可用（跨度 ' + cp.days.toFixed(2) + ' 天 < ' + JE_SRSI_CHECKPOINT.MIN_DAYS_FOR_RATE + ' 天；样本太少，避免用几分钟外推几周）');
+  } else {
+    L.push('累积速率: ' + cp.rate.total + ' 对/天（同向 ' + cp.rate.same + ' · 反向 ' + cp.rate.reverse + '）');
+    L.push(cp.eta
+      ? ('预计达标: ' + (cp.eta.days === 0 ? '已达标' : cp.eta.days + ' 天（约 ' + cp.eta.date + '）· 瓶颈 ' + cp.eta.bottleneck + (cp.eta.lowConfidence ? ' · ⚠ 低置信（跨度 <' + JE_SRSI_CHECKPOINT.MIN_DAYS_FOR_ETA + ' 天）' : '')))
+      : '预计达标: 无法估计（某组速率为 0）');
+  }
+  if (cp.nextCheck) L.push('下一次中期检查: ' + (cp.nextCheck.kind === 'midterm' ? '第 2 周' : '第 4 周') + '检查还有 ' + cp.nextCheck.inDays + ' 天');
+  for (const m of cp.midTerm) L.push('  [' + (m.ok ? '✓' : '✗') + '] ' + m.text);
+  L.push('判定线（预先声明，不因结果调整）: 增量 ≥ ' + JE_SRSI_DECISION.MIN_INCREMENT_PP + 'pp · 校正 p < ' + JE_SRSI_DECISION.MAX_P_ADJ
+    + ' · walk-forward 末折同号 · 样本 ≥ ' + cp.minPairs + ' 且同向/反向各 ≥ ' + cp.minGroup);
+  L.push('当前是否达样本门槛: ' + (cp.enough ? '是（可跑裁决）' : '否（样本不足 → 暂不结论）'));
+  L.push('注：ETA 线性外推，仅作参考（信号频率随行情变化）。裁决口径见 GOAL_jev-srsi §4/§10。');
+  return L.join('\n');
+}

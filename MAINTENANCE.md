@@ -8,61 +8,157 @@
 
 | 名称 | 路径 / 地址 | 是否公开 | 说明 |
 |---|---|---|---|
-| **源码版（主系统）** | 本地 `/mnt/d/TEST/app/app36-trader-hst/` | 否（无公开 remote） | 完整项目，含主系统 + PWA 全部源码、全部测试（`npm test` 跑 300+ 用例）。PWA 相关代码先在这里改、在这里跑全量测试。 |
-| **脱敏版（本仓库）** | GitHub `https://github.com/aipayim/kchart-srsi-pwa`；本地 `/mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/` | 是（public） | 仅含 PWA **白名单**文件，已脱敏，部署到 `https://srsi.openapi.im`。 |
+| **源码版（主系统）** | 本地主仓目录（`<MAIN_REPO>`，不在本仓库内） | 否（无公开 remote） | 完整项目，含主系统 + PWA 全部源码、全部测试（`npm test` 跑 300+ 用例）。PWA 相关代码先在这里改、在这里跑全量测试。 |
+| **脱敏版（本仓库）** | GitHub `https://github.com/aipayim/kchart-srsi-pwa`；本仓库本地路径（`<SANITIZED_REPO>`） | 是（public） | 仅含 PWA **白名单**文件，已脱敏，部署到 `https://srsi.openapi.im`。 |
 
 > **核心原则**：所有改动先在「源码版」开发并跑全量测试；通过后，仅把**白名单内**的改动文件复制到「脱敏版」，再在脱敏版跑精简测试 + 构建 + 提交 + 部署。脱敏版**绝不**反向合入主系统内部文件。
 
 ---
 
-## 2. 白名单（本仓库实际包含的文件）
+## 2. 白名单（本仓库实际包含的文件 —— 由 `git ls-files` 生成，2026-09-30 核对）
+
+> ⚠️ 本清单是**唯一权威**：新增/删除文件后必须同步更新本节（两份 `MAINTENANCE.md` 保持一致）。
 
 ```
+# --- 根目录 ---
 .gitignore
+AGENTS.md
+GOAL.md
 LICENSE
-README.md
 MAINTENANCE.md
+README.md
+index.html
 kchart.html
-package.json
 package-lock.json
-vite.config.js
+package.json
 styles.css
 version.generated.js
+vite.config.js
+
+# --- public/ ---
 public/_redirects
 public/favicon.png
 public/pwa-192.png
 public/pwa-512.png
+public/tsev-weights.json
+
+# --- scripts/ ---
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath,liqHeatmapVol,jevState,jevSrsiStats}.js
-src/ai/llmClient.js
-src/auth/apiKeyStore.js
-src/persistence/indexdb.js
-src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css,jevClient.js,jevSrsiAudit.js}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel,jevPanel,jevAuditPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs,jevSrsiAudit.test.mjs,jevSrsiStats.test.mjs}
-tests/fixtures/bnbusdt_klines.json
-public/tsev-weights.json
+
+# --- src/engine/ ---
+  engine/adaptivePortfolioMath.js
+  engine/adaptiveRisk.js
+  engine/chanlun.js
+  engine/chanlunDisplay.js
+  engine/disciplineAnalysis.js
+  engine/fees.js
+  engine/funding.js
+  engine/indicators.js
+  engine/jevSrsiStats.js
+  engine/jevState.js
+  engine/liqHeatmapVol.js
+  engine/liquidation.js
+  engine/maRelation.js
+  engine/maRibbonBox.js
+  engine/regimeParams.js
+  engine/srsiOptimizer.js
+  engine/thresholds.js
+  engine/timeframe.js
+
+# --- src/pwa/ ---
+  pwa/adaptivePortfolio.js
+  pwa/alphaCore.js
+  pwa/alphaLab.js
+  pwa/carryLeg.js
+  pwa/data.js
+  pwa/jevClient.js
+  pwa/jevSrsiAudit.js
+  pwa/kchartApp.js
+  pwa/localLoop.js
+  pwa/pwa.css
+  pwa/pwaShell.js
+  pwa/signalSounds.js
+
+# --- src/tech2/ ---
+  tech2/adaptivePanel.js
+  tech2/chanlunPanel.js
+  tech2/jevAuditPanel.js
+  tech2/jevPanel.js
+  tech2/kchart.js
+  tech2/maRelGauge.js
+  tech2/maRibbonBoxPanel.js
+  tech2/ruleMonitor.js
+  tech2/signalAlerts.js
+  tech2/signalCockpit.js
+  tech2/toolBoard.js
+
+# --- src/ 其余（PWA 运行/构建所需的主系统模块，均为精简变体或零依赖纯函数） ---
+  ai/llmClient.js
+  auth/apiKeyStore.js
+  exchange/ExchangeAdapter.js
+  exchange/PaperEngine.js
+  exchange/orderState.js
+  legacy.js
+  main.js
+  persistence/indexdb.js
+  styles.css
+  version.generated.js
+
+# --- tests/ ---
+  adaptivePanel.test.mjs
+  adaptivePortfolio.test.mjs
+  chanlun.test.mjs
+  chanlunDisplay.test.mjs
+  consistency.test.mjs
+  disciplineAnalysis.test.mjs
+  fixtures/bnbusdt_klines.json
+  jev.test.mjs
+  jevSrsiAudit.test.mjs
+  jevSrsiStats.test.mjs
+  kchart.test.mjs
+  liqHeatmapVol.test.mjs
+  localLoop.test.mjs
+  maRelGauge.test.mjs
+  maRelation.test.mjs
+  maRibbonBox.test.mjs
+  orderManager.test.mjs
+  paperSim.test.mjs
+  pwaAlphaCore.test.mjs
+  signalAlerts.test.mjs
+  signalCockpit.test.mjs
+  signalSounds.test.mjs
+  toolBoard.test.mjs
+
+# --- docs/（仅设计稿/预览，无密钥） ---
+  design/GOAL17-CYBER-PREVIEW.html
+  design/GOAL18-CYBER-v2-preview.png
+  design/GOAL18-CYBER-v2.html
+  design/GOAL19-COLDSTEEL-desktop.png
+  design/GOAL19-COLDSTEEL-mobile.png
+  design/GOAL19-COLDSTEEL.html
+  research/GOAL17-MOBILE-UX.md
+
 ```
 
-> **例外（主系统目录中脱敏后入库的 3 个文件）**：`src/ai/llmClient.js`（零 import 的 LLM 客户端纯函数）、
-> `src/auth/apiKeyStore.js`（AES-GCM + IndexedDB 密钥库）、`src/persistence/indexdb.js`（零 import 的 IDB 封装，
-> `apiKeyStore` 的唯一依赖）—— 三者均为 Jev 功能所需，**不含任何密钥**，仅供 PWA 端加密保存用户自填 Token。
-
-> 这些文件就是 PWA 运行 / 构建 / 测试所需的全部依赖闭环。新增文件必须属于此白名单，否则不要入库。
+> 说明：`src/main.js`/`src/legacy.js`/`index.html`/`src/styles.css`/`AGENTS.md`/`GOAL.md` 在脱敏仓中为**精简变体**（去掉主系统设置页/账本/密钥面板等），并非主仓原文件整拷。新增文件必须显式加入本节。
 
 ---
 
-## 3. 排除项（绝不入库 / 已脱敏）
+## 3. 排除项（主仓存在、脱敏仓**不含**）
 
-- 主系统 UI 与交易核心：`index.html`、`src/legacy.js`、`src/main.js`、`src/tech/`、`src/ai/`（**例外见 §2**：仅 `llmClient.js` 入库）、`src/auth/`（**例外见 §2**：仅 `apiKeyStore.js` 入库）、`src/tech2/fusionBacktest.js`
-- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/gen-tsev-weights.mjs`、`scripts/rehearse-tsev.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`、`scripts/jev-srsi-verdict.mjs`
-- 主系统测试（覆盖主系统模块）：`tests/engine|persist|reconcile|ai|regime|disciplineAnalysis.test.mjs`
-- 内部文档：`AGENTS.md`、`PLAN.md`、`CHANGELOG.md`、`index.legacy.html.bak`、`docs/`（含真实 Cloudflare 区域/账户 ID）
+- 主系统 UI 与交易核心：`src/tech/`、`src/tech2/fusionBacktest.js`、`src/ai/`（**例外见 §2**：仅 `llmClient.js`）、
+  `src/auth/`（**例外见 §2**：仅 `apiKeyStore.js`）、`index.legacy.html.bak`、`pwa-redesign-demo.html`
+- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-*`、`scripts/bt-*`、`scripts/release.mjs`、
+  `scripts/rehearse-tsev.mjs`、`scripts/jev-srsi-verdict.mjs`、`scripts/jev-srsi-checkpoint.mjs`、`scripts/adaptive-portfolio/`、`scripts/carry-harvest/`、
+  `scripts/liq-heatmap/`、`scripts/signal-lab/`、`scripts/dvol-research/`、`scripts/_debug_disc.mjs`
+- 主系统测试：`tests/{engine,persist,reconcile,ai,regime}.test.mjs`（覆盖主系统模块）
+- 内部文档与计划：`PLAN.md`、`CHANGELOG.md`、`GOAL_jev-srsi.md`、`docs/*.md`、`docs/research/`、`analysis/`、`.pi/`
 - 构建产物与数据：`dist/`、`dev-dist/`、`node_modules/`、`data/`（均已在 `.gitignore`）
-- **任何密钥 / Token / API Key**（详见第 6 节）
+- **任何密钥 / Token / API Key 的值**（详见第 6 节）——⚠️ 本文档一律用占位符
+  （`<CF_ACCOUNT_ID>` / `<CF_TOKEN>` / `<SECRETS_FILE>` / `<MAIN_REPO>` / `<SANITIZED_REPO>`），绝不可写真实值
+  （2026-09-30 修复：曾误留 CF 账户 ID 与 token 掩码片段）。
 
 ---
 
@@ -118,13 +214,13 @@ cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版 && pwd && ls dist/
   && ! ls dist/assets/main-*.js >/dev/null 2>&1 \
   && ls dist/assets/kchart-*.js >/dev/null 2>&1 \
   && echo SANITIZED_CHECK_OK \
-  && TOKEN=$(sed -n '6p' /mnt/d/TEST/app/app29-openapi/pat.txt | sed 's/^Token://' | tr -d '\r') \
-  && CLOUDFLARE_API_TOKEN="$TOKEN" CLOUDFLARE_ACCOUNT_ID=766d2b730eb31ff7aac0210a1808ad7f CI=1 \
+  && TOKEN=$(sed -n '6p' <SECRETS_FILE> | sed 's/^Token://' | tr -d '\r') \
+  && CLOUDFLARE_API_TOKEN="$TOKEN" CLOUDFLARE_ACCOUNT_ID=<CF_ACCOUNT_ID> CI=1 \
      npx wrangler pages deploy dist --project-name srsi-pwa --branch main
 ```
 
-- **⚠️ 凭证取第 6 行**：`pat.txt` 第 1 行是 GitHub PAT、第 6 行才是 Cloudflare token。用 `grep -m1 '^Token:'` 在部分环境下会取错（或取到非 ASCII 内容）→ `Authentication error [code:10000]` / ByteString 错。务必用 `sed -n '6p' ... | sed 's/^Token://' | tr -d '\r'`。
-- **禁止 `--commit-dirty`**：`pat.txt` 含中文，`cat` 整文件作 token 或该标志会引发 wrangler 的 `Authorization` 头 ByteString 错误。
+- **⚠️ 凭证取第 6 行**：`<SECRETS_FILE>` 第 1 行是 GitHub PAT、第 6 行才是 Cloudflare token。用 `grep -m1 '^Token:'` 在部分环境下会取错（或取到非 ASCII 内容）→ `Authentication error [code:10000]` / ByteString 错。务必用 `sed -n '6p' ... | sed 's/^Token://' | tr -d '\r'`。
+- **禁止 `--commit-dirty`**：`<SECRETS_FILE>` 含中文，`cat` 整文件作 token 或该标志会引发 wrangler 的 `Authorization` 头 ByteString 错误。
 - **防错门（SANITIZED_CHECK_OK）**：脱敏版 dist 只有 `kchart-*.{js,css}`，**不含 `main-*.js`**；若出现 `main-*.js` 说明当前 cwd 是主仓（未脱敏）→ 拒绝部署。
 - 部署后 `https://srsi.openapi.im/kchart` 即为最新版；根路径 `/` 经 `public/_redirects` 302 跳转到 `/kchart.html`。
 - **⚠️ 分支必须是 `main`**：自定义域 `srsi.openapi.im` **只服务 Production 部署**，而 Cloudflare Pages 把 `main` 分支视为 Production。用 `--branch production`（或其它名）部署只会产生 **Preview** 部署，自定义域**不会更新**，线上仍显示旧版。务必 `--branch main`。
@@ -136,9 +232,9 @@ cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版 && pwd && ls dist/
 
 ## 6. 凭证与安全（务必遵守）
 
-- **凭证位置**：`/mnt/d/TEST/app/app29-openapi/pat.txt`，内含：
+- **凭证位置**：`<SECRETS_FILE>`，内含：
   - `github_pat_…`（GitHub PAT，用于 `gh` / `git push`）
-  - `Token: x0EH4…`（Cloudflare API Token，用于 `wrangler pages deploy`）
+  - `Token: <CF_TOKEN>`（Cloudflare API Token，用于 `wrangler pages deploy`）
   - Cloudflare Account ID / 区域 ID 等
 - **使用方式**：仅在运行时通过环境变量注入（见上），**绝不**把明文写进代码、提交信息或本仓库任何文件。
 - **公开仓库零密钥**：本仓库除 `.gitignore` 外不含任何密钥；`vite.config.js` 的 `base:'./'` 与 PWA 配置均为公开参数。
@@ -146,7 +242,7 @@ cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版 && pwd && ls dist/
 
 GitHub 推送所需的 `GH_TOKEN`：
 ```bash
-export GH_TOKEN="$(grep -m1 'github_pat_' /mnt/d/TEST/app/app29-openapi/pat.txt)"
+export GH_TOKEN="$(grep -m1 'github_pat_' <SECRETS_FILE>)"
 git push origin main
 ```
 

@@ -17,7 +17,8 @@ import { strictEqual, deepStrictEqual, ok as assertOk } from 'assert';
 import {
   JE_SRSI_DECISION, JE_SRSI_GROUP_KEYS, mulberry32, wilsonCI, twoPropZ, pairGroupOf,
   pairStats, isDecided, labelPermutation, rotationTest, foldsOf, walkForward, bonferroni,
-  evaluateJevSrsi, verdictText, formatReport
+  evaluateJevSrsi, verdictText, formatReport,
+  checkpointOf, formatCheckpoint, JE_SRSI_CHECKPOINT
 } from '../src/engine/jevSrsiStats.js';
 
 let passed = 0, failed = 0;
@@ -266,6 +267,82 @@ const mixed = (() => {
   assertOk(rep.includes('扣费后期望'));
   strictEqual(formatReport(null), '');
   ok('verdictText / formatReport', true);
+}
+
+
+// ---------- checkpointOf / formatCheckpoint（观察期检查点，v1.6.79） ----------
+{
+  // 构造样本：d 天内 n 对，同向/反向按比例，可选带 Jev 意见（覆盖率）
+  const mk = (opts) => {
+    const list = [];
+    const { n = 0, days = 1, same = 0, reverse = 0, flat = 0, withJev = null, t0 = 1700000000000 } = opts;
+    const span = days * 86400000;
+    let i = 0;
+    const push = (side, jevSide) => {
+      const ts = t0 + (n <= 1 ? 0 : span * i / (n - 1)); i++;
+      list.push({ id: 'p' + i, sym: 'BTCUSDT', side, ts, barT: ts, jevSide: jevSide || null, outcome: { status: 'win', win: 1, pnlPct: 1 }, matured: true });
+    };
+    for (let k = 0; k < same; k++) push('long', 'long');
+    for (let k = 0; k < reverse; k++) push('long', 'short');
+    for (let k = 0; k < flat; k++) push('long', null);
+    if (withJev != null && list.length) {
+      // 调整覆盖率：把前 (1-withJev) 比例的 jevSide 置空
+      const drop = Math.round(list.length * (1 - withJev));
+      for (let k = 0; k < drop && k < list.length; k++) list[k].jevSide = null;
+    }
+    // n 用于控制总条数（不足部分补 flat）
+    while (list.length < n) push('long', null);
+    return list;
+  };
+
+  // 空输入
+  const c0 = checkpointOf([]);
+  ok('checkpoint 空输入安全', c0.total === 0 && c0.eta === null && c0.rate.reliable === false && c0.midTerm.length === 0);
+  ok('checkpoint 空输入文本不抛', typeof formatCheckpoint(c0) === 'string' && formatCheckpoint(c0).includes('观察期检查点'));
+
+  // 短窗口（<0.2 天）→ 速率不可靠、不报 ETA（防几分钟外推几周）
+  const cShort = checkpointOf(mk({ n: 8, days: 0.1, same: 5, reverse: 3 }));
+  ok('checkpoint 短窗口 → 速率不可靠 + 无 ETA', cShort.rate.reliable === false && cShort.eta === null);
+  ok('checkpoint 短窗口文本写明"不可用"', formatCheckpoint(cShort).includes('累积速率: 不可用'));
+
+  // 长窗口：100 对 / 10 天 → 10 对/天；缺口 200 → ETA ≈ 20 天；瓶颈 total
+  const cLong = checkpointOf(mk({ n: 100, days: 10, same: 60, reverse: 40 }), { now: 1700000000000 + 10 * 86400000 });
+  ok('checkpoint 速率计算', cLong.rate.reliable === true && cLong.rate.total === 10);
+  ok('checkpoint ETA 取瓶颈（total：缺 200 / 10 每天 = 20 天）', !!cLong.eta && cLong.eta.days === 20 && cLong.eta.bottleneck === 'total');
+  ok('checkpoint ETA 日期 = now + days', cLong.eta.date === new Date(1700000000000 + 30 * 86400000).toISOString().slice(0, 10));
+  ok('checkpoint ETA 低置信标注（跨度 <0.5 天时）', checkpointOf(mk({ n: 6, days: 0.3, same: 4, reverse: 2 })).eta.lowConfidence === true);
+
+  // 已达标 → ETA 0 / bottleneck done
+  const cDone = checkpointOf(mk({ n: 400, days: 40, same: 150, reverse: 150, flat: 100 }));
+  ok('checkpoint 已达标 → eta.days 0 / bottleneck done', !!cDone.eta && cDone.eta.days === 0 && cDone.eta.bottleneck === 'done' && cDone.enough === true);
+
+  // 瓶颈在同向组：total 已够但同向不足
+  const cSame = checkpointOf(mk({ n: 320, days: 32, same: 40, reverse: 200, flat: 80 }), { now: 1700000000000 + 32 * 86400000 });
+  ok('checkpoint 瓶颈=同向组', !!cSame.eta && (cSame.eta.bottleneck === 'same'));
+  ok('checkpoint 同向不足 → 未达门槛', cSame.enough === false);
+
+  // 中期检查条款
+  const c13 = checkpointOf(mk({ n: 50, days: 13, same: 30, reverse: 20 }));
+  ok('checkpoint 跨度<14 天 → 无中期检查条款', c13.midTerm.length === 0);
+  ok('checkpoint 下一次检查=第 2 周 + 剩余天数', !!c13.nextCheck && c13.nextCheck.kind === 'midterm' && c13.nextCheck.inDays === 1);
+  const c14ok = checkpointOf(mk({ n: 60, days: 15, same: 35, reverse: 25, withJev: 1 }));
+  ok('checkpoint 第 2 周覆盖率达标 ✓', c14ok.midTerm.some(m => m.id === 'coverage' && m.ok === true));
+  const c14bad = checkpointOf(mk({ n: 60, days: 15, same: 35, reverse: 25, withJev: 0.3 }));
+  ok('checkpoint 第 2 周覆盖率不足 ✗ + 建议修时效', c14bad.midTerm.some(m => m.id === 'coverage' && m.ok === false && m.text.includes('修 P0 的时效')));
+  const c30 = checkpointOf(mk({ n: 60, days: 30, same: 35, reverse: 25, withJev: 1 }));
+  ok('checkpoint 第 4 周样本<100 ✗ + 建议换标的且不改判定线', c30.midTerm.some(m => m.id === 'volume' && m.ok === false && m.text.includes('不改判定线')));
+  ok('checkpoint 跨度>28 天 → 无 nextCheck', c30.nextCheck === null);
+  const c30ok = checkpointOf(mk({ n: 400, days: 30, same: 200, reverse: 180, flat: 20, withJev: 1 }));
+  ok('checkpoint 第 4 周样本达标 ✓', c30ok.midTerm.some(m => m.id === 'volume' && m.ok === true));
+
+  // 覆盖率口径（withJev / total）
+  const cCov = checkpointOf(mk({ n: 100, days: 5, same: 50, reverse: 50, withJev: 0.8 }));
+  ok('checkpoint 覆盖率 = 带 Jev 意见占比', Math.abs(cCov.coverage - 0.8) < 0.03);
+
+  // 文本包含关键行（门槛单一来源）
+  const txt = formatCheckpoint(cLong);
+  ok('checkpoint 文本含速率/ETA/判定线/门槛', txt.includes('对/天') && txt.includes('预计达标') && txt.includes('判定线（预先声明') && txt.includes(String(JE_SRSI_DECISION.MIN_PAIRS)));
+  ok('checkpoint 常量已声明', JE_SRSI_CHECKPOINT.MIDTERM_DAYS === 14 && JE_SRSI_CHECKPOINT.SECOND_MIN_PAIRS === 100);
 }
 
 console.log(`\n=== jevSrsiStats: ${passed} passed, ${failed} failed ===`);
