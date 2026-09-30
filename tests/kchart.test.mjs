@@ -4148,5 +4148,18 @@ console.log('\n[kchart: adaptiveOverlay 开关接线]');
   }
 }
 
+console.log('\n[kchart: Jev 状态文档上下文钩子（v1.6.73）]');
+{
+  // 修复回归：jevClient 一直在调这些钩子（__regimeState/__horizonTrend），旧版从未暴露 → 状态文档第四节永远「未知」
+  ok('kchartApi 暴露 __regimeState', typeof kchartApi.__regimeState === 'function');
+  ok('kchartApi 暴露 __horizonTrend', typeof kchartApi.__horizonTrend === 'function');
+  ok('kchartApi 暴露 __macroTrend', typeof kchartApi.__macroTrend === 'function');
+  ok('kchartApi 暴露 __srsiKd', typeof kchartApi.__srsiKd === 'function');
+  // 无数据时必须安全返回 null（不抛）
+  let throws = false;
+  try { kchartApi.__regimeState('NOPEUSDT'); kchartApi.__horizonTrend('NOPEUSDT'); kchartApi.__macroTrend('NOPEUSDT'); kchartApi.__srsiKd('NOPEUSDT', '15m'); } catch (e) { throws = true; }
+  ok('钩子在无数据时安全返回（不抛）', !throws);
+}
+
 console.log(`\n=== kchart.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);

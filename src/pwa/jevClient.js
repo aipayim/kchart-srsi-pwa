@@ -291,10 +291,12 @@ function readingsFor(sym, tf) {
     const h = series.macdHist;
     macd = macdStateOf(h[n - 1], h[n - 2]);
   }
-  // SRSI(K/D)：series.srsi 是 RSI 值，K/D 需另算 → 用 kchart 的 SRSI 速览（若可用）或跳过
+  // SRSI(K/D)：优先用 kchart 暴露的 __srsiKd（同一套 srsiKD + 该周期参数）。
+  // ⭐ 修复：以前 `srsi: null` 写死（且 `__srsiOverviewRow` 并不存在）→ SRSI/K/D/带 从不进入状态文档。
   let kd = null;
   try {
-    const ov = kapi() && kapi().__srsiOverviewRow ? kapi().__srsiOverviewRow(sym, tf) : null;
+    const api = kapi();
+    const ov = (api && api.__srsiKd) ? api.__srsiKd(sym, tf) : null;
     if (ov && ov.k != null && ov.d != null) kd = [ov.k, ov.d];
   } catch (e) { kd = null; }
 
@@ -306,7 +308,7 @@ function readingsFor(sym, tf) {
     pattern: patternOf(closes, highs, lows),
     momPct: momentumPctOf(closes, 10),
     atr: atrTxt(atrPct, null),
-    srsi: null,
+    srsi: kd ? kd[0] : null,
     kd,
     band: kd ? bandOf(kd[0]) : null,
     atrPct
@@ -367,6 +369,19 @@ function atrTxt(p, m) {
   if (m > 0) { if (p >= m * 1.4) band = '高波动（扩张）'; else if (p <= m * 0.7) band = '低波动（收缩）'; }
   return band + '(ATR ' + p.toFixed(2) + '%)';
 }
+// ATR% 滚动序列（volQ 回退估算用；与 indicators.atrPctHistory 同义）
+function atrPctHistoryOf(closes, n) {
+  const c = Array.isArray(closes) ? closes : [];
+  if (c.length < 20) return [];
+  let atr = null;
+  try { atr = atrClose(c, 14); } catch (e) { atr = null; }
+  if (!Array.isArray(atr)) return [];
+  const out = [];
+  for (let i = Math.max(0, c.length - (n || 480)); i < c.length; i++) {
+    if (atr[i] != null && c[i] > 0) out.push(atr[i] / c[i] * 100);
+  }
+  return out;
+}
 function bandOf(k) { return k >= 80 ? '上带' : k <= 20 ? '下带' : '中带'; }
 
 /** 采集完整输入（纯数据）。ctx = 预先取好的 {flow, ext}（避免每档重复联网） */
@@ -379,11 +394,16 @@ export function gatherJevInput(sym, group, ctx) {
   for (const t of tfs) {
     try { tf[t] = readingsFor(sym, t); } catch (e) { tf[t] = null; }
   }
-  // 共振 / 支撑阻力 / 量价背离：用该档的首个周期（最短）做主参考
+  // 共振 / 支撑阻力 / 量价背离：用该档首个有读数的周期做支撑阻力/背离参考
   let resonance = null, vd = null, sr = null;
   const ref = tfs.find(t => tf[t]) || tfs[0];
-  const ind = (s.indicators && s.indicators[sym] && s.indicators[sym][ref]) || null;
-  if (ind && ind.resonance) resonance = ind.resonance;
+  // ⭐ 修复：共振改为「取有实际内容的周期」——以前只取最短周期（5m 常为 {} → 误报「无共振」）
+  for (const t of tfs) {
+    const ind2 = (s.indicators && s.indicators[sym] && s.indicators[sym][t]) || null;
+    const r = ind2 && ind2.resonance;
+    if (r && ((Array.isArray(r.conditions) && r.conditions.length) || r.buy || r.sell)) { resonance = r; break; }
+  }
+  if (!resonance) { const ind0 = (s.indicators && s.indicators[sym] && s.indicators[sym][ref]) || null; resonance = (ind0 && ind0.resonance) || null; }
   const closes = (s.klines && s.klines[sym] && s.klines[sym][ref]) || null;
   const vols = (s.klinesV && s.klinesV[sym] && s.klinesV[sym][ref]) || null;
   if (Array.isArray(closes) && Array.isArray(vols)) {
@@ -392,12 +412,9 @@ export function gatherJevInput(sym, group, ctx) {
       sr = supportResistance(closes, 40);
     } catch (e) { vd = null; sr = null; }
   }
-  // 体制 / 波动率分位 / 趋势门 / 宏观
+  // 体制 / 波动率分位 / 趋势门 / 宏观（⭐ 修复：以前调 __regimeState/__horizonTrend（未暴露）且 macro 从不赋值 → 第四节永远「未知」）
   let regime = null;
-  try {
-    const api = kapi();
-    if (api && api.__regimeState) regime = api.__regimeState(sym);
-  } catch (e) { regime = null; }
+  try { const api = kapi(); if (api && api.__regimeState) regime = api.__regimeState(sym); } catch (e) { regime = null; }
   let volQ = null;
   try {
     const ap = globalThis.__adaptivePortfolio;
@@ -408,11 +425,17 @@ export function gatherJevInput(sym, group, ctx) {
       else if (m && m.volQ != null) volQ = m.volQ;
     }
   } catch (e) { volQ = null; }
+  if (volQ == null) {
+    // 回退：用 1h ATR% 的滚动分位估算（自适应组合未启用时也能给出）
+    try {
+      const cc = (s.klines && s.klines[sym] && s.klines[sym]['1h']) || null;
+      const hist = Array.isArray(cc) ? atrPctHistoryOf(cc, 480) : null;
+      if (hist && hist.length >= 60) { const cur = hist[hist.length - 1]; volQ = hist.filter(v => v <= cur).length / hist.length; }
+    } catch (e) { /* 保留 null */ }
+  }
   let trend = null, macro = null;
-  try {
-    const api = kapi();
-    if (api && api.__horizonTrend) trend = api.__horizonTrend(sym);
-  } catch (e) { trend = null; }
+  try { const api = kapi(); if (api && api.__horizonTrend) trend = api.__horizonTrend(sym); } catch (e) { trend = null; }
+  try { const api = kapi(); if (api && api.__macroTrend) macro = api.__macroTrend(sym); } catch (e) { macro = null; }
   return { sym, group, tfs, tf, resonance, vd, sr, regime, volQ, trend, macro, flow: (ctx && ctx.flow) || {}, ext: (ctx && ctx.ext) || {}, now: Date.now() };
 }
 

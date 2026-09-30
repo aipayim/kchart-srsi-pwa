@@ -234,10 +234,21 @@ export function atrBandText(atrPct, medAtrPct) {
 
 export function resonanceText(res) {
   if (!res) return null;
-  const buy = num(res.buy) || 0, sell = num(res.sell) || 0;
-  if (buy > 0 && sell === 0) return '一致偏多(买' + buy + '/卖' + sell + ')';
-  if (sell > 0 && buy === 0) return '一致偏空(买' + buy + '/卖' + sell + ')';
-  if (buy > 0 && sell > 0) return '分歧(买' + buy + '/卖' + sell + (buy > sell ? ' 多数偏多' : sell > buy ? ' 多数偏空' : ' 均衡') + ')';
+  // 兼容两种形态：
+  //   ① 数值计数 {buy:2, sell:0}（旧测试/旧调用）
+  //   ② indicators.resonance() 的 {buy:bool, sell:bool, strength, buyScore, sellScore, conditions}
+  // ⭐ 修复：旧实现只读数值 buy/sell → 传入布尔形态时恒得 0 → 永远输出「无共振」（实测强空共振也被写成无共振）。
+  const numBuy = (typeof res.buy === 'number' && isFinite(res.buy)) ? res.buy : null;
+  const numSell = (typeof res.sell === 'number' && isFinite(res.sell)) ? res.sell : null;
+  const buy = (numBuy != null && numSell != null) ? numBuy : (num(res.buyScore) || 0);
+  const sell = (numBuy != null && numSell != null) ? numSell : (num(res.sellScore) || 0);
+  const stTxt = res.strength === 'strong' ? '强' : res.strength === 'medium' ? '中' : res.strength === 'weak' ? '弱' : '';
+  const names = Array.isArray(res.conditions) ? res.conditions.map(c => c && c.n).filter(Boolean) : [];
+  const condTxt = names.length ? '：' + names.slice(0, 6).join('/') : '';
+  const stSuffix = stTxt ? ' · ' + stTxt : '';
+  if (buy > 0 && sell === 0) return '一致偏多(买' + buy + '/卖' + sell + stSuffix + ')' + condTxt;
+  if (sell > 0 && buy === 0) return '一致偏空(买' + buy + '/卖' + sell + stSuffix + ')' + condTxt;
+  if (buy > 0 && sell > 0) return '分歧(买' + buy + '/卖' + sell + (buy > sell ? ' 多数偏多' : sell > buy ? ' 多数偏空' : ' 均衡') + stSuffix + ')' + condTxt;
   return '无共振';
 }
 
@@ -302,7 +313,7 @@ export function buildJevState(inp) {
   // ② 盘口与订单流
   const fl = it.flow || {};
   const frTxt = fl.fundingRate != null
-    ? pct1(fl.fundingRate * 100) + '/期' + (fl.frTrend ? '（' + fl.frTrend + '）' : '') + (fl.fundingRate > 0 ? ' → 多头拥挤（空头收费）' : fl.fundingRate < 0 ? ' → 空头拥挤（多头收费）' : '') +
+    ? pct1(fl.fundingRate * 100) + '/期' + (fl.frTrend ? '（' + fl.frTrend + '）' : '') + (fl.fundingRate > 0 ? ' → 多头拥挤（多头付费；趋势市中可延续，震荡市中易回落）' : fl.fundingRate < 0 ? ' → 空头拥挤（空头付费；下跌趋势中可延续，震荡市中易反弹）' : '') +
       (fl.basisPct != null ? ' · 基差 ' + pct1(fl.basisPct) : '')
     : (fl.basisPct != null ? '未知 · 基差 ' + pct1(fl.basisPct) : '未知');
   const oiTxt = fl.oi != null ? (fl.oiTrend ? fl.oiTrend + '（' + fmtNum(fl.oi) + '）' : fmtNum(fl.oi)) : '未知';
@@ -323,14 +334,21 @@ export function buildJevState(inp) {
 
   // ④ 市场环境与体制
   const rg = it.regime || {};
+  // 兼容两种体制对象：detectRegimeState（type='trend-up'/'range'… 带 label）与旧式 {type:'trend',direction:'up'}
+  const REGIME_ZH = { trend: '趋势', range: '震荡', pullback: '回调', 'trend-up': '多头趋势 ↑', 'trend-down': '空头趋势 ↓', 'pullback-up': '上涨中回调', 'pullback-down': '下跌中反弹', unknown: '未知' };
+  const _rdir = rg.direction === 'up' || rg.direction === 1 ? '向上' : rg.direction === 'down' || rg.direction === -1 ? '向下' : rg.direction === 0 ? '横向' : null;
   const regimeTxt = rg.type
-    ? ({ trend: '趋势', range: '震荡', pullback: '回调' }[rg.type] || rg.type) + (rg.direction ? '(' + (rg.direction === 'up' ? '向上' : rg.direction === 'down' ? '向下' : '横向') + ')' : '') + (rg.strength != null ? ' 强度' + Number(rg.strength).toFixed(2) : '')
+    ? (rg.label || REGIME_ZH[rg.type] || rg.type) + (!rg.label && _rdir ? '(' + _rdir + ')' : '') + (rg.strength != null ? ' 强度' + Number(rg.strength).toFixed(2) : '')
     : '未知';
   const volQ = num(it.volQ);
   const volTxt = volQ != null ? '波动率分位 ' + Math.round(volQ * 100) + '%（' + (volQ >= 0.7 ? '高' : volQ <= 0.3 ? '低' : '中') + '）' : '未知';
   const tr = it.trend || {}, mc = it.macro || {};
-  const trendTxt = tr.up != null ? (tr.up ? '上升' : '下降') + ' ' + pct1(tr.spreadPct) + (tr.tf ? '(' + tr.tf + ' EMA20/120)' : '') : '未知';
-  const macroTxt = mc.up != null ? (mc.up ? '上升' : '下降') + ' ' + pct1(mc.spreadPct) + (mc.tf ? '(' + mc.tf + ')' : '') : '未知';
+  const trendTxt = tr.label
+    ? tr.label + ' ' + pct1(tr.spreadPct) + (tr.tf ? '(' + tr.tf + ' EMA20/120)' : '')
+    : (tr.up != null ? (tr.up ? '上升' : '下降') + ' ' + pct1(tr.spreadPct) + (tr.tf ? '(' + tr.tf + ' EMA20/120)' : '') : '未知');
+  const macroTxt = mc.label
+    ? mc.label + ' ' + pct1(mc.spreadPct) + (mc.tf ? '(' + mc.tf + ')' : '')
+    : (mc.up != null ? (mc.up ? '上升' : '下降') + ' ' + pct1(mc.spreadPct) + (mc.tf ? '(' + mc.tf + ')' : '') : '未知');
 
   const sections = {
     tech: techLines.join('\n') + '\n- 多周期共振: ' + (resTxt || '未知') + '\n- 量价背离: ' + vdTxt + '\n- 支撑/阻力: ' + srTxt,

@@ -70,6 +70,11 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   ok('resonanceText 分歧', resonanceText({ buy: 1, sell: 2 }) === '分歧(买1/卖2 多数偏空)');
   ok('resonanceText 无共振', resonanceText({ buy: 0, sell: 0 }) === '无共振');
   ok('resonanceText null', resonanceText(null) === null);
+  // ⭐ v1.6.73：兼容 indicators.resonance() 的布尔形态（旧版只读数值 → 恒得 0 → 永远「无共振」）
+  ok('⭐ resonanceText 布尔形态（强空共振）不再误报无共振', (() => {
+    const s = resonanceText({ buy: false, sell: true, strength: 'strong', buyScore: 0, sellScore: 5, conditions: [{ n: '趋势空', side: 'sell' }] });
+    return s.indexOf('一致偏空') === 0 && s.indexOf('卖5') > 0 && s.indexOf('强') > 0 && s.indexOf('趋势空') > 0;
+  })());
 
   ok('timeWindow 返回盘中/周末含 UTC', /UTC \d\d:\d\d/.test(timeWindow(Date.UTC(2026, 0, 5, 12, 0))) === true);
   ok('timeWindow 周末', timeWindow(Date.UTC(2026, 0, 4, 12, 0)).indexOf('周末') >= 0);
@@ -104,6 +109,32 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   ok('buildJevState 量价背离文字', r.text.indexOf('底部背离') > 0);
   ok('buildJevState 时间窗口', r.text.indexOf('时间窗口:') > 0);
   ok('buildJevState 无原始 K 线（不含长数字序列）', !/\d{4,},\d{4,},\d{4,}/.test(r.text));
+})();
+
+// ============ v1.6.73：状态文档补齐（体制/趋势/宏观/SRSI）+ 措辞中性化 ============
+(function stateContext() {
+  const inp = {
+    sym: 'BNBUSDT', group: 'short', tfs: ['5m', '15m', '1h'],
+    tf: { '5m': null, '15m': { rsi: 62, macd: '金叉', ma: '站上均线(多头排列)', vol: '放量突破', pattern: '连阳', momPct: 1.2, atr: '中波动(ATR 0.3%)', srsi: 85, kd: [85, 78], band: '上带' }, '1h': null },
+    resonance: { buy: true, sell: false, buyScore: 3, sellScore: 0, conditions: [{ n: '趋势多', side: 'buy' }], strength: 'strong' },
+    regime: { tf: '1h', type: 'trend-up', label: '多头趋势 ↑', direction: 1, strength: 0.8 },
+    volQ: 0.66,
+    trend: { tf: '4h', up: true, flat: false, label: '上升', spreadPct: 2.4 },
+    macro: { tf: '30d', up: true, spreadPct: 5.1 },
+    flow: { fundingRate: 0.0002 },
+    now: Date.UTC(2026, 0, 5, 12, 0)
+  };
+  const r = buildJevState(inp);
+  ok('⭐ 状态含市场体制（非未知）', r.text.indexOf('市场体制: 多头趋势') > 0);
+  ok('⭐ 状态含趋势门（非未知）', r.text.indexOf('趋势门(4h): 上升') > 0);
+  ok('⭐ 状态含宏观（非未知）', r.text.indexOf('宏观(30d): 上升') > 0);
+  ok('⭐ 状态含波动率分位', r.text.indexOf('波动率分位 66%') > 0);
+  ok('⭐ SRSI K/D/带 进入状态（旧版 srsi 写死 null → 从不发送）', r.text.indexOf('SRSI K=85') > 0 && r.text.indexOf('带=上带') > 0);
+  ok('⭐ 资金费率措辞中性化（双向提示）', r.text.indexOf('多头拥挤') > 0 && r.text.indexOf('可延续') > 0 && r.text.indexOf('易回落') > 0);
+  ok('⭐ 多周期共振文字（布尔形态）非「无共振」', r.text.indexOf('多周期共振: 一致偏多') > 0);
+  // 兼容旧式 regime 对象
+  const r2 = buildJevState({ sym: 'X', group: 'short', tfs: ['5m'], tf: {}, regime: { type: 'trend', direction: 'up', strength: 0.5 }, now: 1 });
+  ok('旧式 regime 对象仍可读（趋势(向上)）', r2.text.indexOf('趋势(向上)') > 0);
 })();
 
 // ============ 模板 / 请求体 ============

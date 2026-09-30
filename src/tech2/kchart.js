@@ -7722,6 +7722,52 @@ export const kchartApi = {
   markFxXY,
   markAnchorY,
   __mainGeom: () => _mainGeom,
+  // ---- Jev 状态文档所需的只读上下文钩子（纯计算，供 src/pwa/jevClient.js 消费；─ 缺失即 null）----
+  // 修复：jevClient 一直在调 __regimeState/__horizonTrend，但从未暴露 → 状态文档第四节永远「未知」。
+  __regimeState: (sym) => {
+    try {
+      const S = globalThis.S || {};
+      const perSym = (S.indicators && S.indicators[sym]) || {};
+      for (const tf of ['1h', '4h', '30m', '15m']) {
+        let series = perSym[tf] && perSym[tf].series;
+        if (!series || !Array.isArray(series.aisLine) || series.aisLine.length < 30) {
+          const c = getTFData(sym, tf).c;
+          if (!Array.isArray(c) || c.length < 30) continue;
+          try { const a = ais(c); series = { price: c, aisLine: a.line, aisUpper: a.upper, aisLower: a.lower }; } catch (e) { continue; }
+        }
+        let pctHis = null;
+        try { pctHis = atrPctHistory(series.price, THRESH.HORIZON_ATR_HIS); } catch (e) { pctHis = null; }
+        let st = null;
+        try { st = detectRegimeState(series, { pctHis }); } catch (e) { st = null; }
+        if (st && st.type && st.type !== 'unknown') return Object.assign({ tf }, st);
+      }
+      return null;
+    } catch (e) { return null; }
+  },
+  __horizonTrend: (sym) => {
+    try {
+      const pm = {};
+      KLINE_TF.forEach(tf => { const c = getTFData(sym, tf).c; if (Array.isArray(c) && c.length) pm[tf] = c; });
+      return horizonTrend(pm);
+    } catch (e) { return null; }
+  },
+  __macroTrend: (sym) => {
+    try {
+      const pm = {};
+      ['7d', '30d'].forEach(tf => { const c = getTFData(sym, tf).c; if (Array.isArray(c) && c.length) pm[tf] = c; });
+      return macroTrend(pm);
+    } catch (e) { return null; }
+  },
+  __srsiKd: (sym, tf) => {
+    try {
+      const c = getTFData(sym, tf).c;
+      if (!Array.isArray(c) || c.length < 30) return null;
+      const sc = (cfg.srsiByTf && cfg.srsiByTf[tf]) || cfg.srsi || {};
+      const kd = srsiKD(c, { rsiPeriod: sc.rsiPeriod, stochPeriod: sc.stochPeriod, smoothK: sc.smoothK, smoothD: sc.smoothD });
+      const i = kd.k.length - 1;
+      return (kd.k[i] != null && kd.d[i] != null) ? { k: kd.k[i], d: kd.d[i] } : null;
+    } catch (e) { return null; }
+  },
   pulseAlpha,
   withAlpha,
   legendItems,
