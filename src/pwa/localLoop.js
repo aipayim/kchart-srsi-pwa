@@ -9,6 +9,7 @@
 // 训练期按样本真实时间做近期加权(见 disciplineAnalysis.aggregateBuckets)，旧行情自动淡出、近期 regime 主导。
 import { analyzeTradeDiscipline } from '../tech2/kchart.js';
 import { atrClose } from '../engine/indicators.js';
+import { JEV_HORIZON_IDS } from '../engine/jevState.js';
 import { trainTsevWeights, trainTsevWeightsStats, forwardAccuracy as calcForwardAccuracy, factorStatsTable, TSEV_CFG } from '../engine/disciplineAnalysis.js';
 
 const DB_NAME = 'kchart_pwa';
@@ -436,7 +437,10 @@ export function recordJevSample(sym, tsMs, horizon, side, hit) {
   if (!sym || !horizon) return false;
   const s = Number(side);
   if (s !== 1 && s !== -1) return false;
-  if (!/^(short|mid|long)$/.test(String(horizon))) return false;
+  // ⭐ v1.6.71 修复：旧正则写死 `short|mid|long`，导致 P0 新增的「超短档 scalp」样本被**静默拒绝**
+  //   （表现为面板「超短档已判定 15 笔」但「本机 TSEV 独立样本 0/50」永远不增长）。
+  //   改用 JEV_HORIZON_IDS 单一来源（含 scalp），避免新增档位时再次漏掉。
+  if (JEV_HORIZON_IDS.indexOf(String(horizon)) < 0) return false;
   const ts = (typeof tsMs === 'number' && tsMs > 0) ? tsMs : Date.now();
   const wk = Math.floor(ts / (7 * 86400000));
   const k = sym + '|jev|' + horizon + '|' + s;

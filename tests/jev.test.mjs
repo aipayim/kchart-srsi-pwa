@@ -751,6 +751,10 @@ async function schedTest() {
   ok('中性档不占窗口（后续同窗口判断仍可作锚点）', e.plan[1].length === 1);
   const f = planIndependentFeeds([mk(base), mk(base + 25 * H)], { anchors: { 'BTCUSDT|short': [base] } });
   ok('已有锚点参与去重（重开后不重复喂）', f.plan[0].length === 0 && f.plan[1].length === 1);
+  // ⭐ v1.6.71：超短档（scalp）必须参与独立窗口喂样（旧 recordJevSample 白名单漏掉 scalp → 永远学不到）
+  ok('⭐ scalp 档参与独立窗口喂样', (planIndependentFeeds([mk(base, 'scalp')]).plan[0] || []).indexOf('scalp') >= 0);
+  const scWin = planIndependentFeeds([mk(base, 'scalp'), mk(base + 30 * 60000, 'scalp'), mk(base + W.scalp + 1000, 'scalp')]);
+  ok('⭐ scalp 窗口 2h：30m 内去重、越窗保留', scWin.plan[0].length === 1 && scWin.plan[1].length === 0 && scWin.plan[2].length === 1);
   ok('已处理过的档不再出现（rec.fed）', planIndependentFeeds([Object.assign(mk(base + 25 * H), { fed: { short: true } })]).plan[0].length === 0);
   ok('空输入安全', planIndependentFeeds(null).plan && Object.keys(planIndependentFeeds(null).plan).length === 0);
   ok('collectAnchors 从 rec.win 收集锚点', (() => {

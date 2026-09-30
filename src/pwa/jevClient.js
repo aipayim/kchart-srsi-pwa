@@ -741,7 +741,7 @@ export async function matureDecisions() {
   const canFeed = !!(localLoop && typeof localLoop.recordJevSample === 'function');
   // 独立窗口去重（跨记录）：同 (币,档) 每个前向窗口只喂 1 条 → n ≈ 独立观测数
   const indep = planIndependentFeeds(all, { anchors: collectAnchors(all) });
-  let matured = 0, fed = 0;
+  let matured = 0, fed = 0, rejected = 0;
   for (let i = 0; i < all.length; i++) {
     const rec = all[i];
     if (rec.matured) continue;
@@ -755,11 +755,19 @@ export async function matureDecisions() {
       rec.win = rec.win || {};
       for (const smp of plan.toFeed) {
         const sideNum = smp.side === 'long' ? 1 : -1;
+        let okFeed = false;
         try {
-          localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0);
+          okFeed = localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0) !== false;
+        } catch (e) { okFeed = false; }
+        if (okFeed) {
           fed++;
           rec.win[smp.horizon] = rec.ts;      // 作为该窗口的锚点（供下次独立窗口去重）
-        } catch (e) { /* 单条失败不影响其它 */ }
+        } else {
+          // ⭐ v1.6.71：样本被拒 → **不留锚点 / 不标 fed**（否则该窗口被白白吞掉且无任何痕迹，正是「超短档 0/50」的成因）。
+          // 依据 §5.37「引擎本该做某事却没做，必须可见」。
+          delete plan.fed[smp.horizon];
+          rejected++;
+        }
       }
     }
     rec.fed = plan.fed;
@@ -768,7 +776,8 @@ export async function matureDecisions() {
     if (plan.allDone) matured++;
     await putDecision(rec);
   }
-  return { matured, fed };
+  if (rejected) { try { console.warn('[JEV-FEED] ' + rejected + ' 个样本被本机 TSEV 拒绝（未计入）'); } catch (e) { /* 忽略 */ } }
+  return { matured, fed, rejected };
 }
 
 /** 频率字符串 → 毫秒（用于 barT 分桶去重） */
