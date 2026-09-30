@@ -13,7 +13,8 @@ import { installAdaptivePortfolio } from './adaptivePortfolio.js';
 globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
-import { jevSchedulerTick, tickJevMature } from './jevClient.js';
+import { jevSchedulerTick, tickJevMature, scalpBarsNow } from './jevClient.js';
+import { initJevSrsiAudit, tickJevSrsiPairs, setAuditBars } from './jevSrsiAudit.js';
 
 // 开发模式下自动注销残留 Service Worker（dev SW 缓存会导致浏览器长期跑旧代码，Ctrl+Shift+R 不清 SW 缓存）。
 // 生产构建不执行，不影响已安装 PWA。
@@ -438,6 +439,12 @@ async function init() {
   showVersionBadge();
   renderSymList();
   initPwaShell();
+  // P1：Jev×SRSI 裁决审计——安装事件订阅（只观察；幂等） + 同步用户显式确认的超短档根数
+  try {
+    setAuditBars(scalpBarsNow());
+    initJevSrsiAudit();
+    globalThis.jevAuditTick = () => tickJevSrsiPairs();
+  } catch (e) { /* 审计失败不影响盯盘 */ }
   initPwaTrade();
   initAdaptivePortfolio();
   initLocalLoop();
@@ -445,6 +452,15 @@ async function init() {
   loadSymbol(curSym);   // 回到上次使用的币对（curSym 已含 pwa_last_sym 优先逻辑）
   setInterval(tickPrice, PRICE_REFRESH_MS);
   setInterval(tickKlines, KLINE_REFRESH_MS);
+}
+
+// ---- P1：Jev×SRSI 裁决审计到期回填（节流 5min，与 Jev 到期回填同频；只观察，不接执行）----
+let _lastAuditTick = 0;
+function tickJevSrsiPairsThrottled(force) {
+  const now = Date.now();
+  if (!force && now - _lastAuditTick < 5 * 60000) return null;
+  _lastAuditTick = now;
+  try { return tickJevSrsiPairs().catch(() => null); } catch (e) { return null; }
 }
 
 // ---- 本机 TSEV 训练 loop（PWA 打开期间每 60min 累积样本并本地训练，权重本机优先合并）----
@@ -595,6 +611,8 @@ function initPwaTrade() {
     // 二者内部只做轻量判断，默认未启用时立即 return。
     try { jevSchedulerTick(); } catch (e) {}
     try { tickJevMature(); } catch (e) {}
+    // P1：Jev×SRSI 裁决审计——到期回填（内部节流 5min；只观察，不接执行）
+    try { tickJevSrsiPairsThrottled(); } catch (e) {}
     // PWA 外壳（KPI / 信号驾驶舱 / 事件流）每秒刷新
     try { refreshShell(); } catch (e) {}
   }, 1000);

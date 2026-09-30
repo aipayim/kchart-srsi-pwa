@@ -40,9 +40,9 @@ src/ai/llmClient.js
 src/auth/apiKeyStore.js
 src/persistence/indexdb.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
-src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css,jevClient.js}
-src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel,jevPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs}
+src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css,jevClient.js,jevSrsiAudit.js}
+src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel,jevPanel,jevAuditPanel}.js
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs,jevSrsiAudit.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```

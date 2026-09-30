@@ -21,6 +21,11 @@ import { playSound, resolveSound, readSoundMap, writeSoundMap, soundCatalog, pre
 import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from '../tech2/adaptivePanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
 import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevAllHtml } from '../tech2/jevPanel.js';
+import { buildJevAuditModel, renderJevAuditHtml } from '../tech2/jevAuditPanel.js';
+import {
+  loadPairs as loadAuditPairs, memoryPairs as auditMemoryPairs, auditLastErr,
+  onAuditChange, pairStats as auditPairStats
+} from './jevSrsiAudit.js';
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon,
@@ -1564,6 +1569,38 @@ function bindJevSettings() {
   });
 }
 
+// ============ Jev×SRSI 裁决审计（P1，**只观察**，不接执行）============
+let _jaRefreshedAt = 0, _jaLoading = false;
+function renderJevAudit() {
+  const card = $('pwaJevAuditCard');
+  const box = $('pwaJevAudit');
+  if (!card || !box) return;   // 主系统 index.html 无此卡 → no-op（零回归）
+  let sym = null; try { sym = jevSym(); } catch (e) { sym = null; }
+  let cfg = null; try { cfg = readJevCfg(); } catch (e) { cfg = null; }
+  const list = auditMemoryPairs().filter(p => p && (!sym || p.sym === sym));
+  const stats = auditPairStats(list);
+  const show = !!((cfg && cfg.enabled) || list.length > 0);
+  card.style.display = show ? '' : 'none';
+  if (!show) return;
+  const html = renderJevAuditHtml(buildJevAuditModel({ stats, sym, lastErr: auditLastErr() }));
+  if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
+  const pill = $('pwaJevAuditPill');
+  if (pill) {
+    const txt = stats.total ? (stats.decided + '/' + stats.total) : '0';
+    if (pill.textContent !== txt) pill.textContent = txt;
+    pill.title = '已判定/总配对样本；需 ≥' + stats.minPairs + ' 对且每组 ≥' + stats.minGroup + ' 才由 P2 判定线裁决';
+  }
+}
+function refreshJevAuditData(force) {
+  const now = Date.now();
+  if (!force && now - _jaRefreshedAt < 15000) return;
+  if (_jaLoading) return;
+  _jaLoading = true; _jaRefreshedAt = now;
+  try {
+    loadAuditPairs().then(() => renderJevAudit()).catch(() => {}).finally(() => { _jaLoading = false; });
+  } catch (e) { _jaLoading = false; }
+}
+
 function renderRecentSignals() {
   const box = $('pwaRecentSig');
   const c = $('pwaSigCount');
@@ -1744,6 +1781,8 @@ export function refreshShell() {
   renderToolBoard(snap);
   renderJev();
   try { refreshJevData(); } catch (e) {}
+  renderJevAudit();
+  try { refreshJevAuditData(); } catch (e) {}
   // 盯盘右栏紧凑卡：自适应组合（与「组合」tab 完整版同源，不含事件流）
   // 主图工具栏「自适应」药丸关闭时，整卡隐藏（与「均线关系」「缠论」一致）
   const _adpCard = $('pwaAdaptiveCard');
@@ -1778,6 +1817,8 @@ export function initPwaShell() {
   renderJevSettings();
   try { onJevChange(() => { refreshJevData(true); }); } catch (e) {}
   try { refreshJevData(true); } catch (e) {}
+  try { onAuditChange(() => { try { renderJevAudit(); } catch (e) {} }); } catch (e) {}
+  try { refreshJevAuditData(true); } catch (e) {}
   applyPhoneDefaults();
   // 回测页：Alpha 实验室默认展开（首次；用户手动收起后由 __alphaLabHead 写入 pwa_alpha_open 尊重）
   try { if (localStorage.getItem('pwa_alpha_open') == null) localStorage.setItem('pwa_alpha_open', '1'); } catch (e) {}

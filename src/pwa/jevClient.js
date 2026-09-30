@@ -20,8 +20,11 @@ import { THRESH } from '../engine/thresholds.js';
 
 const LSK = 'pwa_jev';
 const DB_NAME = 'kchart_jev';
-const DB_VER = 1;
+const DB_VER = 2;                 // v2：新增 srsiPairs store（P1 Jev×SRSI 裁决审计）
 const STORE = 'decisions';
+const PAIRS_STORE = 'srsiPairs';
+// 供 src/pwa/jevSrsiAudit.js 复用（同名同版本，升级时缺则建）
+export const JEV_DB = { name: DB_NAME, ver: DB_VER, decisions: STORE, pairs: PAIRS_STORE };
 const DEC_CAP = 400;             // 明细上限（超出裁掉最旧）
 
 // 每个档的评估口径：evalTf = 用于判盈亏的 K 线周期；bars = 到期所需的前向根数
@@ -222,6 +225,11 @@ function openDB() {
           const st = db.createObjectStore(STORE, { keyPath: 'id' });
           st.createIndex('ts', 'ts', { unique: false });
           st.createIndex('sym', 'sym', { unique: false });
+        }
+        if (!db.objectStoreNames.contains(PAIRS_STORE)) {
+          const sp = db.createObjectStore(PAIRS_STORE, { keyPath: 'id' });
+          sp.createIndex('ts', 'ts', { unique: false });
+          sp.createIndex('sym', 'sym', { unique: false });
         }
       };
       req.onsuccess = () => resolve(req.result);

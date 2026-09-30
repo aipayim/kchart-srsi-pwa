@@ -855,3 +855,31 @@ body.pwa #jevAllWrap .jev-all-body[data-flt="pending"] .jev-all-row.st-decided {
 body.pwa .jev-all-note { padding: 4px 2px 0; }
 body.pwa .jev-all-empty { font-size: 11px; color: var(--text2); padding: 4px 2px; }
 body.pwa #jevAllWrap .sig-ev { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+
+/* v1.6.76（P1）：Jev×SRSI 裁决审计卡 —— 只观察·不接执行 */
+body.pwa .ja-wrap{padding:2px 2px 0}
+body.pwa .ja-head{font-size:10px;color:var(--text2);line-height:1.7;padding:0 1px 4px}
+body.pwa .ja-head b{color:var(--text);font-weight:700}
+body.pwa .ja-sep{opacity:.4;margin:0 3px}
+body.pwa .ja-kv{color:#7d8a9c}
+body.pwa .ja-rows{display:flex;flex-direction:column;gap:3px;margin:3px 0 5px}
+body.pwa .ja-row{display:flex;align-items:center;gap:6px;font-size:10.5px;line-height:1.5;
+  padding:4px 6px;border-left:3px solid #8b95a5;border-radius:4px;background:rgba(255,255,255,.03);flex-wrap:wrap}
+body.pwa .ja-lab{font-weight:700;white-space:nowrap}
+body.pwa .ja-n{color:#9db2c8;white-space:nowrap}
+body.pwa .ja-hit{color:var(--text);white-space:nowrap}
+body.pwa .ja-pnl{color:#9db2c8;white-space:nowrap}
+body.pwa .ja-ci{color:#6B7688;font-size:9.5px;white-space:nowrap}
+body.pwa .ja-pend{color:#f59e0b;font-size:9.5px;white-space:nowrap}
+body.pwa .ja-inc{font-size:11px;padding:5px 6px;border-radius:4px;background:rgba(255,255,255,.04);margin-bottom:5px}
+body.pwa .ja-inc b{font-weight:800;margin-left:5px}
+body.pwa .ja-inc-pos b{color:var(--green)}
+body.pwa .ja-inc-neg b{color:var(--red)}
+body.pwa .ja-inc-na b,body.pwa .ja-inc-zero b{color:#8899aa}
+body.pwa .ja-note{font-size:10px;line-height:1.6;padding:5px 6px;border-radius:4px;background:rgba(255,255,255,.03);border:1px solid var(--border)}
+body.pwa .ja-note.ja-warn{color:#f59e0b;border-color:rgba(245,158,11,.35)}
+body.pwa .ja-note.ja-ok{color:var(--green);border-color:rgba(46,204,113,.35)}
+body.pwa .ja-note.ja-bad{color:var(--red);border-color:rgba(255,107,107,.35)}
+body.pwa .ja-note.ja-dim{color:var(--text2)}
+body.pwa .ja-err{font-size:9.5px;color:#f59e0b;margin-top:4px}
+body.pwa .ja-disc{font-size:9px;color:#6B7688;margin:5px 0 2px;line-height:1.5}
