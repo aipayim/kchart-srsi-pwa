@@ -1974,9 +1974,36 @@ export function renderTradeDiscipline(hz, capMin) {
       } else if (jv.learnedKeys && jv.learnedKeys.length) {
         jevTxt = `<br><span class="disc-jev-vote disc-jev-mute">🧠 本机已学 ${jv.learnedKeys.length} 个 Jev 权重（${jv.learnedKeys.slice(0, 4).map(k => k.key.replace(/\|/g, '·')).join(' · ')}）但当前无新鲜 Jev 读数 → 未计入</span>`;
       }
+      // P4 剩余子项：SRSI 对齐因子族（jev_srsi）已学权重——**本批只喂样+可视化，未接入投票**
+      if (jv.learnedSrsiKeys && jv.learnedSrsiKeys.length) {
+        const ks = jv.learnedSrsiKeys.slice(0, 3).map(k => k.key.replace(/\|/g, '·') + ' w' + (k.w > 0 ? '+' : '') + k.w.toFixed(1));
+        jevTxt += `<br><span class="disc-jev-vote disc-jev-mute">🧬 SRSI 对齐因子（P1 配对学习）已生效于本机 TSEV：${ks.join(' · ')}</span>`;
+      }
     }
   } catch (e) { jevTxt = ''; }
-  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}${accTxt}<br><span class="disc-tsev-effect">${tsevEffectTxt}</span>${unbalTxt}${jevTxt}${dbgTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积 + 首次载入全部币种近4年历史回补；桌面重训后可导出 JSON 在手机导入共享）</span></div>`;
+  // P5：学习曲线（滚动命中率）+ 权重版本（每日快照）+ 退化守卫历史（一键回滚）
+  let curveTxt = '', verTxt = '';
+  try {
+    const lapi = (typeof globalThis !== 'undefined') ? globalThis.__localTsev : null;
+    if (lapi && typeof lapi.learningCurve === 'function') {
+      const lc = lapi.learningCurve(sym);
+      const fmt = (w) => (w && w.acc != null) ? (Math.round(w.acc * 100) + '%(' + w.decided + ')') : '—';
+      if (lc && lc.rows) curveTxt = ' · 本机命中率 近20 ' + fmt(lc.windows[0]) + ' · 近50 ' + fmt(lc.windows[1]) + ' · 全部 ' + fmt(lc.windows[2]);
+      const g = (lc && lc.guard) || [];
+      if (g.length) {
+        const last = g[g.length - 1];
+        curveTxt += ' · <span class="disc-tsev-guard">🛡 守卫已回退 ' + g.length + ' 次（最近 ' + (last.accNew * 100).toFixed(0) + '% < ' + (last.accPrev * 100).toFixed(0) + '%）</span>';
+      }
+    }
+    if (lapi && typeof lapi.listWeightVersions === 'function') {
+      const vs = lapi.listWeightVersions();
+      if (vs && vs.length) {
+        const btns = vs.slice(-5).map(v => '<button class="disc-tsev-vbtn" title="回滚到此版：' + new Date(v.at).toLocaleString() + ' · ' + v.syms + ' 币 · ' + v.factors + ' 因子 · 样本 ' + v.sampleCount + '" onclick="window.kTsevRollback(' + v.idx + ')">↩ ' + v.day.slice(5) + '</button>').join('');
+        verTxt = '<br><span class="disc-tsev-ver">🗂 权重版本 ' + vs.length + ' 版（每日一版，上限 20；点击回滚）' + btns + '</span>';
+      }
+    }
+  } catch (e) { curveTxt = ''; verTxt = ''; }
+  const tsevBar = `<div class="disc-tsev-bar">📊 TSEV 判决权重源: <b>${srcLabel}</b> · 全局样本 ${ti.globalN} / 本机 ${ti.localN}${loopTxt}${accTxt}${curveTxt}<br><span class="disc-tsev-effect">${tsevEffectTxt}</span>${unbalTxt}${jevTxt}${dbgTxt}${verTxt}<br><span class="disc-tsev-hint">本机样本越多越贴合你的设备行情（PWA 打开期间每 60min 自动累积 + 首次载入全部币种近4年历史回补；桌面重训后可导出 JSON 在手机导入共享）</span></div>`;
 
   // ---- 信号指示：方向来自经典或 TSEV，避免「看多」头部与「信号不足」矛盾 ----
   const _dirLong = entry.dir.startsWith('看多');
@@ -4949,7 +4976,7 @@ function buildDiscSig(cfg, priceMap, deadMode, deadZone, loopStatus) {
   if (loopStatus) {
     const progSym = (loopStatus.backfilling && loopStatus.progress) ? loopStatus.progress.sym : null;
     const progDone = (progSym && loopStatus.perSym && loopStatus.perSym[progSym]) ? loopStatus.perSym[progSym].done : 0;
-    sig += '|loop:' + loopStatus.sampleCount + ':' + loopStatus.factorCount + ':' + (loopStatus.backfilling ? (progSym + ':' + progDone) : 'idle');
+    sig += '|loop:' + loopStatus.sampleCount + ':' + loopStatus.factorCount + ':' + (loopStatus.verCount || 0) + ':' + (loopStatus.backfilling ? (progSym + ':' + progDone) : 'idle');
   }
   return sig;
 }
@@ -7619,6 +7646,20 @@ export function __defaultKConfig() { return defaultKConfig(); }
 export function __debugKChart() { return { drag: _drag, hover: _hover, hoverBound: _cv ? _cv.__kchartHoverBound : null, subRegions: _subRegions.map(r => ({ key: r.key, tf: r.tf, y0: r.y0, y1: r.y1, idx: r.idx })) }; }
 
 // 对外设置入口（main.js 挂 window）
+// P5：一键回滚 TSEV 权重版本（每日快照）→ 刷新本机权重并重绘纪律面板。
+// 回滚后由退化守卫继续保护：若后续训练出的新权重实测更优，会自动再次采用（以实测为准）。
+export function tsevRollback(ref) {
+  const api = (typeof globalThis !== 'undefined') ? globalThis.__localTsev : null;
+  if (!api || typeof api.rollbackWeights !== 'function') return false;
+  let ok = false;
+  try { ok = !!api.rollbackWeights(ref); } catch (e) { ok = false; }
+  if (!ok) return false;
+  try {
+    refreshLocalTsev().then(() => { try { _discSig = ''; renderTradeDiscipline(); } catch (e) {} }).catch(() => {});
+  } catch (e) { try { _discSig = ''; renderTradeDiscipline(); } catch (e2) {} }
+  return true;
+}
+
 export const kchartApi = {
   setSymbol: setSym,
   setMainTF,
@@ -7644,6 +7685,7 @@ export const kchartApi = {
   setSigOverlay,
   setAdaptiveOverlay,
   setToolBoardTfOnly,
+  tsevRollback,
   adaptiveOverlayAt,
   setMainTF: (tf) => setMainTF(tf),
   setKlineSel: (tf, on) => setKlineSel(tf, on),

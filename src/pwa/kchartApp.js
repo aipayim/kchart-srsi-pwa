@@ -138,6 +138,7 @@ globalThis.kClearSrsiOpt = (tf) => api.clearSrsiOpt(tf);
 globalThis.kSetSrsiOptPreview = (on) => api.setSrsiOptPreview(on);
 globalThis.kSetSrsiOptDeep = (on) => api.setSrsiOptDeep(on);
 globalThis.kSetSrsiLead = (tf, on) => api.setSrsiLead(tf, on);
+globalThis.kTsevRollback = (ref) => api.tsevRollback(ref);   // v1.6.79：TSEV 权重版本一键回滚（P5）
 globalThis.kSetChan = (on) => api.setChan(on);   // v1.6.45：缠论结构层开关（纯显示）
 globalThis.kchartSetLiqOn = (on) => api.setLiqOn(on);   // v1.6.51：清算热图开关（成交量代理 OI，纯显示）
 globalThis.startSignalEngine = () => globalThis.__pwaShell && globalThis.__pwaShell.startSignalEngine

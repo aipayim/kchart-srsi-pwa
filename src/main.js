@@ -102,6 +102,7 @@ window.kSetSrsiAux = (tf, on) => kchartApi.setSrsiAux(tf, on);
 window.kSetGateTarget = (tf) => kchartApi.setGateTarget(tf);
 window.kSetMainOverlay = (on) => kchartApi.setMainOverlay(on);
 window.kSetMainOverlayTf = (tf, on) => kchartApi.setMainOverlayTf(tf, on);
+window.kTsevRollback = (ref) => kchartApi.tsevRollback(ref);   // v1.6.79：TSEV 权重版本一键回滚（P5）
 window.kCopyCfgToAll = () => kchartApi.copyCfgToAll();
 window.kResetSymbolCfg = () => kchartApi.resetSymbolCfg();
 window.kOptimizeSrsi = (tf, role) => {

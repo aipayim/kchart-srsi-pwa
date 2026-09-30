@@ -237,7 +237,7 @@ export function jevFactorsFromLatest(latest, now, opts = {}) {
  * @param {Array} jevFactors jevFactorsFromLatest 的产出
  * @param {Object} weights   本币权重表 { 'name|cond|side': w }
  * @param {Object} tsev      本次投票结果（可为 null）；tsevNoJev = 去掉 jev 因子的投票结果
- * @returns {{available,nFactors,nWeighted,net,items,decisive,text}}
+ * @returns {{available,nFactors,nWeighted,net,items,decisive,learnedKeys,learnedSrsiKeys}}
  */
 export function summarizeJevVotes(jevFactors, weights, tsev, tsevNoJev) {
   const list = Array.isArray(jevFactors) ? jevFactors : [];
@@ -258,7 +258,80 @@ export function summarizeJevVotes(jevFactors, weights, tsev, tsevNoJev) {
   }
   // 已学到的 jev|* 权重（即使本次没 Jev 读数也能看到——防「学了不用」的审计线索）
   const learnedKeys = Object.keys(W).filter(k => k.indexOf('jev|') === 0).map(k => ({ key: k, w: W[k] }));
-  return { available: list.length > 0, nFactors: list.length, nWeighted: withW.length, net: Math.round(net * 100) / 100, items, decisive, learnedKeys };
+  // ⭐ P4 剩余子项：SRSI 对齐因子族 `jev_srsi|<td>|<side>`（样本来自 P1 配对，见 jevSrsiAudit）。
+  //   本批**只喂样 + 可视化**，不接入投票（消费端留待 P2 统计裁决通过后由用户确认；口径见 GOAL_jev-srsi §6.2）。
+  const learnedSrsiKeys = Object.keys(W).filter(k => k.indexOf('jev_srsi|') === 0).map(k => ({ key: k, w: W[k] }));
+  return { available: list.length > 0, nFactors: list.length, nWeighted: withW.length, net: Math.round(net * 100) / 100, items, decisive, learnedKeys, learnedSrsiKeys };
+}
+
+/**
+ * 权重指纹（纯函数）：把权重表折叠成稳定短串，用于「是否变化 / 日志去重」。
+ * 权重值按 1e-3 取整后再算 FNV-1a，避免浮点末位抖动导致指纹天天变。
+ */
+export function weightFingerprint(W) {
+  if (!W) return '';
+  const keys = Object.keys(W).filter(k => !k.startsWith('__')).sort();
+  if (!keys.length) return '';
+  let h = 2166136261;
+  for (const k of keys) {
+    const s = k + '=' + (Math.round((+W[k] || 0) * 1000) / 1000);
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  }
+  return (h >>> 0).toString(36) + ':' + keys.length;
+}
+
+// 内部：给定样本表与权重，统计「TSEV 有明确方向」的判决命中率
+function _accOf(rows, weights, M) {
+  let decided = 0, hit = 0;
+  for (const r of (rows || [])) {
+    const lab = r && r.raw;
+    if (!lab) continue;
+    const v = voteTsev(r.factors || [], weights || {}, { M });
+    if (!v || v.dir === 0) continue;
+    decided++;
+    if (v.dir === lab) hit++;
+  }
+  return { decided, hit, miss: decided - hit, acc: decided ? hit / decided : null };
+}
+
+/**
+ * 滚动命中率（纯函数，面板学习曲线用）。
+ * @param rows    验证缓冲 [{factors, raw}]（时间升序）
+ * @param weights 本币权重表
+ * @param windows 窗口大小数组；0 或负 = 全部
+ * @returns {{windows:[{window,n,decided,hit,miss,acc}], overall}}
+ */
+export function rollingAccuracy(rows, weights, windows = [20, 50, 0]) {
+  const list = Array.isArray(rows) ? rows : [];
+  const ws = Array.isArray(windows) ? windows : [20, 50, 0];
+  const out = ws.map(w => {
+    const win = (w > 0) ? list.slice(-w) : list;
+    const a = _accOf(win, weights);
+    return { window: w, n: win.length, decided: a.decided, hit: a.hit, miss: a.miss, acc: a.acc == null ? null : +a.acc.toFixed(3) };
+  });
+  return { windows: out, overall: out[out.length - 1] };
+}
+
+/**
+ * 退化守卫（纯函数）：比较「新权重 vs 上一版权重」在最近 N 个已判定样本上的决策准确率。
+ * 新权重更差（超过 margin）→ 建议回退；任一侧可判决样本不足 → 不判断（insufficient）。
+ * @param rows   [{factors, raw}]（时间升序；内部取最后 n 条）
+ * @param newW   新训练出的权重表
+ * @param prevW  上一版权重表（可为 null/空 → 判为 insufficient，即无法比较）
+ * @param opts   {n=50, minDecided=10, margin=0.02}
+ * @returns {{action:'keep'|'revert'|'insufficient', n, accNew, accPrev, decidedNew, decidedPrev, delta}}
+ */
+export function guardDecision(rows, newW, prevW, opts = {}) {
+  const n = opts.n != null ? Math.max(1, Math.round(+opts.n)) : 50;
+  const minDecided = opts.minDecided != null ? +opts.minDecided : 10;
+  const margin = opts.margin != null ? +opts.margin : 0.02;
+  const list = Array.isArray(rows) ? rows.slice(-n) : [];
+  const a = _accOf(list, newW);
+  const b = _accOf(list, prevW);
+  const base = { n: list.length, accNew: a.acc == null ? null : +a.acc.toFixed(4), accPrev: b.acc == null ? null : +b.acc.toFixed(4), decidedNew: a.decided, decidedPrev: b.decided };
+  if (a.decided < minDecided || b.decided < minDecided) return { ...base, action: 'insufficient', delta: null };
+  const delta = a.acc - b.acc;
+  return { ...base, delta: +delta.toFixed(4), action: delta < -margin ? 'revert' : 'keep' };
 }
 
 // 从 analyzeTradeDiscipline 的中间产物抽取方向因子态。

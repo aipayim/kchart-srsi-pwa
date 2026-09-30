@@ -1,6 +1,6 @@
 // 交易纪律方向因子消融 · 共享分析核心单元测试
 // 覆盖 parseJsonl / dedupeRows / decorrelate / coverageMatrix / buildAblation
-import { parseJsonl, dedupeRows, decorrelate, buildAblation, coverageMatrix, MIN_SAMPLE, REGIMES, DIRS, extractDisciplineFactors, trainTsevWeights, voteTsev, TSEV_CFG, wilsonShrink, trainTsevWeightsStats, forwardAccuracy, decayStats, jevFactorsFromLatest, summarizeJevVotes, JEV_FACTOR_THR } from '../src/engine/disciplineAnalysis.js';
+import { parseJsonl, dedupeRows, decorrelate, buildAblation, coverageMatrix, MIN_SAMPLE, REGIMES, DIRS, extractDisciplineFactors, trainTsevWeights, voteTsev, TSEV_CFG, wilsonShrink, trainTsevWeightsStats, forwardAccuracy, decayStats, jevFactorsFromLatest, summarizeJevVotes, JEV_FACTOR_THR, weightFingerprint, rollingAccuracy, guardDecision } from '../src/engine/disciplineAnalysis.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; console.log('ok:', name); } else { failed++; console.log('FAIL:', name); } }
@@ -285,6 +285,38 @@ ok('MIN_SAMPLE=600', MIN_SAMPLE === 600);
   ok('summarize 无权重→nWeighted0 但 available', (() => { const r = summarizeJevVotes([{ name: 'jev', cond: 'short', side: -1, strength: -60 }], {}, null, null); return r.nWeighted === 0 && r.available === true && r.net === 0; })());
   ok('summarize 已学jev权重线索(即使本次无读数)', (() => { const r = summarizeJevVotes([], { 'jev|short|-1': -1.5, 'pullback|up_os|1': 2 }, null, null); return r.available === false && r.learnedKeys.length === 1 && r.learnedKeys[0].key === 'jev|short|-1'; })());
   ok('summarize 空入力安全', (() => { const r = summarizeJevVotes(null, null, null, null); return r.available === false && r.nFactors === 0 && r.learnedKeys.length === 0; })());
+  ok('summarize 已学 jev_srsi 权重线索（P4 剩余子项）', (() => { const r = summarizeJevVotes([], { 'jev_srsi|15m|1': 0.8, 'jev|short|-1': -1.5 }, null, null); return r.learnedSrsiKeys.length === 1 && r.learnedSrsiKeys[0].key === 'jev_srsi|15m|1' && r.learnedSrsiKeys[0].w === 0.8 && r.learnedKeys.length === 1; })());
+  ok('summarize learnedSrsiKeys 空安全', summarizeJevVotes([], {}, null, null).learnedSrsiKeys.length === 0);
+}
+
+// ---- P5：weightFingerprint / rollingAccuracy / guardDecision ----
+{
+  const W1 = { 'consensus|bull|1': 1.5, 'pullback|up_os|1': -0.5 };
+  ok('fingerprint 相同权重同串', weightFingerprint(W1) === weightFingerprint({ 'pullback|up_os|1': -0.5, 'consensus|bull|1': 1.5 }));
+  ok('fingerprint 权重变化则变', weightFingerprint(W1) !== weightFingerprint({ 'consensus|bull|1': 1.6, 'pullback|up_os|1': -0.5 }));
+  ok('fingerprint 空→空串', weightFingerprint({}) === '' && weightFingerprint(null) === '');
+  ok('fingerprint 忽略 __ 元键', weightFingerprint({ 'a|b|1': 1, __unbalanced: true, __pos: 2 }) === weightFingerprint({ 'a|b|1': 1 }));
+
+  // 因子 consensus|bull|1 支持 +1；权重正 → 看多。构造 6 命中 / 10
+  const mkRow = (lab) => ({ factors: [{ name: 'consensus', cond: 'bull', side: 1 }], raw: lab });
+  const rows = [mkRow(1), mkRow(-1), mkRow(1), mkRow(-1), mkRow(1), mkRow(-1), mkRow(1), mkRow(-1), mkRow(1), mkRow(1)];
+  const good = { 'consensus|bull|1': 1.0 };
+  const bad = { 'consensus|bull|1': -1.0 };   // 反向权重 → 只命中 4/10
+  const ra = rollingAccuracy(rows, good, [5, 0]);
+  ok('rollingAccuracy 窗口 5', ra.windows[0].decided === 5 && ra.windows[0].hit === 3 && ra.windows[0].acc === 0.6);
+  ok('rollingAccuracy 全部 decided/hit/acc', ra.windows[1].decided === 10 && ra.windows[1].hit === 6 && ra.windows[1].acc === 0.6);
+  ok('rollingAccuracy overall 指向最后窗口', ra.overall === ra.windows[1]);
+  ok('rollingAccuracy 空 rows 不抛', rollingAccuracy(null, good).windows.every(w => w.decided === 0 && w.acc === null));
+  ok('rollingAccuracy 无权重 → decided 0', rollingAccuracy(rows, {}, [0]).windows[0].decided === 0);
+
+  const g1 = guardDecision(rows, good, bad, { n: 50, minDecided: 5, margin: 0.02 });
+  ok('guard 新优于旧 → keep', g1.action === 'keep' && g1.accNew === 0.6 && g1.accPrev === 0.4 && g1.delta > 0);
+  const g2 = guardDecision(rows, bad, good, { n: 50, minDecided: 5, margin: 0.02 });
+  ok('guard 新差于旧 → revert', g2.action === 'revert' && g2.accNew === 0.4 && g2.accPrev === 0.6 && g2.delta === -0.2);
+  ok('guard 阈值内抖动 → keep', guardDecision(rows, good, good, { n: 50, minDecided: 5, margin: 0.02 }).action === 'keep');
+  ok('guard prev 空 → insufficient', guardDecision(rows, good, {}, { minDecided: 5 }).action === 'insufficient');
+  ok('guard 样本不足 → insufficient', guardDecision(rows.slice(0, 3), good, bad, { n: 50, minDecided: 10 }).action === 'insufficient');
+  ok('guard 空 rows 不抛', guardDecision(null, good, bad, {}).action === 'insufficient');
 }
 
 console.log(`\n=== disciplineAnalysis.test: ${passed} passed, ${failed} failed ===`);

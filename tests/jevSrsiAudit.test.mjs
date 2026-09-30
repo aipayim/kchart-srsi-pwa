@@ -19,7 +19,7 @@ import {
   JEV_AUDIT_MIN_PAIRS, JEV_AUDIT_MIN_GROUP, JEV_AUDIT_CAP,
   isPairableKind, pairKey, pickJevOpinion, pairFromEvent, alignIdx, lastFiniteAtr,
   evalPairOutcome, mergePairs, trimPairList, wilsonCI, pairGroupOf, pairStats,
-  aggregateSnapshot, auditBars, setAuditBars
+  aggregateSnapshot, auditBars, setAuditBars, tsevSampleOf, applyTsevFeed, TSEV_TD
 } from '../src/pwa/jevSrsiAudit.js';
 import { buildJevAuditModel, renderJevAuditHtml, AUDIT_DISCLAIMER } from '../src/tech2/jevAuditPanel.js';
 
@@ -415,6 +415,34 @@ function ok(name, cond) { if (cond) { passed++; console.log('ok:', name); } else
   const esc = buildJevAuditModel({ stats: pairStats([]), sym: 'X', lastErr: '<script>' });
   assertOk(renderJevAuditHtml(esc).includes('&lt;script&gt;'));
   ok('HTML 转义', true);
+}
+
+// ---------- P4 剩余子项：TSEV 喂样（tsevSampleOf / applyTsevFeed）----------
+{
+  const pair = { id: 'x', sym: 'BTCUSDT', side: 'long', ts: 1700000000000, barT: 1700000000000, evalTf: '15m' };
+  const s = tsevSampleOf(pair, { status: 'win' });
+  ok('tsevSampleOf win → side +1 / hit true / td 15m', !!s && s.side === 1 && s.hit === true && s.sym === 'BTCUSDT' && s.td === '15m' && s.ts === 1700000000000);
+  ok('tsevSampleOf loss short → side -1 / hit false', (() => { const q = tsevSampleOf({ sym: 'ETHUSDT', side: 'short', ts: 1 }, { status: 'loss' }); return q && q.side === -1 && q.hit === false && q.td === '15m'; })());
+  ok('tsevSampleOf pending/expired/no-entry → null', ['pending', 'expired', 'no-entry'].every(st => tsevSampleOf(pair, { status: st }) === null));
+  ok('tsevSampleOf 无方向 → null', tsevSampleOf({ sym: 'X', side: '', ts: 1 }, { status: 'win' }) === null);
+  ok('tsevSampleOf 缺 sym → null', tsevSampleOf({ sym: '', side: 'long', ts: 1 }, { status: 'win' }) === null);
+  ok('tsevSampleOf 保留 pair.evalTf', tsevSampleOf({ sym: 'X', side: 'long', ts: 1, evalTf: '1h' }, { status: 'win' }).td === '1h');
+  ok('tsevSampleOf null 安全', tsevSampleOf(null, null) === null && TSEV_TD === '15m');
+
+  let calls = 0;
+  const failFeed = () => { calls++; return false; };
+  const okFeed = () => { calls++; return true; };
+  const f1 = applyTsevFeed(pair, { status: 'win' }, failFeed);
+  ok('feed 失败 → 不标 tsevFed（v1.6.75 教训）', f1.fed === false && f1.attempted === true && !f1.pair.tsevFed);
+  ok('feed 抛出也不崩且不标 fed', (() => { const r = applyTsevFeed(pair, { status: 'win' }, () => { throw new Error('x'); }); return r.fed === false && !r.pair.tsevFed; })());
+  const f2 = applyTsevFeed(f1.pair, { status: 'win' }, okFeed);
+  ok('feed 成功 → tsevFed=true + tsevFedAt', f2.fed === true && f2.pair.tsevFed === true && typeof f2.pair.tsevFedAt === 'number');
+  const before = calls;
+  const f3 = applyTsevFeed(f2.pair, { status: 'win' }, okFeed);
+  ok('已喂过 → 不再调 feedFn（幂等）', f3.fed === true && f3.attempted === false && calls === before);
+  const f4 = applyTsevFeed(pair, { status: 'pending' }, okFeed);
+  ok('非 win/loss → 不喂不标', f4.fed === false && f4.attempted === false && !f4.pair.tsevFed);
+  ok('applyTsevFeed null 安全', applyTsevFeed(null, null, okFeed).fed === false);
 }
 
 console.log(`\n=== jevSrsiAudit: ${passed} passed, ${failed} failed ===`);

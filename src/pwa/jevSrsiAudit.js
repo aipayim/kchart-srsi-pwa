@@ -44,6 +44,7 @@ export const JEV_AUDIT_MIN_PAIRS = JE_SRSI_DECISION.MIN_PAIRS;  // 判定样本�
 export const JEV_AUDIT_MIN_GROUP = JE_SRSI_DECISION.MIN_GROUP;  // 每组样本门槛（单一来源）
 export const JEV_AUDIT_CAP = 5000;                              // IDB 明细上限
 export const JEV_AUDIT_LSK = 'smartTrader_jevAudit';            // localStorage 只存聚合快照（KB 级）
+export const TSEV_TD = AUDIT_TF;                                // TSEV 样本的「口径周期」= 配对周期（15m）
 
 const finite = (v) => typeof v === 'number' && Number.isFinite(v);
 const num = (v) => (v != null && Number.isFinite(+v)) ? +v : null;
@@ -120,6 +121,56 @@ export function pairFromEvent(ev, opts = {}) {
   };
   p.id = pairKey(p);
   return p;
+}
+
+/**
+ * P4 剩余子项：由「已判定配对」生成一条 TSEV 喂样（纯函数）。
+ * 仅 win/loss 才产出（pending/expired/no-entry 一律不产出）。
+ * side = 配对信号方向（long→+1 / short→−1）——即学习「15m SRSI 方向信号自身的可靠度」；
+ * 与将来消费口径（confirm.fresh 时按 confirm.dir 出 side）**同源**，不得改成 Jev 方向（否则学用不一致）。
+ * @returns null | {sym, ts, td, side, hit}
+ */
+export function tsevSampleOf(pair, outcome) {
+  if (!pair || !outcome) return null;
+  const st = outcome.status;
+  if (st !== 'win' && st !== 'loss') return null;
+  const side = pair.side === 'long' ? 1 : pair.side === 'short' ? -1 : 0;
+  if (!side) return null;
+  const sym = pair.sym || '';
+  if (!sym) return null;
+  const ts = Number.isFinite(+pair.ts) ? +pair.ts : (Number.isFinite(+pair.barT) ? +pair.barT : Date.now());
+  const td = typeof pair.evalTf === 'string' && pair.evalTf ? pair.evalTf : TSEV_TD;
+  return { sym, ts, td, side, hit: st === 'win' };
+}
+
+/**
+ * 幂等喂样（纯函数 + 注入 feedFn）：
+ *  - 已喂过（`pair.tsevFed`）→ 直接返回，不再调用 feedFn（重启动/裁剪后仍幂等）；
+ *  - **喂样失败不得标记 fed**（v1.6.75 教训：标了 fed 会永久吞掉该样本）；
+ *  - 非 win/loss → 不喂、不标记。
+ * @returns {{pair, fed:boolean, attempted:boolean}}
+ */
+export function applyTsevFeed(pair, outcome, feedFn) {
+  if (!pair) return { pair, fed: false, attempted: false };
+  if (pair.tsevFed) return { pair, fed: true, attempted: false };
+  const s = tsevSampleOf(pair, outcome);
+  if (!s) return { pair, fed: false, attempted: false };
+  let ok = false;
+  try { ok = !!(feedFn && feedFn(s)); } catch (e) { ok = false; }
+  if (!ok) return { pair, fed: false, attempted: true };
+  return { pair: Object.assign({}, pair, { tsevFed: true, tsevFedAt: Date.now() }), fed: true, attempted: true };
+}
+
+// 弱引用喂样（不在 kchart.js/本模块 import localLoop —— 保持隔离红线）
+function _feedTsev(s) {
+  const api = globalThis.__localTsev;
+  if (api && typeof api.recordJevSrsiSample === 'function') return !!api.recordJevSrsiSample(s.sym, s.ts, s.td, s.side, s.hit);
+  return false;
+}
+/** TSEV 喂样通道是否可用（供面板/测试判断；不可用则配对正常累积，只是暂不喂 TSEV） */
+export function tsevFeedAvailable() {
+  const api = globalThis.__localTsev;
+  return !!(api && typeof api.recordJevSrsiSample === 'function');
 }
 
 /** 时间对齐：返回最后一个 `times[i] <= t` 的下标；无 times 或找不到返回 -1（别用位置对齐） */
@@ -439,16 +490,20 @@ function klines15(sym) {
 export async function tickJevSrsiPairs() {
   await loadPairs();
   const list = _mem.filter(p => p && !p.matured);
-  if (!list.length) return { checked: 0, matured: 0, pending: 0 };
+  if (!list.length) return { checked: 0, matured: 0, pending: 0, fed: 0 };
   const updated = [];
-  let matured = 0, pending = 0;
+  let matured = 0, pending = 0, fed = 0;
   for (const p of list) {
     try {
       const kl = klines15(p.sym);
       if (!kl) { pending++; continue; }
       const o = evalPairOutcome(p, kl, { bars: p.evalBars || auditBars() });
       if (o.status === 'pending') { pending++; continue; }
-      const np = Object.assign({}, p, { entryIdx: (p.entryIdx != null && Number.isFinite(+p.entryIdx)) ? p.entryIdx : alignIdx(kl.times, p.barT || p.ts), outcome: o, matured: true, maturedAt: Date.now() });
+      let np = Object.assign({}, p, { entryIdx: (p.entryIdx != null && Number.isFinite(+p.entryIdx)) ? p.entryIdx : alignIdx(kl.times, p.barT || p.ts), outcome: o, matured: true, maturedAt: Date.now() });
+      // P4 剩余子项：仅 win/loss 喂 TSEV（幂等；喂样失败不标 fed）
+      const fr = applyTsevFeed(np, o, _feedTsev);
+      np = fr.pair;
+      if (fr.attempted && fr.fed) fed++;
       updated.push(np);
       matured++;
     } catch (e) { pending++; }
@@ -458,5 +513,5 @@ export async function tickJevSrsiPairs() {
     try { await trimPairs(); } catch (e) { /* 裁剪失败不阻塞 */ }
     emitChange();
   }
-  return { checked: list.length, matured, pending };
+  return { checked: list.length, matured, pending, fed };
 }

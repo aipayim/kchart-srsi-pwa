@@ -10,7 +10,7 @@
 import { analyzeTradeDiscipline } from '../tech2/kchart.js';
 import { atrClose } from '../engine/indicators.js';
 import { JEV_HORIZON_IDS } from '../engine/jevState.js';
-import { trainTsevWeights, trainTsevWeightsStats, forwardAccuracy as calcForwardAccuracy, factorStatsTable, TSEV_CFG } from '../engine/disciplineAnalysis.js';
+import { trainTsevWeights, trainTsevWeightsStats, forwardAccuracy as calcForwardAccuracy, factorStatsTable, rollingAccuracy, guardDecision, weightFingerprint, TSEV_CFG } from '../engine/disciplineAnalysis.js';
 
 const DB_NAME = 'kchart_pwa';
 const STORE = 'disc';
@@ -25,6 +25,14 @@ const MAIN = '1h';
 const STRIDE = 1;
 const INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_BACKFILL_YEARS = 4;
+// ---- P5：权重版本化 + 退化守卫 + 学习曲线（GOAL_jev-srsi §7）----
+const VER_KEY = 'pwa_tsev_ver';     // 每日权重快照（上限 VER_CAP，KB 级；走 _safeSetItem 配额自愈）
+const VER_CAP = 20;
+const GUARD_N = 50;                 // 退化守卫：每币最近 N 个已判定样本
+const GUARD_MIN_DECIDED = 10;       // 任一侧可判决样本少于此 → 不判断（insufficient）
+const GUARD_MARGIN = 0.02;          // 新权重准确率落后超过 2pp 才回退（防噪声抖动）
+const GUARD_GAP_MS = 30 * 60 * 1000;// 守卫最小间隔（30min），避免频繁 churn
+const JEV_SRSI_TF = '15m';          // SRSI 对齐因子族口径（与 P1 配对 AUDIT_TF 一致）
 const SRSI_CFG = { rsiPeriod: 85, stochPeriod: 50, stochK: 10, stochD: 5, overbought: 80, oversold: 20 };
 // 不同评估轴对应的「未来 N 根」偏移（用于方向标签 dirLabel）
 const FUT_BARS = {
@@ -40,6 +48,12 @@ let _perSym = {};             // sym -> {total, done, backfilled}
 let _localWeights = {};       // 训练后的本机权重（按币种）：{ [sym]: { 'name|cond|side': w } }
 let _localN = 0;
 let _rows = {};               // 验证缓冲（仅内存，不持久化）：{ [sym]: [{factors, raw}] }，用于前向准确度回测
+let _verFull = [];            // P5：权重版本快照（含权重本体；仅在内存，权威副本）
+let _verLoaded = false;
+let _guardHistory = [];       // P5：退化守卫回滚历史（内存，最近若干条）
+let _guardLogKey = '';        // P5：守卫日志去重键（sym|权重指纹）
+let _lastGuardAt = 0;         // P5：上次守卫时间（间隔闸门）
+let _rejected = {};          // P5：被守卫拒绝的权重（粘性）{ [sym]: {fp, weights, at} }（仅内存）
 const ROW_CAP = 6000;         // 每币最多保留样本数（环形覆盖，保证 walk-forward 有足够 test 集）
 let _enabled = true;
 let _timer = null;
@@ -156,6 +170,7 @@ function addRow(row) {
     if (!f || f.side === 0) continue;
     const k = keyOf(sym, f);
     const a = _stats[k] || (_stats[k] = { buckets: {} });
+    if (!a.buckets) a.buckets = {};   // 防御：importSamples 可能写入旧 {n,h} 形状条目
     const b = a.buckets[wk] || (a.buckets[wk] = { n: 0, h: 0 });
     b.n++;
     // hit = 因子 side 与「1日尺度未来方向」同向的样本数（dirLabel：ATR 触达 / 净符号）。训练标签
@@ -171,8 +186,9 @@ function addRow(row) {
   }
 }
 
-function train() {
-  _localWeights = {};
+// 从 _stats 纯计算出各币权重（不落盘、不改全局状态）
+function computeWeights() {
+  const out = {};
   const syms = new Set();
   for (const k in _stats) { const s = k.indexOf('|'); if (s > 0) syms.add(k.slice(0, s)); }
   for (const sym of syms) {
@@ -183,12 +199,132 @@ function train() {
     }
     if (Object.keys(stats).length) {
       const w = trainTsevWeightsStats(stats, { MIN_SAMPLE: TSEV_CFG.LOCAL_FACTOR_MIN, Z_THRESH: TSEV_CFG.Z_THRESH, recencyHalfLifeDays: TSEV_CFG.LOCAL_RECENCY_HALFLIFE_DAYS });
-      if (Object.keys(w).length) _localWeights[sym] = w;
+      if (Object.keys(w).length) out[sym] = w;
     }
   }
+  return out;
+}
+
+// P5 退化守卫（逐币，**粘性**）：
+//  - 新权重在最近 GUARD_N 个已判定样本上准确率落后旧权重超过 GUARD_MARGIN → 保留旧权重；
+//  - **被拒绝的权重指纹会被记住**（`_rejected[sym]`）：同一版坏权重后续 train() 直接不采用，
+//    否则同一次训练窗口（30min）内的下一次 train() 会把坏权重再装回去（实测踩坑）；
+//  - 权重指纹变了但本次无法评估（守卫间隔未到）→ 保守沿用已接受的权重；
+//  - 样本不足（decided < GUARD_MIN_DECIDED）→ 不判断（采用新权重）。
+function guardLog(sym, fp, g) {
+  const key = sym + '|' + fp;
+  if (key === _guardLogKey) return;   // 同一版坏权重只记一次（防刷屏）
+  _guardLogKey = key;
+  _guardHistory.push({ at: Date.now(), sym, accNew: g.accNew, accPrev: g.accPrev, decidedNew: g.decidedNew, decidedPrev: g.decidedPrev, delta: g.delta });
+  if (_guardHistory.length > 20) _guardHistory.splice(0, _guardHistory.length - 20);
+  try { console.log('[TSEV-GUARD] 回退', sym, '新权重命中率 ' + ((g.accNew || 0) * 100).toFixed(1) + '% < 旧 ' + ((g.accPrev || 0) * 100).toFixed(1) + '%（n=' + g.decidedNew + '/' + g.decidedPrev + '）→ 保留上一版权重'); } catch (e) {}
+}
+
+function train() {
+  const prevW = _localWeights;
+  const freshW = computeWeights();
+  const out = {};
+  try {
+    const hasRows = Object.keys(_rows).some(s => _rows[s] && _rows[s].length);
+    const gapOk = hasRows && (Date.now() - _lastGuardAt >= GUARD_GAP_MS);
+    if (gapOk) _lastGuardAt = Date.now();
+    for (const sym in freshW) {
+      const nw = freshW[sym];
+      if (!nw) continue;
+      const fp = weightFingerprint(nw);
+      const rej = _rejected[sym];
+      const pw = prevW ? prevW[sym] : null;
+      if (rej && rej.fp === fp) { out[sym] = rej.weights; continue; }   // 已判过的同一版坏权重 → 不采用
+      if (gapOk) {
+        const g = guardDecision(_rows[sym] || [], nw, pw, { n: GUARD_N, minDecided: GUARD_MIN_DECIDED, margin: GUARD_MARGIN });
+        if (g.action === 'revert' && pw) {
+          out[sym] = pw;
+          _rejected[sym] = { fp, weights: pw, at: Date.now() };
+          guardLog(sym, fp, g);
+          continue;
+        }
+      } else if (rej && rej.fp !== fp) {
+        out[sym] = rej.weights;   // 有活跃回退但本次无法评估 → 保守沿用已接受的权重
+        continue;
+      }
+      out[sym] = nw;
+      if (rej) delete _rejected[sym];   // 该轮已重新评估且未被拒绝 → 解除回退
+    }
+  } catch (e) { /* 守卫失败不得影响训练主路径 */ }
+  _localWeights = Object.keys(out).length ? out : freshW;
   _localN = _sampleCount;
   _status.sampleCount = _sampleCount;
+  try { maybeSnapshot(); } catch (e) { /* 快照失败不影响训练 */ }
   return _localWeights;
+}
+
+// ---- P5：权重版本化（每日快照，上限 VER_CAP，一键回滚）----
+function _lskGet(key) {
+  try { return (typeof localStorage !== 'undefined') ? localStorage.getItem(key) : null; } catch (e) { return null; }
+}
+function _lskSet(key, str) {
+  try {
+    const api = globalThis.kchartApi;
+    if (api && typeof api._safeSetItem === 'function') return !!api._safeSetItem(key, str);   // 配额自愈（§5.30 红线）
+  } catch (e) { /* fallthrough */ }
+  try { if (typeof localStorage !== 'undefined') { localStorage.setItem(key, str); return true; } } catch (e) {}
+  return false;
+}
+function _cloneWeights(W) {
+  const o = {};
+  for (const s in (W || {})) { const m = W[s]; if (!m) continue; const c = {}; for (const k in m) c[k] = m[k]; o[s] = c; }
+  return o;
+}
+function _hasWeightContent(W) { return !!W && Object.keys(W).some(s => W[s] && Object.keys(W[s]).filter(k => !k.startsWith('__')).length); }
+function verLoad(force) {
+  if (_verLoaded && !force) return _verFull;
+  let arr = [];
+  try { const raw = _lskGet(VER_KEY); const j = raw ? JSON.parse(raw) : []; if (Array.isArray(j)) arr = j.filter(v => v && v.weights); } catch (e) { arr = []; }
+  _verFull = arr.slice(-VER_CAP);
+  _verLoaded = true;
+  return _verFull;
+}
+function verSave() { return _lskSet(VER_KEY, JSON.stringify(_verFull.slice(-VER_CAP))); }
+function maybeSnapshot() {
+  verLoad();
+  if (!_hasWeightContent(_localWeights)) return false;   // 空权重不建版
+  const day = new Date().toISOString().slice(0, 10);
+  const last = _verFull[_verFull.length - 1];
+  if (last && last.day === day) return false;            // 每天最多一版
+  _verFull.push({ at: Date.now(), day, weights: _cloneWeights(_localWeights), sampleCount: _sampleCount, factors: factorCount() });
+  if (_verFull.length > VER_CAP) _verFull.splice(0, _verFull.length - VER_CAP);
+  verSave();
+  return true;
+}
+/** 权重版本列表（元数据，不含权重本体） */
+export function listWeightVersions() {
+  const list = verLoad();
+  return list.map((v, i) => ({ idx: i, at: v.at, day: v.day, sampleCount: v.sampleCount, factors: v.factors, syms: Object.keys(v.weights || {}).length }));
+}
+/**
+ * 一键回滚到某个权重版本。ref: 索引(idx) | 'YYYY-MM-DD' | 时间戳字符串 | 缺省=最近一版。
+ * 说明：回滚后由**退化守卫继续保护**——若后续训练出的新权重实测更优，会自动再次采用（“以实测为准”）。
+ */
+export function rollbackWeights(ref) {
+  const list = verLoad();
+  if (!list.length) return false;
+  let v = null;
+  if (typeof ref === 'number' && Number.isFinite(ref)) v = (ref >= 0 && ref < list.length) ? list[ref] : (ref < 0 ? list[list.length - 1] : null);
+  else if (typeof ref === 'string' && ref) v = list.find(x => x.day === ref) || list.find(x => String(x.at) === ref) || null;
+  else v = list[list.length - 1];
+  if (!v || !_hasWeightContent(v.weights)) return false;
+  _localWeights = _cloneWeights(v.weights);
+  _localN = _sampleCount;
+  try { console.log('[TSEV-ROLLBACK] 回滚到', v.day, '· 样本', v.sampleCount, '· 因子', v.factors); } catch (e) {}
+  return true;
+}
+/** 学习曲线（面板用）：滚动命中率（近 20/50/全部）+ 版本数 + 最近守卫回退记录 */
+export function learningCurve(sym) {
+  const s = sym || '';
+  const rows = _rows[s] || [];
+  const W = _localWeights[s] || {};
+  const rc = rollingAccuracy(rows, W, [20, 50, 0]);
+  return Object.assign({ sym: s, rows: rows.length, versions: listWeightVersions().length, guard: _guardHistory.slice(-5) }, rc);
 }
 
 function factorCount() {
@@ -376,6 +512,7 @@ export function onProgress(cb) { if (typeof cb === 'function') _onProgress = cb;
 export async function init() {
   _db = await openDB();
   await loadSamples();
+  try { verLoad(true); } catch (e) { /* 版本列表读取失败不影响训练 */ }
   train();
   _status.enabled = _enabled;
 }
@@ -412,7 +549,7 @@ export function setEnabled(v) {
 }
 
 export function status() {
-  return { ..._status, sampleCount: _sampleCount, factorCount: factorCount(), backfilling: _backfilling, progress: _progress, perSym: _perSym };
+  return { ..._status, sampleCount: _sampleCount, factorCount: factorCount(), backfilling: _backfilling, progress: _progress, perSym: _perSym, verCount: verLoad().length, guardN: _guardHistory.length };
 }
 
 export function getStats() {
@@ -441,10 +578,30 @@ export function recordJevSample(sym, tsMs, horizon, side, hit) {
   //   （表现为面板「超短档已判定 15 笔」但「本机 TSEV 独立样本 0/50」永远不增长）。
   //   改用 JEV_HORIZON_IDS 单一来源（含 scalp），避免新增档位时再次漏掉。
   if (JEV_HORIZON_IDS.indexOf(String(horizon)) < 0) return false;
+  return _recordBucket(sym + '|jev|' + horizon + '|' + s, tsMs, hit);
+}
+
+/**
+ * P4 剩余子项：SRSI 对齐因子族样本（键 `<sym>|jev_srsi|<td>|<side>`）—— 样本来自 P1 配对结果「命中即喂」。
+ * td = 配对口径周期（默认 '15m'，与 jevSrsiAudit.AUDIT_TF 一致）；side = 配对信号方向（long→+1/short→−1）；
+ * hit = 该配对是否命中（win）。写按周分桶统计（数 KB），train() 会自动把它一并训练 → debugTsev 可见。
+ * ⭐ 本批**只喂样 + 可视化**；消费端（extractDisciplineFactors）故意未接——待 P2 统计裁决通过并由用户确认后再接
+ *   （GOAL_jev-srsi §6.2/§10 闸门），以免用未裁决的统计改动纪律方向（显示层）。
+ */
+export function recordJevSrsiSample(sym, tsMs, td, side, hit) {
+  if (!sym) return false;
+  const s = Number(side);
+  if (s !== 1 && s !== -1) return false;
+  const tf = (typeof td === 'string' && /^[0-9]+[mhd]$/.test(td)) ? td : JEV_SRSI_TF;
+  return _recordBucket(sym + '|jev_srsi|' + tf + '|' + s, tsMs, hit);
+}
+
+// 共用：按周分桶写入一条外部样本 + 持久化 + 重训（供 recordJevSample / recordJevSrsiSample）
+function _recordBucket(k, tsMs, hit) {
   const ts = (typeof tsMs === 'number' && tsMs > 0) ? tsMs : Date.now();
   const wk = Math.floor(ts / (7 * 86400000));
-  const k = sym + '|jev|' + horizon + '|' + s;
   const a = _stats[k] || (_stats[k] = { buckets: {} });
+  if (!a.buckets) a.buckets = {};   // 防御：见 addRow
   const b = a.buckets[wk] || (a.buckets[wk] = { n: 0, h: 0 });
   b.n++;
   b.h += hit ? 1 : 0;
@@ -481,28 +638,60 @@ export function debugTsev(sym) {
   });
 }
 
+// 把一条源统计并入目标条目：兼容两种形状
+//  - v5：{ buckets: { [周索引]: {n,h} } }（按周分桶，训练期近期加权）
+//  - 旧 v2：{ n, h }（无时间信息 → 折算到当前周桶，给满近期权重；且**不得静默丢弃**）
+function _mergeStatInto(target, src, wk) {
+  if (!target || !src) return;
+  if (src.buckets && typeof src.buckets === 'object') {
+    target.buckets = target.buckets || {};
+    for (const w in src.buckets) {
+      const s = src.buckets[w];
+      if (!s) continue;
+      const b = target.buckets[w] || (target.buckets[w] = { n: 0, h: 0 });
+      b.n += s.n || 0; b.h += s.h || 0;
+    }
+    return;
+  }
+  if (src.n || src.h) {
+    target.buckets = target.buckets || {};
+    const b = target.buckets[wk] || (target.buckets[wk] = { n: 0, h: 0 });
+    b.n += src.n || 0; b.h += src.h || 0;
+  }
+}
+function _statN(a) {
+  if (!a) return 0;
+  if (a.buckets) { let n = 0; for (const w in a.buckets) n += (a.buckets[w] && a.buckets[w].n) || 0; return n; }
+  return a.n || 0;
+}
+
 // 导出已学统计为 JSON 字符串（跨设备共享：桌面重训 → 手机导入）
 export async function exportSamples() {
   const v = await idbGet(KEY);
   return v ? JSON.stringify(v) : null;
 }
 
-// 导入并合并统计：按 key 累加 n/h，perSym 取并集（冲突以较大 done 为准）
+// 导入并合并统计：按 key 累加 n/h（v5 buckets 与旧 {n,h} 两种形状都支持，不得静默丢样本）
+// perSym 取并集（冲突以较大 done 为准）
 export async function importSamples(json) {
   let v;
   try { v = JSON.parse(json); } catch { return false; }
   if (!v || !v.stats) return false;
   const cur = (await idbGet(KEY)) || {};
   const curStats = cur.stats || {};
+  const wk = Math.floor(Date.now() / (7 * 86400000));
   for (const k in v.stats) {
-    const a = v.stats[k];
-    const c = curStats[k] || (curStats[k] = { n: 0, h: 0 });
-    c.n += a.n || 0; c.h += a.h || 0;
+    if (!v.stats[k]) continue;
+    // 健壮性：_stats 键必须是 `sym|name|cond|side`（≥3 个分隔符）。缺 sym 前缀的脏键会导致
+    // 产生无法被任何币种消费的“孤儿条目”（debugTsev/train 都看不到）——直接跳过。
+    if ((k.match(/\|/g) || []).length < 3) continue;
+    const c = curStats[k] || (curStats[k] = { buckets: {} });
+    _mergeStatInto(c, v.stats[k], wk);
   }
   const curPer = cur.perSym || {};
   const vPer = v.perSym || {};
   for (const s in vPer) curPer[s] = Object.assign(curPer[s] || {}, vPer[s]);
-  const sampleCount = Object.values(curStats).reduce((s, a) => s + (a.n || 0), 0);
+  const sampleCount = Object.keys(curStats).reduce((s, k) => s + _statN(curStats[k]), 0);
   await idbSet(KEY, { v: 5, stats: curStats, sampleCount, perSym: curPer });
   _stats = curStats; _perSym = curPer; _sampleCount = sampleCount;
   train();
@@ -514,6 +703,8 @@ export function register() {
   globalThis.__localTsev = {
     getWeights, status, getStats, setEnabled, start, stop, onTrained, onProgress,
     backfillAll, kick, collectSymbol, forwardAccuracy, debugTsev, exportSamples, importSamples,
-    setSymbolProvider, setSymbolListProvider, recordJevSample
+    setSymbolProvider, setSymbolListProvider, recordJevSample,
+    // P4 剩余子项 + P5
+    recordJevSrsiSample, listWeightVersions, rollbackWeights, learningCurve
   };
 }
