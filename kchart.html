@@ -196,7 +196,9 @@
               <div class="pwa-card" data-acc="jsaudit" id="pwaJevAuditCard" style="display:none">
                 <div class="pwa-card-h pwa-acc-h" title="Jev×SRSI 裁决审计：把每个 SRSI 方向信号与同刻 Jev 意见配对，按「同向/反向/中性或缺」分组统计命中率（TP 2×ATR / SL 1.5×ATR，15m 超短档）。只观察，不接交易。样本 ≥300 对且每组 ≥100 才由 P2 判定线裁决。">
                   <span class="ttl">👁 Jev×SRSI 裁决审计</span><span class="pwa-spacer"></span>
-                  <span class="pwa-pill" id="pwaJevAuditPill">—</span><span class="pwa-caret">▾</span></div>
+                  <span class="pwa-pill" id="pwaJevAuditPill">—</span>
+                  <button class="pwa-mini" id="pwaJevAuditExp" title="导出全部配对样本（JSON），供 scripts/jev-srsi-verdict.mjs 离线复跑">⤓ 样本</button>
+                  <span class="pwa-caret">▾</span></div>
                 <div class="pwa-card-b"><div id="pwaJevAudit"></div></div>
               </div>
               <div class="pwa-card" data-acc="toolboard" id="pwaToolBoardCard" style="display:none">

@@ -40,8 +40,10 @@ export function buildJevAuditModel(input = {}) {
       pending: g ? g.pending : 0,
       hitRate: g ? g.hitRate : null,
       hitTxt: (g && g.hitRate != null) ? (pct(g.hitRate, 1) + '（' + g.wins + '/' + dec + '）') : '（无已判定样本）',
-      avgPnl: g ? g.avgPnl : null,
-      avgPnlTxt: pnl(g ? g.avgPnl : null),
+      avgPnl: g ? g.grossAvgPnl : null,
+      avgPnlTxt: pnl(g ? g.grossAvgPnl : null),
+      expectancy: g ? g.expectancy : null,
+      expectancyTxt: pnl(g ? g.expectancy : null),
       ci: g ? g.ci : null,
       ciTxt: ciTxt(g ? g.ci : null)
     };
@@ -73,9 +75,35 @@ export function buildJevAuditModel(input = {}) {
     days: st ? st.days : 0,
     rows, increment: inc, incrementTxt: pp(inc), enough,
     minPairs, minGroup,
+    p2: buildP2View(input.verdict),
     verdictTxt, verdictClass,
     lastErr: input.lastErr || null,
     disclaimer: AUDIT_DISCLAIMER
+  };
+}
+
+/** P2 判定视图（纯函数）：把 evaluateJevSrsi 报告转成面板用的紧凑结构 */
+export function buildP2View(r) {
+  if (!r || !r.spec) return null;
+  const c = r.checks || {};
+  const chk = (ok, label, detail) => ({ ok: !!ok, label, detail: detail || '' });
+  const pAdj = r.pAdj == null ? '—' : (+r.pAdj).toFixed(3);
+  const pLab = r.pLabel == null ? '—' : (+r.pLabel).toFixed(3);
+  const pRot = r.pRotate == null ? '—' : (+r.pRotate).toFixed(3);
+  const lastInc = r.walk && r.walk.lastIncrement != null ? ((r.walk.lastIncrement >= 0 ? '+' : '') + r.walk.lastIncrement.toFixed(1) + 'pp') : '—';
+  const foldsTxt = (r.walk && r.walk.folds) ? r.walk.folds.map(f => (f.increment == null ? '—' : (f.increment >= 0 ? '+' : '') + f.increment.toFixed(1))).join(' | ') : '—';
+  return {
+    pass: !!r.pass, ran: !!r.ran, reason: r.reason || '',
+    incrementTxt: r.increment == null ? '—' : ((r.increment >= 0 ? '+' : '') + r.increment.toFixed(1) + 'pp'),
+    checks: [
+      chk(c.samples, '样本 ≥ ' + r.spec.MIN_PAIRS + ' 且同向/反向各 ≥ ' + r.spec.MIN_GROUP, '当前 total ' + ((r.stats && r.stats.total) || 0) + ' · 同向 ' + ((r.stats && r.stats.groups.same.decided) || 0) + ' / 反向 ' + ((r.stats && r.stats.groups.reverse.decided) || 0)),
+      chk(c.increment, '增量 ≥ ' + r.spec.MIN_INCREMENT_PP + 'pp', '当前 ' + (r.increment == null ? '—' : r.increment.toFixed(1) + 'pp')),
+      chk(c.signif, '校正后 p < ' + r.spec.MAX_P_ADJ + '（Bonferroni ×' + r.spec.BONFERRONI_K + '）', '置换 p ' + pLab + ' → 校正 ' + pAdj),
+      chk(c.walkForward, 'walk-forward 末折同号', '末折 ' + lastInc + (r.walk && r.walk.folds ? ' · 各折 ' + foldsTxt : ''))
+    ],
+    rotationTxt: pRot, zTxt: r.pZ == null ? '—' : (+r.pZ).toFixed(3),
+    specTxt: '置换/旋转各 ' + r.spec.PERM_ITERATIONS + ' 次 · 成本 ' + r.spec.ROUND_TRIP_PCT + '%/往返 · 全币种汇总',
+    disclaimer: '判定线预先声明，不因结果调整；观察期已满仍不通过 → 按方案终止（只保留 P1 审计 + P4 学习）'
   };
 }
 
@@ -110,11 +138,19 @@ export function renderJevAuditHtml(m) {
   const incLine = '<div class="ja-inc ja-inc-' + (m.increment == null ? 'na' : (m.increment > 0 ? 'pos' : m.increment < 0 ? 'neg' : 'zero')) + '">' +
     '<span class="ja-kv">增量（同向 − 反向）</span><b>' + esc(m.incrementTxt) + '</b></div>';
 
+  const p2Html = m.p2 ? '<div class="ja-p2 ja-p2-' + (m.p2.pass ? 'pass' : (m.p2.ran ? 'fail' : 'wait')) + '">' +
+    '<div class="ja-p2-h">P2 统计裁决（全币种汇总）<b>' + (m.p2.pass ? 'PASS ✅' : (m.p2.ran ? 'FAIL ⛔' : '等待样本')) + '</b></div>' +
+    m.p2.checks.map(c => '<div class="ja-p2-c ' + (c.ok ? 'ok' : 'no') + '"><span class="ja-p2-m">' + (c.ok ? '✓' : '✗') + '</span><span class="ja-p2-l">' + esc(c.label) + '</span><span class="ja-p2-d">' + esc(c.detail) + '</span></div>').join('') +
+    '<div class="ja-p2-x">时序旋转 p ' + esc(m.p2.rotationTxt) + ' · 两比例 z p ' + esc(m.p2.zTxt) + ' · ' + esc(m.p2.specTxt) + '</div>' +
+    '<div class="ja-p2-note">' + esc(m.p2.disclaimer) + '</div>' +
+    '</div>' : '';
+
   const err = m.lastErr ? '<div class="ja-err">存储告警：' + esc(m.lastErr) + '</div>' : '';
   return '<div class="ja-wrap">' +
     head +
     '<div class="ja-rows">' + rowsHtml + '</div>' +
     incLine +
+    p2Html +
     '<div class="ja-note ja-' + esc(m.verdictClass) + '">' + esc(m.verdictTxt) + '</div>' +
     err +
     '<div class="ja-disc">' + esc(m.disclaimer) + ' · 仅观察·不接执行（含超时未触发=计入 expired，不计命中率）</div>' +

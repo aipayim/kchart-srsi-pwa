@@ -22,6 +22,7 @@ import { renderAdaptivePwa, renderAdaptiveCompactPwa, buildAdaptiveModel } from 
 import { buildToolBoardModel, renderToolBoardHtml } from '../tech2/toolBoard.js';
 import { buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevAllHtml } from '../tech2/jevPanel.js';
 import { buildJevAuditModel, renderJevAuditHtml } from '../tech2/jevAuditPanel.js';
+import { evaluateJevSrsi } from '../engine/jevSrsiStats.js';
 import {
   loadPairs as loadAuditPairs, memoryPairs as auditMemoryPairs, auditLastErr,
   onAuditChange, pairStats as auditPairStats
@@ -1571,24 +1572,40 @@ function bindJevSettings() {
 
 // ============ Jev×SRSI 裁决审计（P1，**只观察**，不接执行）============
 let _jaRefreshedAt = 0, _jaLoading = false;
+let _jaVerdictCache = { sig: null, val: null };
+// P2 裁决（全币种汇总；样本不足时 evaluateJevSrsi 内部早退，零重置换开销）。按「条数+已判定+最新回填」签名缓存，避免每秒重算。
+function jaVerdict(all) {
+  let decided = 0, maxMat = 0;
+  for (const p of all) {
+    const o = p && p.outcome;
+    if (o && o.status !== 'pending' && o.status !== 'no-entry') decided++;
+    if (p && p.maturedAt && p.maturedAt > maxMat) maxMat = p.maturedAt;
+  }
+  const sig = all.length + ':' + decided + ':' + maxMat;
+  if (_jaVerdictCache.sig === sig) return _jaVerdictCache.val;
+  const val = evaluateJevSrsi(all);
+  _jaVerdictCache = { sig, val };
+  return val;
+}
 function renderJevAudit() {
   const card = $('pwaJevAuditCard');
   const box = $('pwaJevAudit');
   if (!card || !box) return;   // 主系统 index.html 无此卡 → no-op（零回归）
   let sym = null; try { sym = jevSym(); } catch (e) { sym = null; }
   let cfg = null; try { cfg = readJevCfg(); } catch (e) { cfg = null; }
-  const list = auditMemoryPairs().filter(p => p && (!sym || p.sym === sym));
+  const all = auditMemoryPairs();
+  const list = all.filter(p => p && (!sym || p.sym === sym));
   const stats = auditPairStats(list);
   const show = !!((cfg && cfg.enabled) || list.length > 0);
   card.style.display = show ? '' : 'none';
   if (!show) return;
-  const html = renderJevAuditHtml(buildJevAuditModel({ stats, sym, lastErr: auditLastErr() }));
+  const html = renderJevAuditHtml(buildJevAuditModel({ stats, sym, lastErr: auditLastErr(), verdict: jaVerdict(all) }));
   if (box.__sig !== html) { box.__sig = html; box.innerHTML = html; }
   const pill = $('pwaJevAuditPill');
   if (pill) {
     const txt = stats.total ? (stats.decided + '/' + stats.total) : '0';
     if (pill.textContent !== txt) pill.textContent = txt;
-    pill.title = '已判定/总配对样本；需 ≥' + stats.minPairs + ' 对且每组 ≥' + stats.minGroup + ' 才由 P2 判定线裁决';
+    pill.title = '已判定/总配对样本（当前币）；需 ≥' + stats.minPairs + ' 对且同向/反向各 ≥' + stats.minGroup + ' 才由 P2 判定线裁决';
   }
 }
 function refreshJevAuditData(force) {
@@ -1599,6 +1616,23 @@ function refreshJevAuditData(force) {
   try {
     loadAuditPairs().then(() => renderJevAudit()).catch(() => {}).finally(() => { _jaLoading = false; });
   } catch (e) { _jaLoading = false; }
+}
+
+// 导出全部配对样本（JSON）→ 供 scripts/jev-srsi-verdict.mjs 离线复跑（与面板同一判定线）
+function bindJevAudit() {
+  const btn = $('pwaJevAuditExp');
+  if (!btn || btn.__bound) return;
+  btn.__bound = true;
+  btn.addEventListener('click', () => {
+    try {
+      const blob = new Blob([JSON.stringify(auditMemoryPairs())], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'jev-srsi-pairs.json';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => { try { URL.revokeObjectURL(a.href); a.remove(); } catch (e) {} }, 1000);
+    } catch (e) { try { console.warn('[JEV-AUDIT] 导出失败:', e && e.message); } catch (_) {} }
+  });
 }
 
 function renderRecentSignals() {
@@ -1814,6 +1848,7 @@ export function initPwaShell() {
   bindCockpitAcc();
   bindEngine();
   bindToolBoard();
+  bindJevAudit();
   renderJevSettings();
   try { onJevChange(() => { refreshJevData(true); }); } catch (e) {}
   try { refreshJevData(true); } catch (e) {}

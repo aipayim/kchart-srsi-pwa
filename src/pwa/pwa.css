@@ -883,3 +883,21 @@ body.pwa .ja-note.ja-bad{color:var(--red);border-color:rgba(255,107,107,.35)}
 body.pwa .ja-note.ja-dim{color:var(--text2)}
 body.pwa .ja-err{font-size:9.5px;color:#f59e0b;margin-top:4px}
 body.pwa .ja-disc{font-size:9px;color:#6B7688;margin:5px 0 2px;line-height:1.5}
+
+/* v1.6.77（P2）：Jev×SRSI 统计裁决块 */
+body.pwa .ja-p2{margin:6px 0 4px;padding:6px;border-radius:5px;background:rgba(255,255,255,.03);border:1px solid var(--border)}
+body.pwa .ja-p2-pass{border-color:rgba(46,204,113,.45)}
+body.pwa .ja-p2-fail{border-color:rgba(255,107,107,.45)}
+body.pwa .ja-p2-wait{border-color:rgba(245,158,11,.35)}
+body.pwa .ja-p2-h{font-size:10.5px;color:var(--text2);display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+body.pwa .ja-p2-pass .ja-p2-h b{color:var(--green)}
+body.pwa .ja-p2-fail .ja-p2-h b{color:var(--red)}
+body.pwa .ja-p2-wait .ja-p2-h b{color:#f59e0b}
+body.pwa .ja-p2-c{display:flex;align-items:baseline;gap:5px;font-size:10px;line-height:1.6;flex-wrap:wrap}
+body.pwa .ja-p2-m{width:10px;flex:0 0 10px;text-align:center}
+body.pwa .ja-p2-c.ok .ja-p2-m{color:var(--green)}
+body.pwa .ja-p2-c.no .ja-p2-m{color:#8899aa}
+body.pwa .ja-p2-l{color:var(--text)}
+body.pwa .ja-p2-d{color:#6B7688;font-size:9.5px}
+body.pwa .ja-p2-x{font-size:9.5px;color:#7d8a9c;margin-top:4px;line-height:1.5}
+body.pwa .ja-p2-note{font-size:9px;color:#6B7688;margin-top:3px;line-height:1.5}

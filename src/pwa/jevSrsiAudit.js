@@ -19,6 +19,11 @@ import { onSignalEvent, sideOf } from '../tech2/signalAlerts.js';
 import { winLossByAtr, atrClose } from '../engine/indicators.js';
 import { THRESH } from '../engine/thresholds.js';
 import { JEV_SCALP_BARS, JEV_WINDOW_MS } from '../engine/jevState.js';
+// P2：统计的**单一来源**（面板与脚本共用）——本模块不再自写一套
+import {
+  pairStats, wilsonCI, pairGroupOf, isDecided, JE_SRSI_DECISION
+} from '../engine/jevSrsiStats.js';
+export { pairStats, wilsonCI, pairGroupOf, isDecided };
 
 // 可与 Jev 意见配对的 SRSI 方向信号（有明确方向）
 export const PAIR_KINDS = {
@@ -35,8 +40,8 @@ export const AUDIT_TP_ATR = THRESH.BT_TP_ATR;                   // 2
 export const AUDIT_SL_ATR = THRESH.BT_SL_ATR;                   // 1.5
 export const AUDIT_BARS_DEFAULT = JEV_SCALP_BARS;               // 8 根（2h）——只有用户显式确认才改
 export const JEV_SIDE_THR = 15;                                 // |强度|≥15 才算有方向（与 jevClient 一致）
-export const JEV_AUDIT_MIN_PAIRS = 300;                         // 判定样本门槛（写死，不得事后调）
-export const JEV_AUDIT_MIN_GROUP = 100;                         // 每组样本门槛（写死）
+export const JEV_AUDIT_MIN_PAIRS = JE_SRSI_DECISION.MIN_PAIRS;  // 判定样本门槛（单一来源 jevSrsiStats）
+export const JEV_AUDIT_MIN_GROUP = JE_SRSI_DECISION.MIN_GROUP;  // 每组样本门槛（单一来源）
 export const JEV_AUDIT_CAP = 5000;                              // IDB 明细上限
 export const JEV_AUDIT_LSK = 'smartTrader_jevAudit';            // localStorage 只存聚合快照（KB 级）
 
@@ -200,80 +205,9 @@ export function trimPairList(pairs, cap = JEV_AUDIT_CAP) {
 }
 
 // ---------------------------------------------------------------------------
-// 统计（纯函数；P2 会在此基础上扩展对照/校正；面板与未来脚本共用同一套）
+// 统计：canonical 实现已移到 src/engine/jevSrsiStats.js（P2 共享核心）
+// 本模块只 re-export（见文件头 import/export），不在两侧各写一套。
 // ---------------------------------------------------------------------------
-/** Wilson 95% 置信区间（wins/n），n<=0 → null */
-export function wilsonCI(wins, n, z = 1.96) {
-  if (!Number.isFinite(+n) || +n <= 0) return null;
-  const p = Math.max(0, Math.min(1, (+wins) / (+n)));
-  const d = 1 + (z * z) / n;
-  const c = p + (z * z) / (2 * n);
-  const half = z * Math.sqrt((p * (1 - p)) / n + (z * z) / (4 * n * n));
-  return [Math.max(0, (c - half) / d), Math.min(1, (c + half) / d)];
-}
-
-/** 分组：Jev 同向 / 反向 / 中性或缺 */
-export function pairGroupOf(p) {
-  if (!p) return 'flat';
-  if (!p.jevSide) return 'flat';
-  return p.jevSide === p.side ? 'same' : 'reverse';
-}
-
-function emptyGroup(key, label) {
-  return { key, label, n: 0, wins: 0, losses: 0, expired: 0, pending: 0, noEntry: 0, hitRate: null, avgPnl: null, ci: null, _pnlSum: 0, _pnlN: 0 };
-}
-function finalizeGroup(g) {
-  const dec = g.wins + g.losses;
-  g.decided = dec;
-  g.hitRate = dec > 0 ? g.wins / dec : null;
-  g.avgPnl = g._pnlN > 0 ? g._pnlSum / g._pnlN : null;
-  g.ci = wilsonCI(g.wins, dec);
-  delete g._pnlSum; delete g._pnlN;
-  return g;
-}
-
-/**
- * 配对统计。返回：
- * { total, decided, pending, noEntry, withJev, coverage, days, groups:{same,reverse,flat},
- *   increment(pp|null), enough, minPairs, minGroup }
- */
-export function pairStats(pairs, opts = {}) {
-  const list = (Array.isArray(pairs) ? pairs : []).filter(Boolean);
-  const groups = {
-    same: emptyGroup('same', 'Jev 同向'),
-    reverse: emptyGroup('reverse', 'Jev 反向'),
-    flat: emptyGroup('flat', 'Jev 中性或缺')
-  };
-  let decided = 0, pending = 0, noEntry = 0, withJev = 0;
-  let minTs = Infinity, maxTs = -Infinity;
-  for (const p of list) {
-    if (Number.isFinite(+p.ts)) { minTs = Math.min(minTs, +p.ts); maxTs = Math.max(maxTs, +p.ts); }
-    if (p.jevSide) withJev++;
-    const g = groups[pairGroupOf(p)];
-    const o = p.outcome;
-    if (!o || o.status === 'pending') { pending++; g.pending++; continue; }
-    if (o.status === 'no-entry') { noEntry++; g.noEntry++; continue; }
-    decided++; g.n++;
-    if (o.status === 'win') g.wins++;
-    else if (o.status === 'loss') g.losses++;
-    else g.expired++;                                   // expired：到期未触发 TP/SL
-    if (Number.isFinite(+o.pnlPct)) { g._pnlSum += +o.pnlPct; g._pnlN++; }
-  }
-  finalizeGroup(groups.same); finalizeGroup(groups.reverse); finalizeGroup(groups.flat);
-  const inc = (groups.same.hitRate != null && groups.reverse.hitRate != null)
-    ? (groups.same.hitRate - groups.reverse.hitRate) * 100 : null;
-  const enough = list.length >= (opts.minPairs || JEV_AUDIT_MIN_PAIRS)
-    && groups.same.n >= (opts.minGroup || JEV_AUDIT_MIN_GROUP)
-    && groups.reverse.n >= (opts.minGroup || JEV_AUDIT_MIN_GROUP);
-  return {
-    total: list.length, decided, pending, noEntry, withJev,
-    coverage: list.length ? withJev / list.length : 0,
-    days: (Number.isFinite(minTs) && Number.isFinite(maxTs)) ? (maxTs - minTs) / 86400000 : 0,
-    groups, increment: inc, enough,
-    minPairs: opts.minPairs || JEV_AUDIT_MIN_PAIRS,
-    minGroup: opts.minGroup || JEV_AUDIT_MIN_GROUP
-  };
-}
 
 /** 聚合快照（KB 级，仅 localStorage；明细在 IDB） */
 export function aggregateSnapshot(pairs, sym) {

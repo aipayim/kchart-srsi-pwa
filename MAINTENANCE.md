@@ -35,14 +35,14 @@ public/pwa-512.png
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/verify-pwa-data.mjs
-src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath,liqHeatmapVol,jevState}.js
+src/engine/{indicators,thresholds,timeframe,regimeParams,fees,funding,liquidation,disciplineAnalysis,srsiOptimizer,maRelation,maRibbonBox,chanlun,chanlunDisplay,adaptiveRisk,adaptivePortfolioMath,liqHeatmapVol,jevState,jevSrsiStats}.js
 src/ai/llmClient.js
 src/auth/apiKeyStore.js
 src/persistence/indexdb.js
 src/exchange/{PaperEngine,ExchangeAdapter,orderState}.js
 src/pwa/{data.js,kchartApp.js,localLoop.js,alphaCore.js,alphaLab.js,adaptivePortfolio.js,carryLeg.js,pwaShell.js,signalSounds.js,pwa.css,jevClient.js,jevSrsiAudit.js}
 src/tech2/{kchart,ruleMonitor,signalAlerts,signalCockpit,maRelGauge,maRibbonBoxPanel,adaptivePanel,toolBoard,chanlunPanel,jevPanel,jevAuditPanel}.js
-tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs,jevSrsiAudit.test.mjs}
+tests/{kchart.test.mjs,consistency.test.mjs,pwaAlphaCore.test.mjs,signalAlerts.test.mjs,signalSounds.test.mjs,signalCockpit.test.mjs,disciplineAnalysis.test.mjs,maRelation.test.mjs,maRelGauge.test.mjs,maRibbonBox.test.mjs,toolBoard.test.mjs,chanlun.test.mjs,chanlunDisplay.test.mjs,adaptivePanel.test.mjs,adaptivePortfolio.test.mjs,liqHeatmapVol.test.mjs,jev.test.mjs,jevSrsiAudit.test.mjs,jevSrsiStats.test.mjs}
 tests/fixtures/bnbusdt_klines.json
 public/tsev-weights.json
 ```
@@ -58,7 +58,7 @@ public/tsev-weights.json
 ## 3. 排除项（绝不入库 / 已脱敏）
 
 - 主系统 UI 与交易核心：`index.html`、`src/legacy.js`、`src/main.js`、`src/tech/`、`src/ai/`（**例外见 §2**：仅 `llmClient.js` 入库）、`src/auth/`（**例外见 §2**：仅 `apiKeyStore.js` 入库）、`src/tech2/fusionBacktest.js`
-- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/gen-tsev-weights.mjs`、`scripts/rehearse-tsev.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`
+- 主系统研究/内部脚本：`scripts/measure-*`、`scripts/analyze-discipline-factors.mjs`、`scripts/gen-discipline-readme.mjs`、`scripts/gen-tsev-weights.mjs`、`scripts/rehearse-tsev.mjs`、`scripts/release.mjs`、`scripts/_debug_disc.mjs`、`scripts/jev-srsi-verdict.mjs`
 - 主系统测试（覆盖主系统模块）：`tests/engine|persist|reconcile|ai|regime|disciplineAnalysis.test.mjs`
 - 内部文档：`AGENTS.md`、`PLAN.md`、`CHANGELOG.md`、`index.legacy.html.bak`、`docs/`（含真实 Cloudflare 区域/账户 ID）
 - 构建产物与数据：`dist/`、`dev-dist/`、`node_modules/`、`data/`（均已在 `.gitignore`）
