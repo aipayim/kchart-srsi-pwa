@@ -155,3 +155,88 @@ export function clamp(x, lo, hi) {
   if (!Number.isFinite(x)) return lo;
   return Math.max(lo, Math.min(hi, x));
 }
+
+// ============================================================
+// 健康检查统计（纯函数；供「导出健康快照」/ 面板展示使用）
+// 输入历史点支持 [{t,eq}, ...] 或 [[t,eq], ...]；非法点自动跳过。
+// ============================================================
+
+function _normHist(hist) {
+  const pts = [];
+  if (!Array.isArray(hist)) return pts;
+  for (const p of hist) {
+    const t = Array.isArray(p) ? p[0] : (p && p.t);
+    const eq = Array.isArray(p) ? p[1] : (p && p.eq);
+    if (Number.isFinite(t) && Number.isFinite(eq) && eq > 0) pts.push([t, eq]);
+  }
+  pts.sort((a, b) => a[0] - b[0]);
+  return pts;
+}
+
+/**
+ * 权益曲线统计：总收益 / 峰值 / 谷值 / 最大回撤 / 跨期天数 / 年化（<30 天不给年化，防误读）。
+ * @returns {{n,firstT,lastT,firstEq,lastEq,peak,trough,totalReturnPct,maxDrawdownPct,days,annualizedReturnPct}}
+ */
+export function equityStats(hist) {
+  const pts = _normHist(hist);
+  if (pts.length === 0) {
+    return { n: 0, firstT: null, lastT: null, firstEq: null, lastEq: null, peak: null, trough: null, totalReturnPct: 0, maxDrawdownPct: 0, days: 0, annualizedReturnPct: null };
+  }
+  if (pts.length === 1) {
+    const eq = pts[0][1];
+    return { n: 1, firstT: pts[0][0], lastT: pts[0][0], firstEq: eq, lastEq: eq, peak: eq, trough: eq, totalReturnPct: 0, maxDrawdownPct: 0, days: 0, annualizedReturnPct: null };
+  }
+  const firstEq = pts[0][1], lastEq = pts[pts.length - 1][1];
+  let peak = firstEq, maxDD = 0, trough = firstEq;
+  for (const [, eq] of pts) {
+    if (eq > peak) peak = eq;
+    if (eq < trough) trough = eq;
+    const dd = peak > 0 ? (peak - eq) / peak : 0;
+    if (dd > maxDD) maxDD = dd;
+  }
+  const days = (pts[pts.length - 1][0] - pts[0][0]) / 86400e3;
+  const ann = (days >= 30 && firstEq > 0) ? Math.pow(lastEq / firstEq, 365 / days) - 1 : null;
+  return {
+    n: pts.length, firstT: pts[0][0], lastT: pts[pts.length - 1][0], firstEq, lastEq,
+    peak, trough,
+    totalReturnPct: firstEq > 0 ? lastEq / firstEq - 1 : 0,
+    maxDrawdownPct: maxDD, days, annualizedReturnPct: ann,
+  };
+}
+
+/** 按月（UTC）取月末权益 → 月收益序列 [{ym, ret}]（ret 为小数，如 0.02 = +2%）。 */
+export function monthlyReturns(hist) {
+  const pts = _normHist(hist);
+  if (pts.length < 2) return [];
+  const byMonth = new Map();
+  for (const [t, eq] of pts) {
+    const d = new Date(t);
+    const ym = d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+    byMonth.set(ym, eq);   // 同月后写覆盖 = 该月末权益
+  }
+  const keys = [...byMonth.keys()].sort();
+  const out = [];
+  for (let i = 1; i < keys.length; i++) {
+    const prev = byMonth.get(keys[i - 1]), cur = byMonth.get(keys[i]);
+    if (prev > 0) out.push({ ym: keys[i], ret: cur / prev - 1 });
+  }
+  return out;
+}
+
+/**
+ * 月收益序列 → 年化 Sharpe / 月均 t（样本 <3 返回 null —— 不虚报统计量）。
+ * 注意（AGENTS §5.64 铁律）：低波+高自相关流的日频 Sharpe 会严重高估，故此处只用月频。
+ */
+export function sharpeFromMonthly(rets) {
+  const r = (rets || []).map((x) => (x && typeof x === 'object') ? x.ret : x).filter((x) => Number.isFinite(x));
+  const n = r.length;
+  if (n < 3) return { n, mean: null, std: null, sharpe: null, t: null };
+  const mean = r.reduce((a, b) => a + b, 0) / n;
+  const varr = r.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1);
+  const std = Math.sqrt(varr);
+  return {
+    n, mean, std,
+    sharpe: std > 0 ? (mean / std) * Math.sqrt(12) : null,
+    t: std > 0 ? mean / (std / Math.sqrt(n)) : null,
+  };
+}

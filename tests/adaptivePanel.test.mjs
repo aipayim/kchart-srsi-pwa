@@ -5,6 +5,7 @@
 import {
   bucketLabel, eventLabel, buildAdaptiveModel,
   adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml, adaptiveCompactHtml, adaptiveSymbolsHtml, overlayStatusText,
+  adaptiveHealthHtml, exportHealthSnapshot,
   renderAdaptiveFusion, renderAdaptivePwa, renderAdaptiveCompactPwa, resetAdaptivePanelSig,
 } from '../src/tech2/adaptivePanel.js';
 
@@ -155,7 +156,7 @@ console.log('\n[HTML builders]');
   ok('events 含 icon span', has(evs, 'class="adp-ev-i"'));
 
   const card = adaptiveCardHtml(m);
-  ok('card = metrics+legs+symbols+events', card === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m));
+  ok('card = metrics+legs+health+symbols+events', card === adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveHealthHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m));
   ok('card 含交易对增删区', has(card, 'adp-syms') && has(card, 'adpSymInput') && has(card, 'window.adaptiveAddSymbol()'));
   const mSol = buildAdaptiveModel({ getState: () => ({ enabled: true, capital: 1000, equity: 1000, perSymbol: { SOLUSDT: { volQ: 0.5, wA: 0.5, wC: 0.5, bucket: 'mid', carry: null } } }), getEvents: () => [] });
   ok('非 BTC/ETH 标未验证（unv）', has(adaptiveSymbolsHtml(mSol), 'unv') && has(adaptiveSymbolsHtml(mSol), 'SOLUSDT'));
@@ -241,6 +242,50 @@ console.log('\n[renderAdaptiveCompactPwa 独立守卫]');
   ok('紧凑卡值变化后重建', compact.sets === 2 && has(compact.innerHTML, '1300'));
   delete globalThis.__adaptivePortfolio;
   resetAdaptivePanelSig();
+}
+
+// ================= adaptiveHealthHtml =================
+console.log('\n[adaptiveHealthHtml]');
+{
+  const m = buildAdaptiveModel(mockAp({
+    elapsedDays: 12.4,
+    health: { points: 300, months: 4, totalReturnPct: 0.052, maxDrawdownPct: 0.081, monthlySharpe: 1.27, annualizedReturnPct: 0.19, fund: 3.21, rebal: 7, liq: 0, rej: 0, n: 300, days: 12.4 },
+  }));
+  const html = adaptiveHealthHtml(m);
+  ok('健康：含运行时长', has(html, '12.4 天'));
+  ok('健康：含总收益 +5.20%', has(html, '+5.20%'));
+  ok('健康：含最大回撤 8.10%', has(html, '8.10%'));
+  ok('健康：含月频 Sharpe + 月数', has(html, '1.27') && has(html, '4 月'));
+  ok('健康：含资金费累计', has(html, '资金费累计'));
+  ok('健康：含再平衡/拒单/强平', has(html, '再平衡') && has(html, '强平'));
+  ok('健康：样本充足时用月频口径说明', has(html, '月频口径'));
+  const poor = buildAdaptiveModel(mockAp({ elapsedDays: 0.3, health: { points: 2, months: 0, totalReturnPct: 0, maxDrawdownPct: 0, monthlySharpe: null, fund: 0, rebal: 1, liq: 0, rej: 0 } }));
+  ok('健康：样本不足明确标注', has(adaptiveHealthHtml(poor), '样本不足'));
+  ok('健康：不可用模型返回空串', adaptiveHealthHtml({ available: false }) === '');
+  ok('完整卡包含健康块', has(adaptiveCardHtml(m), 'adp-health'));
+  ok('面板含导出按钮（onclick 直调 window）', has(adaptiveCardHtml(m), 'window.adaptiveExportHealth()'));
+}
+
+// ================= exportHealthSnapshot =================
+console.log('\n[exportHealthSnapshot]');
+{
+  const copied = [];
+  const navDesc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  const setNav = (v) => { try { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } catch (e) {} };
+  setNav({ clipboard: { writeText: async (t) => { copied.push(t); } } });
+  const msg = { textContent: '' };
+  const ap = { exportHealthJson: () => JSON.stringify({ schema: 'adaptive-portfolio-health/1', ok: 1 }) };
+  const r = await exportHealthSnapshot(ap, { msgEl: msg });
+  ok('导出：剪贴板成功返回 true', r === true && copied.length === 1);
+  ok('导出：状态提示已复制', has(msg.textContent, '已复制'));
+  setNav({ clipboard: { writeText: async () => { throw new Error('denied'); } } });
+  const msg2 = { textContent: '' };
+  const r2 = await exportHealthSnapshot(ap, { msgEl: msg2 });
+  ok('导出：复制与下载均不可用 → false 且提示', r2 === false && has(msg2.textContent, '导出失败'));
+  const msg3 = { textContent: '' };
+  ok('导出：无引擎 → false', (await exportHealthSnapshot(null, { msgEl: msg3 })) === false);
+  ok('导出：空 JSON → false', (await exportHealthSnapshot({ exportHealthJson: () => '{}' }, { msgEl: { textContent: '' } })) === false);
+  if (navDesc) Object.defineProperty(globalThis, 'navigator', navDesc); else { try { delete globalThis.navigator; } catch (e) {} }
 }
 
 console.log('\n[adaptivePanel] ' + passed + ' passed, ' + failed + ' failed');

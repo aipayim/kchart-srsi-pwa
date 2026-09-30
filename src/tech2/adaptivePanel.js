@@ -16,6 +16,11 @@ const _hhmm = (ts) => {
   const d = new Date(ts), p = (n) => String(n).padStart(2, '0');
   return p(d.getHours()) + ':' + p(d.getMinutes());
 };
+const _daysTxt = (d) => {
+  if (!Number.isFinite(d) || d <= 0) return '0';
+  return d >= 1 ? d.toFixed(1) + ' 天' : Math.round(d * 24) + ' 小时';
+};
+const _retCls = (v) => (Number.isFinite(v) ? (v > 0 ? 'pos' : v < 0 ? 'neg' : '') : '');
 
 const VALIDATED_SYMS = ['BTCUSDT', 'ETHUSDT'];
 
@@ -89,6 +94,8 @@ export function buildAdaptiveModel(ap) {
     warming: !!state.warming,
     equity: state.equity, realized: state.realized,
     capital: state.capital, w0: state.w0, mode: state.mode,
+    elapsedDays: Number.isFinite(state.elapsedDays) ? state.elapsedDays : null,
+    health: state.health || null,
     symbols, events: evs,
   };
 }
@@ -129,9 +136,10 @@ export function adaptiveMetricsHtml(m) {
   const eq = `<span class="adp-eq">权益 <b>${_usd(m.equity)}</b> <span class="adp-dim">/ 起始 ${_usd(m.capital)}</span></span>`;
   const st = `<span class="adp-state ${m.enabled ? 'on' : 'off'}">${m.enabled ? '● 运行中' : '○ 未启用'}</span>`;
   const btns = `<button class="adp-btn" onclick="window.adaptiveToggle()">${m.enabled ? '停用' : '启用'}</button>`
-    + `<button class="adp-btn adp-btn2" onclick="window.adaptiveReset()">重置</button>`;
+    + `<button class="adp-btn adp-btn2" onclick="window.adaptiveReset()">重置</button>`
+    + `<button class="adp-btn adp-btn2" onclick="window.adaptiveExportHealth()" title="导出只读健康快照（复制 JSON，便于回传对账；不改策略）">⤓ 导出快照</button>`;
   const hint = m.enabled ? '' : '<div class="adp-empty">组合未启用（点启用开始纸面记录）</div>';
-  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}<div class="adp-ovstatus">${_esc(overlayStatusText(m))}</div>`;
+  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}<div class="adp-ovstatus">${_esc(overlayStatusText(m))}<span id="adpExportMsg" class="adp-expmsg"></span></div>`;
 }
 
 /** 两腿（每币一行）：权重 + carry 腿明细。 */
@@ -182,9 +190,42 @@ export function adaptiveSymbolsHtml(m) {
     + `<div class="adp-syms-add"><input id="adpSymInput" type="text" placeholder="如 SOLUSDT" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')window.adaptiveAddSymbol()"><button onclick="window.adaptiveAddSymbol()">添加</button></div></div>`;
 }
 
-/** 整卡 HTML = 指标 + 两腿 + 交易对 + 事件。 */
+/**
+ * 健康快照展示：运行时长 / 历史点 / 总收益 / 最大回撤 / 月频 Sharpe / 资金费累计 / 再平衡 / 强平。
+ * 诚实：样本不足时明确标注「仅供参考」，不虚报统计量。
+ */
+export function adaptiveHealthHtml(m) {
+  if (!m || !m.available) return '';
+  const h = m.health || {};
+  const pts = _finite(h.points) || 0;
+  const months = _finite(h.months) || 0;
+  const ret = _finite(h.totalReturnPct);
+  const dd = _finite(h.maxDrawdownPct);
+  const sh = _finite(h.monthlySharpe);
+  const ann = _finite(h.annualizedReturnPct);
+  const days = _finite(m.elapsedDays);
+  const rows = [
+    `<span class="adp-h-i">运行 <b>${_daysTxt(days)}</b></span>`,
+    `<span class="adp-h-i">历史点 <b>${pts}</b></span>`,
+    `<span class="adp-h-i">总收益 <b class="adp-h-${_retCls(ret)}">${ret == null ? '—' : (ret >= 0 ? '+' : '') + (ret * 100).toFixed(2) + '%'}</b></span>`,
+    `<span class="adp-h-i">最大回撤 <b>${dd == null ? '—' : (dd * 100).toFixed(2) + '%'}</b></span>`,
+    `<span class="adp-h-i">月频 Sharpe <b>${sh == null ? '—' : sh.toFixed(2)}</b><span class="adp-dim">（${months} 月）</span></span>`,
+    ann == null ? '' : `<span class="adp-h-i">年化 <b class="adp-h-${_retCls(ann)}">${ann >= 0 ? '+' : ''}${(ann * 100).toFixed(1)}%</b></span>`,
+    `<span class="adp-h-i">资金费累计 <b class="adp-h-${_retCls(h.fund)}">${_usd(h.fund)}</b></span>`,
+    `<span class="adp-h-i">再平衡 <b>${_num(h.rebal)}</b></span>`,
+    `<span class="adp-h-i">拒单 <b>${_num(h.rej)}</b></span>`,
+    `<span class="adp-h-i">强平 <b class="adp-h-${h.liq ? 'neg' : ''}">${_num(h.liq)}</b></span>`,
+  ].filter(Boolean).join('');
+  const suff = (months < 3 || pts < 2)
+    ? '<b>样本不足（月频 Sharpe 需 ≥3 个自然月）</b>：以上数字仅供参考，不能用于判断策略有效性。'
+    : '月频口径（非日频）以避开低波高自相关流的 Sharpe 高估；仅历史统计，不代表未来。';
+  return `<div class="adp-health"><div class="adp-h-head">健康快照 <span class="adp-dim">每小时落一个权益点（有界 4000 点）</span></div>${rows}`
+    + `<div class="adp-h-note">${suff} 纸面模拟 · carry 为风险溢价非 alpha · 未接真实资金。</div></div>`;
+}
+
+/** 整卡 HTML = 指标 + 两腿 + 交易对 + 健康 + 事件。 */
 export function adaptiveCardHtml(m) {
-  return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m);
+  return adaptiveMetricsHtml(m) + adaptiveLegsHtml(m) + adaptiveHealthHtml(m) + adaptiveSymbolsHtml(m) + adaptiveEventsHtml(m);
 }
 
 /** 紧凑卡（盯盘右栏用）= 指标 + 两腿（不含事件流，事件流在「组合」tab 完整版）。 */
@@ -215,6 +256,8 @@ function _sigOf(m) {
     w: m.warming ? 1 : 0,
     s: (m.symbols || []).map((s) => [s.sym, s.wA, s.wC, s.alphaTarget, s.alphaW, s.carry ? s.carry.notional : null, s.carry ? s.carry.fundingCum : null, s.warming ? 1 : 0]),
     t: (m.events || []).map((e) => e.ts),
+    h: (m.health ? [m.health.points, m.health.rebal, m.health.liq, m.health.months, Math.round((m.health.totalReturnPct || 0) * 1e4)] : null),
+    d: m.elapsedDays,
   });
 }
 
@@ -236,3 +279,36 @@ export function renderAdaptivePwa(el) { _renderGuarded(el, _sigRefFull, adaptive
 
 /** 紧凑卡（盯盘右栏，不含事件流）。 */
 export function renderAdaptiveCompactPwa(el) { _renderGuarded(el, _sigRefCompact, adaptiveCompactHtml); }
+
+/**
+ * 导出只读健康快照（供用户回传对账）——默认剪贴板；失败则下载 .json 文件。
+ * 纯前端只读；不改策略状态。手机 PWA 无 DevTools 时的官方导出入口。
+ * @returns {Promise<boolean>} 是否至少有一种导出方式成功
+ */
+export async function exportHealthSnapshot(ap, opts = {}) {
+  const setMsg = (s) => { try { const el = (opts.msgEl || (typeof document !== 'undefined' ? document.getElementById('adpExportMsg') : null)); if (el) el.textContent = s; } catch (e) {} };
+  if (!ap || typeof ap.exportHealthJson !== 'function') { setMsg('组合未初始化，无法导出'); return false; }
+  let json = '';
+  try { json = ap.exportHealthJson(); } catch (e) { setMsg('导出失败：' + (e && e.message)); return false; }
+  if (!json || json === '{}') { setMsg('导出失败：无数据'); return false; }
+  const fname = 'adaptive-health-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '') + '.json';
+  let copied = false;
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(json); copied = true;
+    }
+  } catch (e) { copied = false; }
+  if (copied) { setMsg(`已复制健康快照到剪贴板（${(json.length / 1024).toFixed(0)}KB），可直接粘贴回传`); return true; }
+  try {
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 5000);
+    setMsg(`已下载 ${fname}（${(json.length / 1024).toFixed(0)}KB），请回传该文件`);
+    return true;
+  } catch (e) {
+    setMsg('导出失败：复制与下载均不可用（请用桌面浏览器打开并 F12 手动执行 __adaptivePortfolio.exportHealthJson()）');
+    return false;
+  }
+}

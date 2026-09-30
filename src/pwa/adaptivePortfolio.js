@@ -14,6 +14,7 @@ import { PaperEngine } from '../exchange/PaperEngine.js';
 import { crossedFundingBoundary } from '../engine/funding.js';
 import {
   volQuantile, adaptiveWeights, adaptiveAlphaWeight, realizedVolSeries, rollingPercentileSeries,
+  equityStats, monthlyReturns, sharpeFromMonthly,
 } from '../engine/adaptivePortfolioMath.js';
 import { createCarryLeg, CARRY_SRC, CARRY_SPOT_SIG, posPnl } from './carryLeg.js';
 import { runBacktest } from './alphaCore.js';
@@ -90,6 +91,7 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     lev: 3, band: 0.10, feeReserve: 0.004, frac: null,
     dataRefreshMs: 2 * HOUR, d1RefreshMs: 24 * HOUR, fundingRefreshMs: 12 * HOUR, priceRefreshMs: 60e3,
     alphaBand: 0.05, klinesMaxBars: 18000, klinesDays: 740,
+    histMs: 1 * HOUR, histMax: 4000, histKey: 'pwa_adaptive_hist',   // 健康快照：每小时采样一次，有界 4000 点（≈166 天）
     persist: true, ...cfg,
   };
   // 交易对：默认 BTC/ETH（研究已验证的等权组合）；可由用户增删（非 BTC/ETH 为未验证·仅纸面）。
@@ -141,6 +143,8 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
   let _evSeq = 0;
   const _idb = { db: null, mode: 'mem', inited: false };
   const _h1 = {}, _d1 = {}, _funding = {}, _premium = {}, _series = {};
+  let _hist = [], _lastHistT = 0, _startedT = 0, _healthCache = { key: '', stats: null };
+  const histKey = conf.histKey;
   let enabled = false, _lastTickT = 0, _lastFundCheck = Date.now(), _ticking = false, _lastPersistSig = '';
   const log = (tag, msg) => { try { console.log('[ADAPTIVE]', tag, msg && msg.message ? msg.message : msg); } catch (e) {} };
 
@@ -172,10 +176,102 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     }
   }
 
+  // ---------- 健康快照（权益历史）----------
+  function healthPoint(now) {
+    let wA = 0;
+    let fund = 0;
+    for (const sym of symbols) {
+      const st = perSymbol[sym];
+      wA += Number.isFinite(st.wA) ? st.wA : w0;
+      if (st.carry) fund += st.carry.state.fundingCum;
+    }
+    return { t: now, eq: portfolioEquity(), wA: symbols.length ? wA / symbols.length : w0, fund };
+  }
+  function _persistHist() {
+    if (!conf.persist) return false;
+    try {
+      const arr = _hist.map((p) => [p.t, r2(p.eq), r4(p.wA), r2(p.fund)]);
+      return _safeSetItem(histKey, JSON.stringify(arr));
+    } catch (e) { return false; }
+  }
+  function restoreHist() {
+    if (!conf.persist) return;
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem(histKey);
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      if (!Array.isArray(o)) return;
+      _hist = o.map((a) => ({ t: a && a[0], eq: a && a[1], wA: a && a[2], fund: a && a[3] }))
+        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.eq) && p.eq > 0);
+      if (_hist.length > conf.histMax) _hist = _hist.slice(-conf.histMax);
+      const last = _hist[_hist.length - 1];
+      _lastHistT = last ? last.t : 0;
+    } catch (e) { /* 损坏则忽略（当作无历史） */ }
+  }
+  /** 采样一个健康点（force=true 忽略节流）。返回是否写入。 */
+  function sampleHealth(now = Date.now(), force = false) {
+    if (!force && !(now - _lastHistT >= conf.histMs)) return false;
+    _hist.push(healthPoint(now));
+    if (_hist.length > conf.histMax) _hist.splice(0, _hist.length - conf.histMax);
+    _lastHistT = now;
+    _healthCache = { key: '', stats: null };
+    _persistHist();
+    return true;
+  }
+  function _clearHist() {
+    _hist = []; _lastHistT = 0; _healthCache = { key: '', stats: null };
+    try { if (typeof localStorage !== 'undefined') localStorage.removeItem(histKey); } catch (e) {}
+  }
+  /** 权益统计（历史长度未变时复用缓存；资金费/再平衡等计数实时汇总）。 */
+  function healthStats() {
+    const key = _hist.length + '|' + (_hist.length ? _hist[_hist.length - 1].t : 0);
+    let base = (_healthCache.key === key && _healthCache.stats) ? _healthCache.stats : null;
+    if (!base) {
+      const st = equityStats(_hist);
+      const sh = sharpeFromMonthly(monthlyReturns(_hist));
+      base = { ...st, months: sh.n, monthlySharpe: sh.sharpe, monthlyT: sh.t, monthlyMean: sh.mean };
+      _healthCache = { key, stats: base };
+    }
+    let fund = 0, rebal = 0, liq = 0, rej = 0;
+    for (const sym of symbols) {
+      const c = perSymbol[sym].carry;
+      if (c) { fund += c.state.fundingCum; rebal += c.state.rebalCount; liq += c.state.liqCount; rej += c.state.rejectCount; }
+    }
+    return { points: _hist.length, ...base, fund, rebal, liq, rej };
+  }
+  function elapsedMs(now = Date.now()) { return _startedT ? Math.max(0, now - _startedT) : 0; }
+
+  /** 完整健康报告（含权益历史序列；供导出）。只读，不改策略状态。 */
+  function getHealth() {
+    const st = getState();
+    const byType = {};
+    for (const e of _events) byType[e.type] = (byType[e.type] || 0) + 1;
+    const mr = monthlyReturns(_hist);
+    return {
+      schema: 'adaptive-portfolio-health/1',
+      generatedAt: new Date().toISOString(),
+      enabled, capital, w0, symbols: symbols.slice(),
+      startedT: _startedT || null,
+      elapsedDays: Number((elapsedMs() / DAY).toFixed(4)),
+      equity: st.equity, realized: st.realized, positions: st.positions,
+      storage: { events: _idb.mode, eventsCount: _events.length },
+      health: healthStats(),
+      perSymbol: st.perSymbol,
+      eventsByType: byType,
+      monthlyReturns: mr.map((x) => [x.ym, Number(x.ret.toFixed(6))]),
+      hist: _hist.map((p) => [p.t, r2(p.eq), r4(p.wA), r2(p.fund)]),   // [t, equity, wA, fundingCum]
+      disclaimer: '纸面模拟（未接真实资金）；carry 为风险溢价而非 alpha；统计仅供诊断，不代表未来收益。',
+    };
+  }
+  function exportHealthJson() {
+    try { return JSON.stringify(getHealth(), null, 2); } catch (e) { return '{}'; }
+  }
+
   // ---------- 持久化 ----------
   function snapshot() {
     return {
-      ver: 1, enabled, capital, w0, symbols,
+      ver: 1, enabled, capital, w0, symbols, startedT: _startedT,
       perSymbol: Object.fromEntries(symbols.map((sym) => [sym, {
         volQ: perSymbol[sym].volQ, g: perSymbol[sym].g, wA: perSymbol[sym].wA, wC: perSymbol[sym].wC,
         warming: perSymbol[sym].warming, alphaTarget: perSymbol[sym].alphaTarget, bucket: perSymbol[sym].bucket, dataT: perSymbol[sym].dataT,
@@ -213,6 +309,7 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
         S.closed = Array.isArray(o.engine.closed) ? o.engine.closed : [];
         S.realized = Number.isFinite(o.engine.realized) ? o.engine.realized : 0;
       }
+      _startedT = Number.isFinite(o.startedT) ? o.startedT : 0;
       if (o.perSymbol) {
         symbols.forEach((sym) => {
           const ps = o.perSymbol[sym];
@@ -231,6 +328,7 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     } catch (e) { log('restore_err', e); }
   }
   restore();
+  restoreHist();
 
   // ---------- 行情 ----------
   function updatePrices() {
@@ -406,6 +504,7 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
       try { const hits = checkLiquidationsIsolated(); for (const h of hits) { if (h && h.pos && h.pos.src === CARRY_SRC) { const c = perSymbol[h.pos.sym] && perSymbol[h.pos.sym].carry; if (c) c.state.liqCount++; } } } catch (e) { log('liq_err', e); }
       _lastTickT = now;
       persist();
+      sampleHealth(now);   // 每小时落一个权益点（节流）；不受策略行为影响
       return getState();
     } finally { _ticking = false; }
   }
@@ -414,9 +513,11 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
   function enable() {
     if (enabled) return true;
     enabled = true;
+    if (!_startedT) _startedT = Date.now();
     _lastFundCheck = Date.now();
     symbols.forEach((sym) => { perSymbol[sym].dataT = 0; });   // 触发立即刷新
     recordEvent('enable', { capital, w0, symbols });
+    sampleHealth(Date.now(), true);   // 启用即落一个基线点（t0 权益）
     persist();
     return true;
   }
@@ -432,6 +533,8 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     S.pos = []; S.closed = []; S.realized = 0;
     if (sub) sub.bal = capital;
     _events.length = 0;
+    _startedT = 0;
+    _clearHist();
     symbols.forEach((sym) => {
       const st = perSymbol[sym];
       st.volQ = NaN; st.g = 1; st.wA = w0; st.wC = 1 - w0; st.warming = true; st.alphaTarget = 0; st.alphaW = 0; st.bucket = 'na'; st.dataT = 0; st.err = null;
@@ -450,6 +553,8 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     try { (S.pos || []).slice().forEach((p) => { try { engine.exitPosition(p, { reason: '[自适应]交易对变更' }); } catch (e) {} }); } catch (e) {}
     S.pos = []; S.closed = []; S.realized = 0;
     if (sub) sub.bal = capital;
+    _startedT = 0;
+    _clearHist();
     symbols = clean;
     Object.keys(perSymbol).forEach((k) => delete perSymbol[k]);
     symbols.forEach((sym) => { perSymbol[sym] = { sym, volQ: NaN, g: 1, wA: w0, wC: 1 - w0, warming: true, alphaTarget: 0, alphaW: 0, carry: null, bucket: 'na', dataT: 0, d1T: 0, frT: 0, err: null }; });
@@ -466,6 +571,8 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
       enabled, capital, w0, symbols, lev: conf.lev, band: conf.band,
       warming: symbols.some((s) => perSymbol[s].warming),
       equity: r2(portfolioEquity()), realized: r2(S.realized), positions: (S.pos || []).length,
+      startedT: _startedT || null, elapsedDays: Number((elapsedMs() / DAY).toFixed(4)),
+      health: healthStats(),
       perSymbol: Object.fromEntries(symbols.map((sym) => {
         const st = perSymbol[sym];
         return [sym, {
@@ -509,6 +616,12 @@ export function createAdaptivePortfolio({ engine, state, symbols: symbolsIn, w0 
     setSymbols,
     recordEvent,
     initIdb,
+    // 健康检查（只读诊断；不改策略行为）
+    getHealth,
+    exportHealthJson,
+    sampleHealth,
+    getHist: () => _hist.map((p) => ({ ...p })),
+    healthKey: histKey,
     _conf: conf,
   };
   initIdb();

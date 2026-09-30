@@ -10,6 +10,7 @@ import { THRESH } from '../engine/thresholds.js';
 import { initAlphaLab, updateAlphaSignal } from './alphaLab.js';
 import { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine } from './pwaShell.js';
 import { installAdaptivePortfolio } from './adaptivePortfolio.js';
+import { exportHealthSnapshot } from '../tech2/adaptivePanel.js';
 globalThis.__pwaShell = { initPwaShell, refreshShell, startSignalEngine, stopSignalEngine };
 import { APP_BUILD_TIME, APP_TAG, APP_VERSION } from '../version.generated.js';
 import * as localLoop from './localLoop.js';
@@ -537,6 +538,8 @@ function initAdaptivePortfolio() {
   // 自适应组合 UI 控制（「组合」tab 按钮 onclick 直调 → 必须挂 globalThis）
   globalThis.adaptiveToggle = () => { const ap = globalThis.__adaptivePortfolio; if (!ap) return; if (ap.isEnabled()) ap.disable(); else ap.enable(); };
   globalThis.adaptiveReset = () => { const ap = globalThis.__adaptivePortfolio; if (ap && confirm('重置自适应组合纸面账本？此操作不可撤销。')) ap.reset(); };
+  // 只读健康快照导出（手机 PWA 无 DevTools 时的官方导出入口；不改策略）
+  globalThis.adaptiveExportHealth = () => exportHealthSnapshot(globalThis.__adaptivePortfolio);
   globalThis.adaptiveAddSymbol = () => {
     const ap = globalThis.__adaptivePortfolio; if (!ap) return;
     const el = document.getElementById('adpSymInput');

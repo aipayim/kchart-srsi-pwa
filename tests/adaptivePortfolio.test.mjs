@@ -13,6 +13,7 @@ import { strictEqual, deepStrictEqual } from 'assert';
 import {
   realizedVolSeries, rollingPercentileSeries, volQuantile, adaptiveAlphaWeight, adaptiveWeights,
   carryTargetQty, carryNeedsRebalance, fundingPay, carryEquityAt, clamp,
+  equityStats, monthlyReturns, sharpeFromMonthly,
 } from '../src/engine/adaptivePortfolioMath.js';
 import { createCarryLeg, CARRY_SRC, CARRY_SPOT_SIG, CARRY_PERP_SIG, posPnl } from '../src/pwa/carryLeg.js';
 import { createAdaptivePortfolio, volBucket } from '../src/pwa/adaptivePortfolio.js';
@@ -346,6 +347,79 @@ function makeFetchers({ n = 9000, px = 100, vol = 0.015, seed = 5, fundRate = 0 
   g.__adaptivePortfolio = ap;
   ok('AP: 可挂载 window.__adaptivePortfolio', typeof g.__adaptivePortfolio.tick === 'function');
   if (saved === undefined) delete g.__adaptivePortfolio; else g.__adaptivePortfolio = saved;
+}
+
+// ============================================================
+// 4. 健康快照（equityStats / monthlyReturns / sharpeFromMonthly + 引擎采样/导出/持久化）
+// ============================================================
+{
+  const e0 = equityStats([]);
+  ok('equityStats: 空 → n=0 且不给年化', e0.n === 0 && e0.maxDrawdownPct === 0 && e0.annualizedReturnPct === null);
+  const e1 = equityStats([[0, 1000]]);
+  ok('equityStats: 单点 → 0 收益', e1.n === 1 && e1.totalReturnPct === 0 && e1.days === 0);
+  const e2 = equityStats([[0, 1000], [10 * DAY, 1100]]);
+  ok('equityStats: +10% 总收益', near(e2.totalReturnPct, 0.1));
+  ok('equityStats: 10 天 <30 → 不给年化', e2.annualizedReturnPct === null && near(e2.days, 10));
+  const e3 = equityStats([[0, 1000], [40 * DAY, 1100]]);
+  ok('equityStats: ≥30 天给年化且 >10%', Number.isFinite(e3.annualizedReturnPct) && e3.annualizedReturnPct > 0.1);
+  const e4 = equityStats([[0, 1000], [1 * DAY, 1200], [2 * DAY, 900], [3 * DAY, 1000]]);
+  ok('equityStats: maxDD = 25%', near(e4.maxDrawdownPct, 0.25));
+  ok('equityStats: peak/trough', e4.peak === 1200 && e4.trough === 900);
+  ok('equityStats: 跳过非法点', equityStats([[0, 1000], [1, NaN], [2, -5], [3, 1100]]).n === 2);
+  ok('equityStats: 对象输入 {t,eq}', equityStats([{ t: 0, eq: 1000 }, { t: 5 * DAY, eq: 1050 }]).n === 2);
+  ok('equityStats: 乱序输入自动排序', near(equityStats([[10 * DAY, 1100], [0, 1000]]).totalReturnPct, 0.1));
+}
+{
+  const d = (m, day) => Date.UTC(2026, m - 1, day);
+  const hist = [[d(1, 31), 1000], [d(2, 28), 1100], [d(3, 31), 1210], [d(4, 30), 1089]];
+  const mr = monthlyReturns(hist);
+  ok('monthlyReturns: 4 个月 → 3 个收益', mr.length === 3 && mr[0].ym === '2026-02');
+  ok('monthlyReturns: 2 月 +10%', near(mr[0].ret, 0.1));
+  ok('monthlyReturns: 4 月 -10%', near(mr[2].ret, 1089 / 1210 - 1));
+  ok('monthlyReturns: <2 点 → []', monthlyReturns([[0, 1000]]).length === 0);
+  const sh = sharpeFromMonthly(mr);
+  ok('sharpeFromMonthly: 3 月 → sharpe/t 有值', sh.n === 3 && Number.isFinite(sh.sharpe) && Number.isFinite(sh.t));
+  ok('sharpeFromMonthly: <3 → null', sharpeFromMonthly([0.01, 0.02]).sharpe === null);
+  ok('sharpeFromMonthly: 支持数字数组', sharpeFromMonthly([0.01, 0.02, 0.03]).n === 3);
+  ok('sharpeFromMonthly: 全相等 std=0 → sharpe=null', sharpeFromMonthly([0.01, 0.01, 0.01]).sharpe === null);
+}
+{
+  const S = makeState(1000);
+  const ap = createAdaptivePortfolio({ state: S, symbols: ['BTCUSDT'], w0: 0.5, capital: 1000, cfg: { persist: false, histMs: 0, priceSource: () => ({ BTCUSDT: { last: 100 } }), fetchers: makeFetchers() } });
+  ap.enable();
+  ok('health: enable 即落基线点', ap.getHist().length === 1);
+  const base = Date.now();
+  await ap.tick(base + 60e3);
+  await ap.tick(base + 120e3);
+  ok('health: histMs=0 每 tick 采样', ap.getHist().length >= 3);
+  const st = ap.getState();
+  ok('health: getState.health.points 对齐', st.health && st.health.points === ap.getHist().length);
+  ok('health: getState.elapsedDays 有限', Number.isFinite(st.elapsedDays) && st.elapsedDays >= 0);
+  const h = ap.getHealth();
+  ok('health: schema', h.schema === 'adaptive-portfolio-health/1');
+  ok('health: 含 hist 数组且等长', Array.isArray(h.hist) && h.hist.length === ap.getHist().length);
+  ok('health: 含 perSymbol', !!h.perSymbol.BTCUSDT);
+  ok('health: eventsByType.enable=1', h.eventsByType && h.eventsByType.enable === 1);
+  ok('health: 免责声明标注非 alpha', typeof h.disclaimer === 'string' && h.disclaimer.includes('非 alpha'));
+  ok('health: health.liq 汇总=0', h.health.liq === 0);
+  let parsed = null; try { parsed = JSON.parse(ap.exportHealthJson()); } catch (e) { parsed = null; }
+  ok('health: exportHealthJson 可解析', !!parsed && parsed.schema === 'adaptive-portfolio-health/1');
+  ap.reset();
+  ok('health: reset 清空 hist', ap.getHist().length === 0);
+}
+{
+  // 持久化：hist 写入 localStorage 且新实例恢复
+  const store = new Map();
+  globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
+  const ap1 = createAdaptivePortfolio({ state: makeState(1000), symbols: ['BTCUSDT'], w0: 0.5, capital: 1000, cfg: { histMs: 0, priceSource: () => ({ BTCUSDT: { last: 100 } }), fetchers: makeFetchers() } });
+  ap1.enable();
+  await ap1.tick(Date.now() + 60e3);
+  const n1 = ap1.getHist().length;
+  ok('health: hist 已写入 localStorage', !!store.get('pwa_adaptive_hist'));
+  const ap2 = createAdaptivePortfolio({ state: makeState(1000), symbols: ['BTCUSDT'], w0: 0.5, capital: 1000, cfg: { histMs: 0, priceSource: () => ({ BTCUSDT: { last: 100 } }), fetchers: makeFetchers() } });
+  ok('health: 新实例恢复 hist', ap2.getHist().length === n1 && n1 >= 2);
+  ok('health: 恢复 startedT', Number.isFinite(ap2.getState().startedT) && ap2.getState().startedT > 0);
+  delete globalThis.localStorage;
 }
 
 console.log(`\n=== adaptivePortfolio: ${passed} passed, ${failed} failed ===`);

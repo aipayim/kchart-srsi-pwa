@@ -1010,6 +1010,14 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .adp-leg-h{color:var(--text);font-weight:bold;font-size:10px}
 .adp-leg-c{color:var(--text2);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px;white-space:normal;word-break:break-word}
 .adp-leg-alpha{color:#a78bfa}
+.adp-expmsg{margin-left:6px;color:var(--accent)}
+.adp-health{margin-top:5px;border-top:1px solid var(--border);padding-top:4px}
+.adp-h-head{font-size:10px;color:var(--text);margin-bottom:3px}
+.adp-h-i{display:inline-block;font-size:10px;color:var(--text2);margin:0 10px 2px 0;white-space:nowrap}
+.adp-h-i b{color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace}
+.adp-h-i b.adp-h-pos{color:var(--green)}
+.adp-h-i b.adp-h-neg{color:var(--red)}
+.adp-h-note{margin-top:3px;font-size:9.5px;color:var(--text2);line-height:1.45}
 .adp-evs{margin-top:4px;border-top:1px solid var(--border);padding-top:4px;max-height:150px;overflow:auto}
 .adp-ev{display:flex;gap:5px;align-items:flex-start;font-size:10px;line-height:1.5;padding:1px 0}
 .adp-ev-i{flex:0 0 auto;width:12px;text-align:center}
@@ -1017,3 +1025,9 @@ body{font-family:'JetBrains Mono','Menlo',monospace;background:var(--bg);color:v
 .adp-ev-s{color:var(--text);font-weight:bold}
 .fusion-card .adp-head{margin-top:2px}
 .fusion-card .adp-evs{max-height:120px}
+
+/* v1.6.79（P5）：TSEV 权重版本化 + 退化守卫（纪律面板 TSEV 区） */
+.disc-tsev-ver{display:block;margin-top:4px;font-size:10px;line-height:1.9;opacity:.9}
+.disc-tsev-vbtn{margin:0 3px 0 0;padding:1px 6px;border:1px solid var(--border);border-radius:9px;background:var(--card2);color:var(--text2);font-size:9.5px;cursor:pointer}
+.disc-tsev-vbtn:hover{border-color:var(--accent);color:var(--accent)}
+.disc-tsev-guard{color:#FFB74D;font-weight:600}
