@@ -732,11 +732,50 @@ export function planMaturation(rec, evalFn, opts = {}) {
   return { outcomes, allDone, fed, toFeed, anyOutcome: Object.keys(outcomes).length > 0 };
 }
 
-/** 回填所有到期记录；每个样本只喂一次。返回 {matured, fed} */
+/** 回填所有到期记录；每个样本只喂一次。返回 {matured, fed, rejected, repaired} */
+// v1.6.72 一次性回填修复的版本标记
+const SCALP_REPAIR_VER = 'v1.6.72';
+
+/**
+ * 纯函数（v1.6.72）：挑出需要「scalp 回填修复」的记录。
+ * 背景：v1.6.71 之前 `recordJevSample` 白名单漏掉 `scalp`，到期时被静默拒绝，
+ * 但记录已被标记 `fed.scalp` 并写了窗口锚点 `win.scalp` → 这些“已判定”的超短样本永远回填不进 TSEV。
+ * 本函数只负责列出「需处理（尚未打过版本标记）」的记录，并由调用方清除 scalp 的 fed/锚点。
+ * 安全性：v1.6.71 之前**从未**有任何 scalp 样本真的喂成功（正则是拒绝）→ 不存在重复计数。
+ * @returns {Array<{i:number, had:boolean}>} had=true = 确实需要清除（有 scalp 标记）
+ */
+export function planScalpRepair(records, ver = SCALP_REPAIR_VER) {
+  const out = [];
+  for (let i = 0; i < (records || []).length; i++) {
+    const r = records[i];
+    if (!r || r.scalpRepair === ver) continue;
+    out.push({ i, had: !!((r.fed && r.fed.scalp) || (r.win && r.win.scalp != null)) });
+  }
+  return out;
+}
+
 export async function matureDecisions() {
   const d = await db();
-  if (!d) return { matured: 0, fed: 0 };
+  if (!d) return { matured: 0, fed: 0, rejected: 0, repaired: 0 };
   const all = await listDecisions(9999);
+  // ⭐ v1.6.72 一次性修复：清除 v1.6.71 之前因白名单漏 scalp 而被误标 fed/锚点的超短记录，允许重新回填。
+  //   逐记录打版本标记 `scalpRepair`，即使全局标记写失败也不会二次清除。
+  let repaired = 0;
+  try {
+    const cfg = readJevCfg();
+    if (cfg.scalpFeedRepair !== SCALP_REPAIR_VER) {
+      for (const { i, had } of planScalpRepair(all)) {
+        const r = all[i];
+        if (r.fed) delete r.fed.scalp;
+        if (r.win) delete r.win.scalp;
+        r.scalpRepair = SCALP_REPAIR_VER;
+        await putDecision(r);
+        if (had) repaired++;
+      }
+      cfg.scalpFeedRepair = SCALP_REPAIR_VER;
+      try { writeJevCfg(cfg); } catch (e) { /* 全局标记写失败也无妨：逐记录标记已保证不二次清除 */ }
+    }
+  } catch (e) { /* 修复失败不影响正常回填 */ }
   const localLoop = globalThis.__localTsev || null;
   const canFeed = !!(localLoop && typeof localLoop.recordJevSample === 'function');
   // 独立窗口去重（跨记录）：同 (币,档) 每个前向窗口只喂 1 条 → n ≈ 独立观测数
@@ -777,7 +816,8 @@ export async function matureDecisions() {
     await putDecision(rec);
   }
   if (rejected) { try { console.warn('[JEV-FEED] ' + rejected + ' 个样本被本机 TSEV 拒绝（未计入）'); } catch (e) { /* 忽略 */ } }
-  return { matured, fed, rejected };
+  if (repaired) { try { console.log('[JEV-FEED] 已修复 ' + repaired + ' 条超短档记录（v1.6.71 前被误标，现重新回填）'); } catch (e) { /* 忽略 */ } }
+  return { matured, fed, rejected, repaired };
 }
 
 /** 频率字符串 → 毫秒（用于 barT 分桶去重） */

@@ -10,7 +10,7 @@ import {
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
-import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent } from '../src/pwa/jevClient.js';
+import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent, planScalpRepair } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, renderJevAllHtml, historyRowHtml, MATURITY_NOTE, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
@@ -910,6 +910,25 @@ async function schedTest() {
 await contextTest();
 await schedTest();
 await fetchTests();
+
+// ============ v1.6.72：超短档回填修复（planScalpRepair）============
+(function scalpRepair() {
+  const recs = [
+    { id: 'a', fed: { scalp: true, short: true }, win: { scalp: 111 } },   // 有 scalp 标记 → had=true
+    { id: 'b', fed: { short: true }, win: { short: 222 } },                 // 无 scalp 标记 → 仅打版本标记
+    null,
+    { id: 'c', fed: { scalp: true } },                                      // had=true
+    { id: 'd', scalpRepair: 'v1.6.72', fed: { scalp: true } }               // 已修复 → 跳过
+  ];
+  const plan = planScalpRepair(recs);
+  ok('planScalpRepair 跳过已修复/空记录', plan.map(x => x.i).join() === '0,1,3');
+  ok('planScalpRepair 仅带 scalp 标记者 had=true', plan.filter(x => x.had).map(x => x.i).join() === '0,3');
+  ok('planScalpRepair 空输入安全', planScalpRepair(null).length === 0 && planScalpRepair([]).length === 0);
+  // 回归：修复标记不影响 planMaturation——修复后的记录仍能按 eligible 正常喂样
+  const rec = { id: 'r', sym: 'BTCUSDT', dirs: { scalp: { strength: -40 } }, samples: [{ horizon: 'scalp', side: 'short' }], fed: {} };
+  const pm = planMaturation(rec, () => ({ win: 1, pnlPct: 0.2, barsHeld: 3, exitDir: 'tp' }), { eligible: ['scalp'] });
+  ok('修复后 scalp 正常进入 toFeed', pm.toFeed.length === 1 && pm.toFeed[0].horizon === 'scalp' && pm.toFeed[0].hit === true);
+})();
 
 console.log(`\n=== jev.test: ${passed} passed, ${failed} failed ===`);
 if (failed > 0) process.exit(1);
