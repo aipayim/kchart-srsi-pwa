@@ -115,12 +115,15 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
 (function stateContext() {
   const inp = {
     sym: 'BNBUSDT', group: 'short', tfs: ['5m', '15m', '1h'],
-    tf: { '5m': null, '15m': { rsi: 62, macd: '金叉', ma: '站上均线(多头排列)', vol: '放量突破', pattern: '连阳', momPct: 1.2, atr: '中波动(ATR 0.3%)', srsi: 85, kd: [85, 78], band: '上带' }, '1h': null },
+    tf: { '5m': null, '15m': { rsi: 62, rsiSlope: 3.2, macd: '金叉', macdHistPct: 0.08, macdHistDir: 1, ma: '站上均线(多头排列)', vol: '放量突破', pattern: '连阳', momPct: 1.2, atr: '中波动(ATR 0.3%)', srsi: 85, kd: [85, 78], band: '上带' }, '1h': null },
     resonance: { buy: true, sell: false, buyScore: 3, sellScore: 0, conditions: [{ n: '趋势多', side: 'buy' }], strength: 'strong' },
     regime: { tf: '1h', type: 'trend-up', label: '多头趋势 ↑', direction: 1, strength: 0.8 },
     volQ: 0.66,
     trend: { tf: '4h', up: true, flat: false, label: '上升', spreadPct: 2.4 },
     macro: { tf: '30d', up: true, spreadPct: 5.1 },
+    self: { chg24h: 3.2, chg7d: 8.1, pos7d: 78 },
+    market: { btc: { chg: 2.1 }, eth: { chg: 1.3 }, breadth: { up: 6, down: 2, n: 8, pct: 75 } },
+    fng: { value: 62, label: 'Greed', prev: 55 },
     flow: { fundingRate: 0.0002 },
     now: Date.UTC(2026, 0, 5, 12, 0)
   };
@@ -132,6 +135,13 @@ const near = (a, b, eps = 1e-9) => typeof a === 'number' && Math.abs(a - b) < ep
   ok('⭐ SRSI K/D/带 进入状态（旧版 srsi 写死 null → 从不发送）', r.text.indexOf('SRSI K=85') > 0 && r.text.indexOf('带=上带') > 0);
   ok('⭐ 资金费率措辞中性化（双向提示）', r.text.indexOf('多头拥挤') > 0 && r.text.indexOf('可延续') > 0 && r.text.indexOf('易回落') > 0);
   ok('⭐ 多周期共振文字（布尔形态）非「无共振」', r.text.indexOf('多周期共振: 一致偏多') > 0);
+  ok('⭐ 本标的 24h/7d 涨跌与区间位置', r.text.indexOf('本标的走势: 24h +3.20% · 7d +8.10% · 7d区间位置 78%（偏高）') > 0);
+  ok('⭐ 大盘联动（BTC/ETH 24h + 广度）', r.text.indexOf('大盘联动: BTC 24h +2.10% · ETH 24h +1.30% · 广度 6涨/2跌（75%涨）') > 0);
+  ok('⭐ 恐惧贪婪（含上期变化）', r.text.indexOf('恐惧贪婪: 62（Greed；上期55↑）') > 0);
+  ok('⭐ 连续量：MACD 柱值与 RSI 斜率', r.text.indexOf('MACD 金叉(柱+0.08%↑)') > 0 && r.text.indexOf('RSI 62↑(中性)') > 0);
+  // 缺省时写「未知」且进入 missing
+  const rNoMk = buildJevState({ sym: 'X', group: 'short', tfs: ['5m'], tf: {}, now: 1 });
+  ok('缺大盘/情绪 → 未知且计入 missing', rNoMk.text.indexOf('- 大盘联动: 未知') > 0 && rNoMk.text.indexOf('- 恐惧贪婪: 未知') > 0 && rNoMk.missing.indexOf('大盘联动') >= 0 && rNoMk.missing.indexOf('恐惧贪婪') >= 0);
   // 兼容旧式 regime 对象
   const r2 = buildJevState({ sym: 'X', group: 'short', tfs: ['5m'], tf: {}, regime: { type: 'trend', direction: 'up', strength: 0.5 }, now: 1 });
   ok('旧式 regime 对象仍可读（趋势(向上)）', r2.text.indexOf('趋势(向上)') > 0);

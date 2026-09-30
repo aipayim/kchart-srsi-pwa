@@ -422,3 +422,59 @@ export async function fetchJevNews(src, opts = {}) {
     return data;
   } catch (e) { return null; }
 }
+
+// ---------------------------------------------------------------------------
+// Jev 用：大盘联动 + 市场广度（24h 涨跌）+ 恐惧贪婪（均为公开免费源，无 Key；失败即 null）
+// 加密里 BTC/ETH 领先大多数标的，且情绪/广度是重要的横截面上下文。
+// ---------------------------------------------------------------------------
+const MARKET_BASKET = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'DOGEUSDT', 'ADAUSDT', 'LINKUSDT'];
+const MARKET_TTL = 60000;
+let _mktCache = { t: 0, data: null };
+
+export async function fetchMarketContext(opts = {}) {
+  const now = Date.now();
+  if (!opts.force && _mktCache.data && now - _mktCache.t < MARKET_TTL) return _mktCache.data;
+  const list = (opts.syms && opts.syms.length) ? opts.syms : MARKET_BASKET;
+  try {
+    const q = encodeURIComponent(JSON.stringify(list));
+    const raw = await fetchApiData('/api/v3/ticker/24hr?symbols=' + q, 'api', opts.timeout || 8000);
+    const rows = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    const out = { btc: null, eth: null, breadth: null, list: [], t: now };
+    let up = 0, down = 0, n = 0;
+    for (const r of rows) {
+      if (!r || !r.symbol) continue;
+      const chg = parseFloat(r.priceChangePercent);
+      const last = parseFloat(r.lastPrice);
+      if (!isFinite(chg)) continue;
+      const rec = { sym: r.symbol, chg, last };
+      out.list.push(rec);
+      n++;
+      if (chg > 0.05) up++; else if (chg < -0.05) down++;
+      if (r.symbol === 'BTCUSDT') out.btc = rec;
+      if (r.symbol === 'ETHUSDT') out.eth = rec;
+    }
+    out.breadth = n ? { up, down, n, pct: Math.round(up / n * 100) } : null;
+    _mktCache = { t: now, data: out };
+    return out;
+  } catch (e) { return _mktCache.data || null; }
+}
+
+let _fngCache = { t: 0, data: null };
+export async function fetchFearGreedIndex(opts = {}) {
+  const now = Date.now();
+  if (!opts.force && _fngCache.data && now - _fngCache.t < 300000) return _fngCache.data;
+  try {
+    const resp = await fetch('https://api.alternative.me/fng/?limit=2', { cache: 'no-store' });
+    if (!resp || !resp.ok) return _fngCache.data || null;
+    const j = await resp.json();
+    const arr = (j && j.data) || [];
+    if (!arr.length) return _fngCache.data || null;
+    const cur = arr[0] || {};
+    const prev = arr[1] || null;
+    const value = parseInt(cur.value, 10);
+    if (!isFinite(value)) return _fngCache.data || null;
+    const out = { value, label: cur.value_classification || null, prev: prev ? parseInt(prev.value, 10) : null, t: now };
+    _fngCache = { t: now, data: out };
+    return out;
+  } catch (e) { return _fngCache.data || null; }
+}

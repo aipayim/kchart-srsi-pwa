@@ -13,7 +13,7 @@ import {
 } from '../engine/jevState.js';
 import { winLossByAtr, atrClose, volumeDivergence, supportResistance } from '../engine/indicators.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_DAYS } from '../engine/jevState.js';
-import { fetchJevFlow, fetchJevNews } from './data.js';
+import { fetchJevFlow, fetchJevNews, fetchMarketContext, fetchFearGreedIndex } from './data.js';
 import { newsSentiment } from '../engine/indicators.js';
 import { pushSignalEvent } from '../tech2/signalAlerts.js';
 import { THRESH } from '../engine/thresholds.js';
@@ -285,11 +285,23 @@ function readingsFor(sym, tf) {
   const series = ind && ind.series ? ind.series : null;
   const atrPct = (cur && cur.atr && cur.price) ? (cur.atr / cur.price) * 100 : null;
   const { vd, sr } = { vd: null, sr: null };
-  // MACD 状态：用 series.macdHist 的末两根
-  let macd = null;
+  // MACD 状态 + 柱值（连续量：以前只给金叉/死叉，丢掉大小与方向）
+  let macd = null, macdHistPct = null, macdHistDir = 0;
   if (series && Array.isArray(series.macdHist)) {
     const h = series.macdHist;
     macd = macdStateOf(h[n - 1], h[n - 2]);
+    const a = h[n - 1], b = h[n - 2];
+    if (typeof a === 'number' && isFinite(a)) {
+      const px = (cur && cur.price) || closes[n - 1];
+      if (px > 0) macdHistPct = a / px * 100;
+      if (typeof b === 'number' && isFinite(b)) macdHistDir = a > b ? 1 : a < b ? -1 : 0;
+    }
+  }
+  // RSI 斜率（连续量：以前只给当前值与超买/超卖区）
+  let rsiSlope = null;
+  if (series && Array.isArray(series.rsi)) {
+    const r = series.rsi; const a = r[n - 1], b = r[n - 4];
+    if (typeof a === 'number' && typeof b === 'number' && isFinite(a) && isFinite(b)) rsiSlope = a - b;
   }
   // SRSI(K/D)：优先用 kchart 暴露的 __srsiKd（同一套 srsiKD + 该周期参数）。
   // ⭐ 修复：以前 `srsi: null` 写死（且 `__srsiOverviewRow` 并不存在）→ SRSI/K/D/带 从不进入状态文档。
@@ -302,7 +314,10 @@ function readingsFor(sym, tf) {
 
   return {
     rsi: cur ? cur.rsi : null,
+    rsiSlope,
     macd,
+    macdHistPct,
+    macdHistDir,
     ma: maStateOf(cur ? cur.price : closes[n - 1], cur ? cur.ema20 : null, cur ? cur.ema120 : null),
     vol: volStateOf(vols, closes),
     pattern: patternOf(closes, highs, lows),
@@ -436,7 +451,28 @@ export function gatherJevInput(sym, group, ctx) {
   let trend = null, macro = null;
   try { const api = kapi(); if (api && api.__horizonTrend) trend = api.__horizonTrend(sym); } catch (e) { trend = null; }
   try { const api = kapi(); if (api && api.__macroTrend) macro = api.__macroTrend(sym); } catch (e) { macro = null; }
-  return { sym, group, tfs, tf, resonance, vd, sr, regime, volQ, trend, macro, flow: (ctx && ctx.flow) || {}, ext: (ctx && ctx.ext) || {}, now: Date.now() };
+  // 本标的 24h/7d 涨跌与 7d 区间位置（klines 现算，无额外请求）
+  let self = null;
+  try {
+    const s1h = (s.klines && s.klines[sym] && s.klines[sym]['1h']) || null;
+    const s1d = (s.klines && s.klines[sym] && s.klines[sym]['1d']) || null;
+    let chg24h = null, chg7d = null, pos7d = null, hi7d = null, lo7d = null;
+    if (Array.isArray(s1h) && s1h.length > 25) { const a = s1h[s1h.length - 25], b = s1h[s1h.length - 1]; if (a > 0) chg24h = (b - a) / a * 100; }
+    if (Array.isArray(s1d) && s1d.length >= 8) {
+      const w = s1d.slice(-8); hi7d = Math.max.apply(null, w); lo7d = Math.min.apply(null, w);
+      // 优先用 1d 真实高低点（收盘区间会偏窄）
+      const h1d = (s.klinesH && s.klinesH[sym] && s.klinesH[sym]['1d']) || null;
+      const l1d = (s.klinesL && s.klinesL[sym] && s.klinesL[sym]['1d']) || null;
+      if (Array.isArray(h1d) && Array.isArray(l1d) && h1d.length >= 8 && l1d.length >= 8) {
+        hi7d = Math.max.apply(null, h1d.slice(-8)); lo7d = Math.min.apply(null, l1d.slice(-8));
+      }
+      const a = s1d[s1d.length - 8], b = s1d[s1d.length - 1];
+      if (a > 0) chg7d = (b - a) / a * 100;
+      if (hi7d > lo7d) pos7d = Math.max(0, Math.min(100, (b - lo7d) / (hi7d - lo7d) * 100));
+    }
+    if (chg24h != null || chg7d != null) self = { chg24h, chg7d, pos7d, hi7d, lo7d };
+  } catch (e) { self = null; }
+  return { sym, group, tfs, tf, resonance, vd, sr, regime, volQ, trend, macro, self, market: (ctx && ctx.market) || null, fng: (ctx && ctx.fng) || null, flow: (ctx && ctx.flow) || {}, ext: (ctx && ctx.ext) || {}, now: Date.now() };
 }
 
 /**
@@ -475,6 +511,15 @@ export async function collectJevContext(sym, opts = {}) {
       ctx.ext.news = { sentiment: sent.sentiment, bullishCount: sent.bullishCount, bearishCount: sent.bearishCount, title: news.items[0] && news.items[0].title, source: news.source };
     }
   } catch (e) { ctx.errs.push('新闻: ' + String((e && e.message) || e)); }
+  // 大盘联动/广度（24h）+ 恐惧贪婪（公开免费源；失败→null→「未知」，不编造）
+  try {
+    const mk = await fetchMarketContext(opts.marketOpts);
+    if (mk) ctx.market = mk;
+  } catch (e) { ctx.errs.push('大盘: ' + String((e && e.message) || e)); }
+  try {
+    const fng = await fetchFearGreedIndex(opts.fngOpts);
+    if (fng) ctx.fng = fng;
+  } catch (e) { ctx.errs.push('情绪: ' + String((e && e.message) || e)); }
   ctx.fill = flowFillSummary(ctx.rawFlow, ctx.ext);
   return ctx;
 }

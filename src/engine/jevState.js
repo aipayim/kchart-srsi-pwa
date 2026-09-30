@@ -274,8 +274,8 @@ export function timeWindow(nowMs) {
 function fmtTfLine(tf, d) {
   if (!d) return '- ' + tf + ': 未知';
   const parts = [];
-  if (d.rsi != null) parts.push('RSI ' + Math.round(d.rsi) + '(' + (rsiZone(d.rsi) || '?') + ')');
-  if (d.macd) parts.push('MACD ' + d.macd);
+  if (d.rsi != null) parts.push('RSI ' + Math.round(d.rsi) + (d.rsiSlope != null ? (d.rsiSlope > 0.5 ? '↑' : d.rsiSlope < -0.5 ? '↓' : '→') : '') + '(' + (rsiZone(d.rsi) || '?') + ')');
+  if (d.macd) parts.push('MACD ' + d.macd + (d.macdHistPct != null ? '(柱' + (d.macdHistPct >= 0 ? '+' : '') + d.macdHistPct.toFixed(2) + '%' + (d.macdHistDir > 0 ? '↑' : d.macdHistDir < 0 ? '↓' : '→') + ')' : ''));
   if (d.ma) parts.push('价格' + d.ma);
   if (d.vol) parts.push('量能 ' + d.vol);
   if (d.pattern && d.pattern !== '无明显形态') parts.push(d.pattern);
@@ -343,6 +343,17 @@ export function buildJevState(inp) {
   const volQ = num(it.volQ);
   const volTxt = volQ != null ? '波动率分位 ' + Math.round(volQ * 100) + '%（' + (volQ >= 0.7 ? '高' : volQ <= 0.3 ? '低' : '中') + '）' : '未知';
   const tr = it.trend || {}, mc = it.macro || {};
+  // 大盘联动（BTC/ETH 24h）+ 市场广度 —— 加密里 BTC/ETH 领先大多数标的
+  const mk = it.market || {};
+  const mktTxt = [
+    mk.btc ? 'BTC 24h ' + pct1(mk.btc.chg) : null,
+    mk.eth ? 'ETH 24h ' + pct1(mk.eth.chg) : null,
+    mk.breadth ? '广度 ' + mk.breadth.up + '涨/' + mk.breadth.down + '跌（' + mk.breadth.pct + '%涨）' : null
+  ].filter(Boolean).join(' · ') || '未知';
+  const fng = it.fng;
+  const fngTxt = (fng && fng.value != null)
+    ? fng.value + '（' + (fng.label || '?') + (fng.prev != null ? '；上期' + fng.prev + (fng.value - fng.prev >= 0 ? '↑' : '↓') : '') + '）'
+    : '未知';
   const trendTxt = tr.label
     ? tr.label + ' ' + pct1(tr.spreadPct) + (tr.tf ? '(' + tr.tf + ' EMA20/120)' : '')
     : (tr.up != null ? (tr.up ? '上升' : '下降') + ' ' + pct1(tr.spreadPct) + (tr.tf ? '(' + tr.tf + ' EMA20/120)' : '') : '未知');
@@ -351,11 +362,19 @@ export function buildJevState(inp) {
     : (mc.up != null ? (mc.up ? '上升' : '下降') + ' ' + pct1(mc.spreadPct) + (mc.tf ? '(' + mc.tf + ')' : '') : '未知');
 
   const sections = {
-    tech: techLines.join('\n') + '\n- 多周期共振: ' + (resTxt || '未知') + '\n- 量价背离: ' + vdTxt + '\n- 支撑/阻力: ' + srTxt,
+    tech: (function () {
+      const self = it.self;
+      const line = (self && (self.chg24h != null || self.chg7d != null))
+        ? '- 本标的走势: 24h ' + pct1(self.chg24h) + ' · 7d ' + pct1(self.chg7d) + (self.pos7d != null ? ' · 7d区间位置 ' + Math.round(self.pos7d) + '%（' + (self.pos7d >= 70 ? '偏高' : self.pos7d <= 30 ? '偏低' : '中位') + '）' : '') + '\n'
+        : '';
+      return line + techLines.join('\n') + '\n- 多周期共振: ' + (resTxt || '未知') + '\n- 量价背离: ' + vdTxt + '\n- 支撑/阻力: ' + srTxt;
+    })(),
     flow: '- 资金费率: ' + frTxt + '\n- 持仓量变化: ' + oiTxt + '\n- 主动买卖比: ' + tkTxt + '\n- 多空账户比: ' + lsTxt + '\n- 大单/鲸鱼: ' + whaleTxt + '\n- 清算密集区: ' + liqTxt,
     ext: '- 新闻情绪: ' + newsTxt + '\n- 宏观事件: ' + macroNewsTxt + '\n- 社群舆情: ' + socialTxt,
-    regime: '- 市场体制: ' + regimeTxt + '\n- 波动: ' + (volTxt) + '\n- 趋势门' + (tr.tf ? '(' + tr.tf + ')' : '') + ': ' + trendTxt + ' · 宏观' + (mc.tf ? '(' + mc.tf + ')' : '') + ': ' + macroTxt + '\n- 时间窗口: ' + timeWindow(it.now)
+    regime: '- 市场体制: ' + regimeTxt + '\n- 波动: ' + (volTxt) + '\n- 趋势门' + (tr.tf ? '(' + tr.tf + ')' : '') + ': ' + trendTxt + ' · 宏观' + (mc.tf ? '(' + mc.tf + ')' : '') + ': ' + macroTxt + '\n- 大盘联动: ' + mktTxt + '\n- 恐惧贪婪: ' + fngTxt + '\n- 时间窗口: ' + timeWindow(it.now)
   };
+  if (mktTxt === '未知') missing.push('大盘联动');
+  if (fngTxt === '未知') missing.push('恐惧贪婪');
   const text = [
     '标的: ' + (it.sym || '未知') + '｜判断档位: ' + (it.group || '短') + '（周期 ' + tfs.join('/') + '）',
     '',
