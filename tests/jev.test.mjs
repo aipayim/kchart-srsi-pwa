@@ -10,7 +10,7 @@ import {
 } from '../src/engine/jevState.js';
 import { decisionEndpoint, decisionEndpointInfo, decisionCall, probeDecisionShapes, estimateTokens } from '../src/ai/llmClient.js';
 import { parseJevFlow, flowFillSummary, JEV_WINDOW_MS, JEV_WINDOW_DAYS } from '../src/engine/jevState.js';
-import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent, planScalpRepair } from '../src/pwa/jevClient.js';
+import { collectJevContext, jevSchedulerTick, planMaturation, planIndependentFeeds, collectAnchors, buildJevSignalEvent, planScalpRepair, fedMapAfterFeed } from '../src/pwa/jevClient.js';
 import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSetHtml, buildJevHistory, renderJevHistoryHtml, renderJevAllHtml, historyRowHtml, MATURITY_NOTE, JEV_DISCLAIMER, isStale } from '../src/tech2/jevPanel.js';
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
@@ -375,6 +375,9 @@ async function fetchTests2() {
   ok('⭐ scalpOpen=false/缺省 → 仍默认收起', renderJevHtml(Object.assign({}, model, { scalpOpen: false })).indexOf('<details class="jev-scalp" open') < 0);
   ok('⭐ scalpOpen 不影响其它内容（仅 <details> 属性差异）', renderJevHtml(Object.assign({}, model, { scalpOpen: true })).replace('<details class="jev-scalp" open>', '<details class="jev-scalp">') === html);
   ok('⭐ 超短档行标「超短档」且提示可展开', html.indexOf('超短档') > 0 && html.indexOf('点击展开') > 0);
+  // ⭐ v1.6.75：每档「50 条要多少天」写清楚（中/长档实际不可达）
+  ok('⭐ 面板写清各档达成速度（超短 ≈5 天 / 50 条）', html.indexOf('≈5 天/50 条') > 0);
+  ok('⭐ 中/长档标「实际不可达」', (html.match(/实际不可达/g) || []).length >= 2);
   ok('renderJevHtml 含关系条', html.indexOf('Jev × TSEV 关系') >= 0);
   ok('renderJevHtml 含驱动', html.indexOf('主要驱动') >= 0);
   ok('renderJevHtml 含费用', html.indexOf('$0.0100') >= 0);
@@ -969,6 +972,18 @@ await fetchTests();
   const rec = { id: 'r', sym: 'BTCUSDT', dirs: { scalp: { strength: -40 } }, samples: [{ horizon: 'scalp', side: 'short' }], fed: {} };
   const pm = planMaturation(rec, () => ({ win: 1, pnlPct: 0.2, barsHeld: 3, exitDir: 'tp' }), { eligible: ['scalp'] });
   ok('修复后 scalp 正常进入 toFeed', pm.toFeed.length === 1 && pm.toFeed[0].horizon === 'scalp' && pm.toFeed[0].hit === true);
+})();
+
+// ============ v1.6.75：未真正喂成功的档不得标记 fed（防窗口被永久吞掉）============
+(function fedMapTest() {
+  const plan = { fed: { scalp: true, short: true }, toFeed: [{ horizon: 'short' }, { horizon: 'scalp' }] };
+  const normal = fedMapAfterFeed(plan, { canFeed: true, failed: [] });
+  ok('fedMap 正常喂成功→保留标记', normal.scalp === true && normal.short === true);
+  const noLoop = fedMapAfterFeed(plan, { canFeed: false });
+  ok('⭐ canFeed=false → toFeed 的档不标记（下次重试）', noLoop.scalp === undefined && noLoop.short === undefined);
+  const someFail = fedMapAfterFeed(plan, { canFeed: true, failed: ['short'] });
+  ok('⭐ 单档喂失败 → 只清该档', someFail.short === undefined && someFail.scalp === true);
+  ok('fedMap 空入力安全', Object.keys(fedMapAfterFeed(null, {})).length === 0 && Object.keys(fedMapAfterFeed(plan, {})).length === 2);
 })();
 
 console.log(`\n=== jev.test: ${passed} passed, ${failed} failed ===`);

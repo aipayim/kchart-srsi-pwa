@@ -800,7 +800,20 @@ export function planMaturation(rec, evalFn, opts = {}) {
   return { outcomes, allDone, fed, toFeed, anyOutcome: Object.keys(outcomes).length > 0 };
 }
 
-/** 回填所有到期记录；每个样本只喂一次。返回 {matured, fed, rejected, repaired} */
+/**
+ * 纯函数（v1.6.75）：算出本次应持久化的 `fed` 表。
+ * ⭐ 关键：**没真正喂成功的档不得标记已处理**，否则该窗口被永久吞掉（短/中/长档窗口长，一吞就是 1~30 天）。
+ *   - `canFeed=false`（本机 TSEV 未注册）→ toFeed 的档全部不标记，等它可用时重试；
+ *   - `failed`（recordJevSample 返回 false / 抛错）→ 同样不标记。
+ */
+export function fedMapAfterFeed(plan, opts = {}) {
+  const fed = Object.assign({}, (plan && plan.fed) || {});
+  if (opts.canFeed === false) { for (const smp of ((plan && plan.toFeed) || [])) delete fed[smp && smp.horizon]; }
+  for (const h of (opts.failed || [])) delete fed[h];
+  return fed;
+}
+
+/** 回填所有到期记录；每个样本只喂一次。返回 {matured, fed, rejected, repaired, deferred} */
 // v1.6.72 一次性回填修复的版本标记
 const SCALP_REPAIR_VER = 'v1.6.72';
 
@@ -848,7 +861,7 @@ export async function matureDecisions() {
   const canFeed = !!(localLoop && typeof localLoop.recordJevSample === 'function');
   // 独立窗口去重（跨记录）：同 (币,档) 每个前向窗口只喂 1 条 → n ≈ 独立观测数
   const indep = planIndependentFeeds(all, { anchors: collectAnchors(all) });
-  let matured = 0, fed = 0, rejected = 0;
+  let matured = 0, fed = 0, rejected = 0, deferred = 0;
   for (let i = 0; i < all.length; i++) {
     const rec = all[i];
     if (rec.matured) continue;
@@ -858,34 +871,40 @@ export async function matureDecisions() {
       if (Date.now() - rec.ts > 120 * 86400000) { rec.matured = true; rec.outcomes = {}; rec.expired = true; await putDecision(rec); matured++; }
       continue;
     }
-    if (canFeed && plan.toFeed.length) {
-      rec.win = rec.win || {};
-      for (const smp of plan.toFeed) {
-        const sideNum = smp.side === 'long' ? 1 : -1;
-        let okFeed = false;
-        try {
-          okFeed = localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0) !== false;
-        } catch (e) { okFeed = false; }
-        if (okFeed) {
-          fed++;
-          rec.win[smp.horizon] = rec.ts;      // 作为该窗口的锚点（供下次独立窗口去重）
-        } else {
-          // ⭐ v1.6.71：样本被拒 → **不留锚点 / 不标 fed**（否则该窗口被白白吞掉且无任何痕迹，正是「超短档 0/50」的成因）。
-          // 依据 §5.37「引擎本该做某事却没做，必须可见」。
-          delete plan.fed[smp.horizon];
-          rejected++;
+    const failed = [];
+    if (plan.toFeed.length) {
+      if (canFeed) {
+        rec.win = rec.win || {};
+        for (const smp of plan.toFeed) {
+          const sideNum = smp.side === 'long' ? 1 : -1;
+          let okFeed = false;
+          try {
+            okFeed = localLoop.recordJevSample(rec.sym, rec.ts, smp.horizon, sideNum, smp.hit ? 1 : 0) !== false;
+          } catch (e) { okFeed = false; }
+          if (okFeed) {
+            fed++;
+            rec.win[smp.horizon] = rec.ts;      // 作为该窗口的锚点（供下次独立窗口去重）
+          } else {
+            // ⭐ v1.6.71：样本被拒 → **不留锚点 / 不标 fed**（否则该窗口被白白吞掉）。
+            failed.push(smp.horizon);
+            rejected++;
+          }
         }
+      } else {
+        // ⭐ v1.6.75：本机 TSEV 未就绪 → 不标 fed（否则该窗口永久作废，短/中/长档一吞就是 1~30 天）
+        deferred += plan.toFeed.length;
       }
     }
-    rec.fed = plan.fed;
+    rec.fed = fedMapAfterFeed(plan, { canFeed, failed });
     rec.outcomes = plan.outcomes;
     rec.matured = plan.allDone;
     if (plan.allDone) matured++;
     await putDecision(rec);
   }
   if (rejected) { try { console.warn('[JEV-FEED] ' + rejected + ' 个样本被本机 TSEV 拒绝（未计入）'); } catch (e) { /* 忽略 */ } }
+  if (deferred) { try { console.log('[JEV-FEED] ' + deferred + ' 个样本因本机 TSEV 未就绪而延后（窗口未占用）'); } catch (e) { /* 忽略 */ } }
   if (repaired) { try { console.log('[JEV-FEED] 已修复 ' + repaired + ' 条超短档记录（v1.6.71 前被误标，现重新回填）'); } catch (e) { /* 忽略 */ } }
-  return { matured, fed, rejected, repaired };
+  return { matured, fed, rejected, repaired, deferred };
 }
 
 /** 频率字符串 → 毫秒（用于 barT 分桶去重） */

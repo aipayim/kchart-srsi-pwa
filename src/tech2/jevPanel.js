@@ -203,6 +203,10 @@ function rowHtml(r, minSample) {
   const barCol = tone === 'long' ? 'long' : tone === 'short' ? 'short' : 'flat';
   const confTxt = r.conf != null ? '置信 ' + Math.round(r.conf * 100) + '%' : '置信 —';
   // 行 1：方向 / 置信 / 关系徒章
+  // ⭐ v1.6.75：把「该档要多少天才能攒满」说清楚 —— 中/长档窗口 5/30 天，实际永远不可达 50 条。
+  const _wd = JEV_WINDOW_MS[r.id] ? JEV_WINDOW_MS[r.id] / 86400000 : null;
+  const _est = _wd != null ? Math.ceil(_wd * min) : null;
+  const waitTxt = '满 ' + min + ' 个才生效' + (_est != null ? '（≈' + _est + ' 天/50 条' + (_est > 120 ? '，实际不可达' : '') + '）' : '');
   const l1 = '<div class="jev-row-h"><span class="jev-hname">' + r.name + '线</span>' +
     '<span class="jev-dir ' + tone + '">' + (s == null ? '—' : r.label + ' ' + (s >= 0 ? '+' : '') + Math.round(s)) + '</span>' +
     '<span class="jev-conf">' + confTxt + '</span>' + relBadge(r.rel) + '</div>';
@@ -213,7 +217,7 @@ function rowHtml(r, minSample) {
       '<span class="jev-dim">（' + r.rel.text + '）</span></div>'
     : '<div class="jev-tsevline">本机 TSEV 独立样本：看多 ' + nL + '/' + min + ' · 看空 ' + nS + '/' + min +
       '<span class="jev-thr"><i class="' + barCol + '" style="width:' + barPct + '%"></i></span>' +
-      '<span class="jev-dim">满 ' + min + ' 个才生效</span></div>';
+      '<span class="jev-dim">' + waitTxt + '</span></div>';
   // 行 3：该档历史命中（到期后才有）
   const l3 = '<div class="jev-dim jev-hitline">该档已判定 ' + (r.hit.n || 0) + ' 笔' +
     (r.hit.n ? ' · 命中 ' + Math.round(r.hit.winRate * 100) + '%（' + r.hit.wins + '/' + r.hit.n + '）' + (r.hit.avgPnl != null ? ' · 均盈亏 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 命中 —（尚未到期）') +
@@ -486,7 +490,7 @@ export function renderJevHtml(m) {
     '<div>3. <b>看准不准</b> → 看下面「最近 N 笔判断」的 ✓命中 / ✗未中；短档约 ' + ((wd && wd.short) || 1) + ' 天后就有结果。</div>' +
     '<div>4. <b>本机 TSEV 权重</b>（只在「学并影响」下影响强度）需要 <b>' + min + ' 个独立样本</b>才会生成。' +
       '<span class="jev-dim">同一前向窗口内的相邻判断高度重叠（不算独立），所以每档约 ' +
-      (wd && isFinite(wd.scalp) ? Math.round(wd.scalp * 24) + 'h' : '2h') + '（超短）/ ' + ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快。</span></div>' +
+      (wd && isFinite(wd.scalp) ? Math.round(wd.scalp * 24) + 'h' : '2h') + '（超短）/ ' + ((wd && wd.short) || 1) + '/' + ((wd && wd.mid) || 5) + '/' + ((wd && wd.long) || 30) + ' 天才各出 1 条 → 提高调用频率也<b>不会</b>加快；中/长档攒满 50 条需 ' + Math.round(((wd && wd.mid) || 5) * min) + '/' + Math.round(((wd && wd.long) || 30) * min) + ' 天，<b>实际不可达</b>。</span></div>' +
     '<div>5. <b>为什么 Jev 不能像经典因子那样回补历史</b>：历史上没有 Jev 的判断记录；且拿历史状态去问，模型训练数据已含此后行情 → 前视污染，所以只能前向累积。</div>' +
     '<div>6. <b>提示与声音</b>：每次判断都会进「<b>最近信号</b>」列表；但只有<b>短档方向发生变化</b>时才弹提示条/发声' +
       '（避免 15m 频率刷屏）。Jev 的默认音效是<b>静音</b>，可在「设置 → 通知与外观 → 分信号音效 → Jev（LLM）判断」里换成其它音效。</div>' +
