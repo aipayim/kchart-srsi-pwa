@@ -139,7 +139,7 @@ export function adaptiveMetricsHtml(m) {
     + `<button class="adp-btn adp-btn2" onclick="window.adaptiveReset()">重置</button>`
     + `<button class="adp-btn adp-btn2" onclick="window.adaptiveExportHealth()" title="导出只读健康快照（复制 JSON，便于回传对账；不改策略）">⤓ 导出快照</button>`;
   const hint = m.enabled ? '' : '<div class="adp-empty">组合未启用（点启用开始纸面记录）</div>';
-  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}<div class="adp-ovstatus">${_esc(overlayStatusText(m))}<span id="adpExportMsg" class="adp-expmsg"></span></div>`;
+  return `<div class="adp-head">${badge}${eq}${st}<span class="adp-spacer"></span>${btns}</div>${hint}<div class="adp-ovstatus">${_esc(overlayStatusText(m))}<span id="adpExportMsg" class="adp-expmsg">${_esc(_currentExportMsg())}</span></div>`;
 }
 
 /** 两腿（每币一行）：权重 + carry 腿明细。 */
@@ -281,16 +281,77 @@ export function renderAdaptivePwa(el) { _renderGuarded(el, _sigRefFull, adaptive
 export function renderAdaptiveCompactPwa(el) { _renderGuarded(el, _sigRefCompact, adaptiveCompactHtml); }
 
 /**
- * 导出只读健康快照（供用户回传对账）——默认剪贴板；失败则下载 .json 文件。
+ * 导出只读健康快照（供用户回传对账）——默认剪贴板；失败则下载 .json 文件；再失败则弹窗兜底。
  * 纯前端只读；不改策略状态。手机 PWA 无 DevTools 时的官方导出入口。
+ * 反馈走「模块级状态 + 顶层 toast」：面板每秒重渲染不会把提示抹掉（旧版只用面板内小字，会被重建清空 → 看着像“没反应”）。
  * @returns {Promise<boolean>} 是否至少有一种导出方式成功
  */
-export async function exportHealthSnapshot(ap, opts = {}) {
-  const setMsg = (s) => { try { const el = (opts.msgEl || (typeof document !== 'undefined' ? document.getElementById('adpExportMsg') : null)); if (el) el.textContent = s; } catch (e) {} };
-  if (!ap || typeof ap.exportHealthJson !== 'function') { setMsg('组合未初始化，无法导出'); return false; }
+
+// ---- 导出反馈（模块级：跨面板重渲染保留；toast 挂在 body 顶层）----
+let _exportMsg = '', _exportMsgT = 0;
+const EXPORT_MSG_MS = 15000;
+function _clip(s, n = 120) { const t = String(s == null ? '' : s); return t.length > n ? t.slice(0, n) + '…' : t; }
+function _currentExportMsg() { return (Date.now() - _exportMsgT < EXPORT_MSG_MS) ? _exportMsg : ''; }
+/** 当前导出提示（供测试/验证）。 */
+export function adaptiveExportMsg() { return _currentExportMsg(); }
+/** 清空导出提示（供测试）。 */
+export function resetAdaptiveExportMsg() { _exportMsg = ''; _exportMsgT = 0; }
+
+/** 顶层 toast（1 秒重渲染不会抹掉）。 */
+function _toast(text) {
+  if (typeof document === 'undefined' || !text) return;
+  try {
+    let el = document.getElementById('adpToast');
+    if (!el) { el = document.createElement('div'); el.id = 'adpToast'; el.className = 'adp-toast'; document.body.appendChild(el); }
+    el.textContent = _clip(text, 160);
+    el.classList.add('show');
+    if (el.__t) clearTimeout(el.__t);
+    el.__t = setTimeout(() => { try { el.classList.remove('show'); } catch (e) {} }, 7000);
+  } catch (e) {}
+}
+function _setExportMsg(s) {
+  _exportMsg = String(s == null ? '' : s); _exportMsgT = Date.now();
+  try { const el = (typeof document !== 'undefined') ? document.getElementById('adpExportMsg') : null; if (el) el.textContent = _exportMsg; } catch (e) {}
+  _toast(_exportMsg);
+}
+function _downloadJson(json, fname) {
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = fname;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 5000);
+}
+/** 兜底弹窗：复制与下载都不可用时，把 JSON 显示在可全选的文本框里。 */
+function _showJsonFallback(json, fname) {
+  if (typeof document === 'undefined') return;
+  try {
+    const old = document.getElementById('adpJsonModal'); if (old) old.remove();
+    const ov = document.createElement('div');
+    ov.id = 'adpJsonModal'; ov.className = 'adp-modal-ov';
+    ov.innerHTML = '<div class="adp-modal"><div class="adp-modal-h">健康快照 JSON（复制/下载不可用 → 请手动全选复制）'
+      + '<button class="adp-modal-x" type="button" aria-label="关闭">✕</button></div>'
+      + '<textarea class="adp-modal-ta" readonly spellcheck="false"></textarea>'
+      + '<div class="adp-modal-f"><button class="adp-btn" type="button" data-act="copy">复制</button>'
+      + '<button class="adp-btn adp-btn2" type="button" data-act="dl">下载 .json</button>'
+      + '<span class="adp-dim">' + Math.round(json.length / 1024) + 'KB</span></div></div>';
+    document.body.appendChild(ov);
+    const ta = ov.querySelector('textarea'); ta.value = json;
+    try { ta.focus(); ta.select(); } catch (e) {}
+    const close = () => { try { ov.remove(); } catch (e) {} };
+    ov.querySelector('.adp-modal-x').onclick = close;
+    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+    ov.querySelector('[data-act="copy"]').onclick = () => { try { ta.focus(); ta.select(); const ok = document.execCommand('copy'); _setExportMsg(ok ? '已复制到剪贴板' : '复制失败，请手动全选'); } catch (e) { _setExportMsg('复制失败，请手动全选'); } };
+    ov.querySelector('[data-act="dl"]').onclick = () => { try { _downloadJson(json, fname); _setExportMsg('已下载 ' + fname); } catch (e) { _setExportMsg('下载失败'); } };
+  } catch (e) {}
+}
+
+export async function exportHealthSnapshot(ap) {
+  if (!ap || typeof ap.exportHealthJson !== 'function') { _setExportMsg('导出失败：组合未初始化'); return false; }
+  _setExportMsg('正在生成健康快照…');
   let json = '';
-  try { json = ap.exportHealthJson(); } catch (e) { setMsg('导出失败：' + (e && e.message)); return false; }
-  if (!json || json === '{}') { setMsg('导出失败：无数据'); return false; }
+  try { json = ap.exportHealthJson(); } catch (e) { _setExportMsg('导出失败：' + ((e && e.message) || e)); return false; }
+  if (!json || json === '{}') { _setExportMsg('导出失败：无数据'); return false; }
+  const kb = (json.length / 1024).toFixed(0);
   const fname = 'adaptive-health-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '') + '.json';
   let copied = false;
   try {
@@ -298,17 +359,14 @@ export async function exportHealthSnapshot(ap, opts = {}) {
       await navigator.clipboard.writeText(json); copied = true;
     }
   } catch (e) { copied = false; }
-  if (copied) { setMsg(`已复制健康快照到剪贴板（${(json.length / 1024).toFixed(0)}KB），可直接粘贴回传`); return true; }
+  if (copied) { _setExportMsg(`✓ 已复制健康快照到剪贴板（${kb}KB），可直接粘贴回传`); return true; }
   try {
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = fname;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => { try { URL.revokeObjectURL(url); } catch (e) {} }, 5000);
-    setMsg(`已下载 ${fname}（${(json.length / 1024).toFixed(0)}KB），请回传该文件`);
+    _downloadJson(json, fname);
+    _setExportMsg(`✓ 已下载 ${fname}（${kb}KB），请回传该文件`);
     return true;
   } catch (e) {
-    setMsg('导出失败：复制与下载均不可用（请用桌面浏览器打开并 F12 手动执行 __adaptivePortfolio.exportHealthJson()）');
+    _showJsonFallback(json, fname);
+    _setExportMsg(`复制与下载均不可用 → 已弹窗显示 JSON（${kb}KB），请手动全选复制`);
     return false;
   }
 }

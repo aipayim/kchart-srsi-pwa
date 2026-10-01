@@ -5,7 +5,7 @@
 import {
   bucketLabel, eventLabel, buildAdaptiveModel,
   adaptiveMetricsHtml, adaptiveLegsHtml, adaptiveEventsHtml, adaptiveCardHtml, adaptiveCompactHtml, adaptiveSymbolsHtml, overlayStatusText,
-  adaptiveHealthHtml, exportHealthSnapshot,
+  adaptiveHealthHtml, exportHealthSnapshot, adaptiveExportMsg, resetAdaptiveExportMsg,
   renderAdaptiveFusion, renderAdaptivePwa, renderAdaptiveCompactPwa, resetAdaptivePanelSig,
 } from '../src/tech2/adaptivePanel.js';
 
@@ -273,19 +273,26 @@ console.log('\n[exportHealthSnapshot]');
   const navDesc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
   const setNav = (v) => { try { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } catch (e) {} };
   setNav({ clipboard: { writeText: async (t) => { copied.push(t); } } });
-  const msg = { textContent: '' };
   const ap = { exportHealthJson: () => JSON.stringify({ schema: 'adaptive-portfolio-health/1', ok: 1 }) };
-  const r = await exportHealthSnapshot(ap, { msgEl: msg });
+  resetAdaptiveExportMsg();
+  const r = await exportHealthSnapshot(ap);
   ok('导出：剪贴板成功返回 true', r === true && copied.length === 1);
-  ok('导出：状态提示已复制', has(msg.textContent, '已复制'));
+  ok('导出：提示已复制', has(adaptiveExportMsg(), '已复制'));
   setNav({ clipboard: { writeText: async () => { throw new Error('denied'); } } });
-  const msg2 = { textContent: '' };
-  const r2 = await exportHealthSnapshot(ap, { msgEl: msg2 });
-  ok('导出：复制与下载均不可用 → false 且提示', r2 === false && has(msg2.textContent, '导出失败'));
-  const msg3 = { textContent: '' };
-  ok('导出：无引擎 → false', (await exportHealthSnapshot(null, { msgEl: msg3 })) === false);
-  ok('导出：空 JSON → false', (await exportHealthSnapshot({ exportHealthJson: () => '{}' }, { msgEl: { textContent: '' } })) === false);
+  resetAdaptiveExportMsg();
+  const r2 = await exportHealthSnapshot(ap);
+  ok('导出：复制与下载均不可用 → false 且提示手动复制', r2 === false && has(adaptiveExportMsg(), '手动全选'));
+  resetAdaptiveExportMsg();
+  ok('导出：无引擎 → false 且提示未初始化', (await exportHealthSnapshot(null)) === false && has(adaptiveExportMsg(), '未初始化'));
+  resetAdaptiveExportMsg();
+  ok('导出：空 JSON → false', (await exportHealthSnapshot({ exportHealthJson: () => '{}' })) === false && has(adaptiveExportMsg(), '无数据'));
   if (navDesc) Object.defineProperty(globalThis, 'navigator', navDesc); else { try { delete globalThis.navigator; } catch (e) {} }
+  // 提示嵌入面板 HTML（验证：面板重渲染也会带着提示，不再被抹掉）
+  resetAdaptiveExportMsg();
+  await exportHealthSnapshot(null);
+  const mMsg = buildAdaptiveModel(mockAp({ health: { points: 1, months: 0, totalReturnPct: 0, maxDrawdownPct: 0, monthlySharpe: null, fund: 0, rebal: 0, liq: 0, rej: 0 } }));
+  ok('导出：提示嵌入面板 HTML（重渲染不丢）', has(adaptiveMetricsHtml(mMsg), '导出失败：组合未初始化'));
+  resetAdaptiveExportMsg();
 }
 
 console.log('\n[adaptivePanel] ' + passed + ' passed, ' + failed + ' failed');
