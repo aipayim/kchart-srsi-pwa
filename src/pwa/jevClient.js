@@ -714,6 +714,77 @@ export function previewDecisionHorizon(rec, h) {
 export const JEV_SIDE_THR = 15;
 
 /**
+ * 反事实对照（**纯显示、零副作用**）：在**与 evalDecisionHorizon 完全相同的评估点**上
+ * （同一 rec / 同一档 / 同一 entryIdx / 同一 ATR / 同一 horizon），用中性方向
+ * （全做多 'buy' / 全做空 'sell'）跑同一 TP/SL，得到「无方向信息时该点会赢(1)/输(-1)/未触发(0)」。
+ *
+ * 这就是「随机同 bars 基线」的原子：命中率的分母（已判定且有胜负的档）逐点各算一次全多/全空，
+ * 于是基线与面板命中率**完全同批**（同评估点、同 TP·SL、同 horizon）。
+ * **绝不入库、不喂 TSEV 样本、不进任何统计**（统计只认 evalDecisionHorizon 的到期结果）。
+ * @returns {null|{long:1|-1|0, short:1|-1|0, ev:Object}}
+ */
+export function counterfactualWin(rec, h) {
+  try {
+    const cx = resolveHorizonContext(rec, h);
+    if (!cx.ok) return null;
+    const { ev, closes, idx, e, barsDone } = cx;
+    if (barsDone < ev.bars) return null;                 // 与结算口径一致：走满到期根数才判
+    const need = idx + ev.bars;
+    const atrArr = [];
+    for (let i = 0; i <= need; i++) atrArr.push(e.atr);
+    const seg = closes.slice(0, need + 1);
+    const one = (direction) => {
+      const r = winLossByAtr(seg, atrArr, {
+        entryIdx: idx, direction, tpAtr: THRESH.BT_TP_ATR, slAtr: THRESH.BT_SL_ATR, horizon: ev.bars
+      });
+      return (r && (r.win === 1 || r.win === -1)) ? r.win : 0;   // 0 = 窗口内 TP/SL 都没到
+    };
+    return { long: one('buy'), short: one('sell'), ev };
+  } catch (e2) { return null; }
+}
+
+/**
+ * 汇总「随机同 bars 基线」（纯显示）：遍历**已判定**（win=±1）的档，在**同一评估点**上取中性方向对照。
+ * - `decided` = 命中率分母（= 面板汇总「已判定」档数）；无法回推上下文的点计入 `missing`（剔除出基线分母）。
+ * - `long`/`short` = 全做多 / 全做空的命中率；`mean` = 二者均值（市场中性口径）。
+ * - `breakeven` = SL/(TP+SL) 理论保本线（TP 2×ATR / SL 1.5×ATR → 42.9%）。
+ * @returns {{n:number, decided:number, missing:number, long:number|null, short:number|null, mean:number|null, breakeven:number, byHorizon:Object}}
+ */
+export function computeJevBaseline(decisions, sym) {
+  const rows = (decisions || []).filter(r => r && (!sym || r.sym === sym));
+  const out = {
+    n: 0, decided: 0, missing: 0, long: null, short: null, mean: null,
+    breakeven: THRESH.BT_SL_ATR / (THRESH.BT_TP_ATR + THRESH.BT_SL_ATR), byHorizon: {}
+  };
+  for (const h of JEV_HORIZON_IDS) out.byHorizon[h] = { n: 0, long: null, short: null, mean: null, lw: 0, ll: 0, sw: 0, sl: 0 };
+  let lw = 0, ll = 0, sw = 0, sl = 0;
+  for (const r of rows) {
+    const oc = r.outcomes || {};
+    for (const h of JEV_HORIZON_IDS) {
+      const o = oc[h];
+      if (!o || (o.win !== 1 && o.win !== -1)) continue;   // 只取「已判定且有胜负」的点 = 命中率分母，保证与命中率同批
+      out.decided++;
+      const cf = counterfactualWin(r, h);
+      if (!cf) { out.missing++; continue; }
+      out.n++;
+      const b = out.byHorizon[h]; b.n++;
+      if (cf.long === 1) { lw++; b.lw++; } else if (cf.long === -1) { ll++; b.ll++; }
+      if (cf.short === 1) { sw++; b.sw++; } else if (cf.short === -1) { sl++; b.sl++; }
+    }
+  }
+  out.long = (lw + ll) ? lw / (lw + ll) : null;
+  out.short = (sw + sl) ? sw / (sw + sl) : null;
+  out.mean = (out.long != null && out.short != null) ? (out.long + out.short) / 2 : (out.long != null ? out.long : out.short);
+  for (const h of JEV_HORIZON_IDS) {
+    const b = out.byHorizon[h];
+    b.long = (b.lw + b.ll) ? b.lw / (b.lw + b.ll) : null;
+    b.short = (b.sw + b.sl) ? b.sw / (b.sw + b.sl) : null;
+    b.mean = (b.long != null && b.short != null) ? (b.long + b.short) / 2 : (b.long != null ? b.long : b.short);
+  }
+  return out;
+}
+
+/**
  * 纯函数：跨记录做「**独立窗口**」去重 —— 同一 (币, 档) 在同一个前向窗口内只取 **1** 条样本。
  *
  * 为什么必须做（统计口径，非可选）：短档 24h 窗口、15m 调用间隔 ⇒ 一个窗口内最多 96 笔判断，

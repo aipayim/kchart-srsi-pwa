@@ -29,7 +29,7 @@ import {
 } from './jevSrsiAudit.js';
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
 import {
-  readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon,
+  readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon, computeJevBaseline,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange,
   scalpBarsNow, scalpBarsSuggestion, setScalpBars, publishJevLatestFromList
 } from './jevClient.js';
@@ -1314,7 +1314,7 @@ function bindToolBoard() {
 
 // ============ Jev（LLM 多空判断 + 本地 TSEV 学习）============
 // 红线：只显示 + 学习，不接交易；Token 只进 IndexedDB；写失败不静默吞（jevClient._safeSet 记录）
-const _jevCache = { sym: null, decisions: [], stats: null, hasToken: false, at: 0, loading: false };
+const _jevCache = { sym: null, decisions: [], stats: null, baseline: null, hasToken: false, at: 0, loading: false };
 
 function jevSym() {
   const api = globalThis.kchartApi;
@@ -1331,9 +1331,12 @@ async function refreshJevData(force, ttlMs) {
   try {
     const list = await listDecisions(400);   // 设置页要看「所有明细」；盯盘面板仍只渲染最近 10 条
     const stats = jevStats(list, sym);
+    // v1.6.82：随机同 bars 基线（同评估点/同 TP·SL 的全多·全空对照）——纯显示，只在刷新时算一次
+    let baseline = null;
+    try { baseline = computeJevBaseline(list, sym); } catch (e) { baseline = null; }
     let tok = false;
     try { tok = await hasJevToken(); } catch (e) { tok = false; }
-    _jevCache.sym = sym; _jevCache.decisions = list; _jevCache.stats = stats;
+    _jevCache.sym = sym; _jevCache.decisions = list; _jevCache.stats = stats; _jevCache.baseline = baseline;
     _jevCache.hasToken = tok; _jevCache.at = Date.now();
     // 把最近一次判断发布到 globalThis.__jevLatest（纪律面板只读消费 Vev 因子；刷新后无需等下次调用）
     try { publishJevLatestFromList(list, sym); } catch (e) { /* 忽略 */ }
@@ -1355,15 +1358,16 @@ function renderJev() {
   try { renderJevSetHistory(true); } catch (e) { /* 明细渲染失败不影响面板 */ }
   const latest = (_jevCache.sym === sym ? _jevCache.decisions : []).find(r => r.sym === sym) || null;
   const stats = (_jevCache.sym === sym ? _jevCache.stats : null) || jevStats([], sym);
+  const baseline = (_jevCache.sym === sym ? _jevCache.baseline : null) || null;
   const st = jevStatus();
   let freqMs = 3600000;
   try { const m = { '15m': 900000, '1h': 3600000, '4h': 14400000, '1d': 86400000 }; freqMs = m[cfg.freq] || 0; } catch (e) {}
   const model = buildJevModel({
     sym, cfg, latest, decisions: _jevCache.decisions, stats, status: st,
     hasToken: _jevCache.hasToken, freqMs, now: Date.now(),
-    fill: cfg.lastFill || null, flow: cfg.flow || null,
+    fill: cfg.lastFill || null, flow: cfg.flow || null, baseline,
     // v1.6.67：盯盘面板只给显示的 10 笔算「未到期预览」（10×3 次轻量计算；设置页 400 条不算，避免卡顿）
-    history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10, previewFn: previewDecisionHorizon })
+    history: buildJevHistory(_jevCache.sym === sym ? _jevCache.decisions : [], sym, { limit: 10, previewFn: previewDecisionHorizon, baseline })
   });
   const _scalpOpen = (() => { try { return localStorage.getItem('pwa_jev_scalp_open') === '1'; } catch (e) { return false; } })();
   const html = renderJevHtml(Object.assign({}, model, { scalpOpen: _scalpOpen }));

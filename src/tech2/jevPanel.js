@@ -6,7 +6,7 @@
 //   ③ 三行长/中/短强度滑块（−100…+100：启用 Jev 时 = Jev 强度；关 Jev 后 = 本机 TSEV 已学偏置）
 //
 // 固定标注「模型判断·非交易建议·未接入执行」（红线）。
-import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_MODES, JEV_DRIVERS, JEV_WINDOW_MS, JEV_SCALP_BARS } from '../engine/jevState.js';
+import { JEV_HORIZONS, JEV_HORIZON_IDS, JEV_HORIZON_NAMES, JEV_MODES, JEV_DRIVERS, JEV_WINDOW_MS, JEV_SCALP_BARS } from '../engine/jevState.js';
 
 export const JEV_DISCLAIMER = '模型判断 · 非交易建议 · 未接入执行（只做显示与本地学习）';
 
@@ -29,6 +29,8 @@ const fmtAgo = (ms) => {
   return Math.round(s / 86400) + 'd前';
 };
 const toneOf = (v) => (v == null ? 'flat' : v >= 15 ? 'long' : v <= -15 ? 'short' : 'flat');
+// 0~1 比率 → 整数百分数字符串（不带 %，调用方按需补）；空值 → '—'
+const r0 = (v) => (v == null || !isFinite(v)) ? '—' : Math.round(v * 100);
 
 /**
  * 滑块视图（纯函数）：三态开关必须真实生效（不能是装饰性）：
@@ -94,6 +96,8 @@ export function buildJevModel(inp) {
     else if (rel.relation === 'nodata') nodata++;
     else na++;
     const b = (stats.byHorizon && stats.byHorizon[h.id]) || {};
+    // v1.6.82：随机同 bars 基线（同评估点 / 同 TP·SL / 同 horizon 的全多/全空对照）
+    const bl = (it.baseline && it.baseline.byHorizon && it.baseline.byHorizon[h.id]) || null;
     const slider = sliderView(d ? { strength, conf: d.conf } : null, tsev, cfg.mode);
     rows.push({
       id: h.id, name: h.name, desc: h.desc,
@@ -102,6 +106,7 @@ export function buildJevModel(inp) {
       conf: d && d.conf != null ? d.conf : null,
       type: d ? d.type : null,
       tsev, rel, slider, prog,
+      baseline: bl,
       hit: { n: b.n || 0, wins: b.wins || 0, losses: b.losses || 0, winRate: b.winRate != null ? b.winRate : null, avgPnl: b.avgPnl != null ? b.avgPnl : null, expired: b.expired || 0, noEntry: b.noEntry || 0 }
     });
   }
@@ -127,6 +132,7 @@ export function buildJevModel(inp) {
     pending: stats.pending || 0,
     total: stats.n || 0,
     history: it.history || null,
+    baseline: it.baseline || null,
     minSample: stats.minSample || 50,
     windowDays: stats.windowDays || null,
     local: stats.local || null,
@@ -218,11 +224,14 @@ function rowHtml(r, minSample) {
     : '<div class="jev-tsevline">本机 TSEV 独立样本：看多 ' + nL + '/' + min + ' · 看空 ' + nS + '/' + min +
       '<span class="jev-thr"><i class="' + barCol + '" style="width:' + barPct + '%"></i></span>' +
       '<span class="jev-dim">' + waitTxt + '</span></div>';
-  // 行 3：该档历史命中（到期后才有）
+  // 行 3：该档历史命中（到期后才有）+ 随机同 bars 基线（让命中率可解释：高于/低于无信息基线）
+  const blh = (r.baseline && r.baseline.mean != null && r.hit.n)
+    ? ' · <span title="随机同 bars 基线：在同一批评估点用全做多/全做空跑同一 TP(2×ATR)/SL(1.5×ATR) 的命中率（无方向信息对照）">随机基线 ' + r0(r.baseline.mean) + '%（全多 ' + r0(r.baseline.long) + '/全空 ' + r0(r.baseline.short) + '）</span>'
+    : '';
   const l3 = '<div class="jev-dim jev-hitline">该档已判定 ' + (r.hit.n || 0) + ' 笔' +
     (r.hit.n ? ' · 命中 ' + Math.round(r.hit.winRate * 100) + '%（' + r.hit.wins + '/' + r.hit.n + '）' + (r.hit.avgPnl != null ? ' · 均盈亏 ' + fmtPct(r.hit.avgPnl, 2) : '') : ' · 命中 —（尚未到期）') +
     ((r.hit.expired || 0) ? ' · 未触发 ' + r.hit.expired : '') +
-    ((r.hit.noEntry || 0) ? ' · <span style="color:#f59e0b">无法判定 ' + r.hit.noEntry + '</span>' : '') + '</div>';
+    ((r.hit.noEntry || 0) ? ' · <span style="color:#f59e0b">无法判定 ' + r.hit.noEntry + '</span>' : '') + blh + '</div>';
   // 行 4（仅当无权重且 Jev 有方向）：说清「为什么现在不参与」
   const l4 = (!hasW && r.rel.side && !r.stale)
     ? '<div class="jev-dim" style="font-size:9px">→ 本机 TSEV 还没学到「看' + (r.rel.side === 'long' ? '多' : '空') + '」这个因子，暂不参与强度</div>'
@@ -310,6 +319,8 @@ export function buildJevHistory(decisions, sym, opts = {}) {
   }
   sum.winRate = sum.decided ? sum.win / sum.decided : null;
   sum.avgPnl = sum.pnlN ? sum.pnls / sum.pnlN : null;
+  // v1.6.82：随机同 bars 基线（由调用方 computeJevBaseline 预计算后注入——纯显示，不在此模块触碰 K 线/统计）
+  sum.baseline = opts.baseline || null;
   // 未到期预览汇总（**只覆盖显示的那几行**，明确标注不计入统计）
   const prev = { tp: 0, sl: 0, open: 0, noEntry: 0, none: 0, n: 0 };
   for (const r of rows) {
@@ -349,8 +360,19 @@ export function renderJevHistoryHtml(hist) {
   const sumTxt = '全部 ' + (s.calls || 0) + ' 条判断：已判定 ' + (s.decided || 0) + ' 档 · 命中 ' + (s.win || 0) + ' · 未中 ' + (s.loss || 0) +
     (s.decided ? ' · 命中率 ' + Math.round((s.winRate || 0) * 100) + '%' + (s.avgPnl != null ? ' · 均盈亏 ' + fmtPct(s.avgPnl, 2) : '') : '') +
     (s.expired ? ' · 到期未触发 ' + s.expired : '') + (s.noEntry ? ' · <span style="color:#f59e0b">无法判定 ' + s.noEntry + '</span>' : '') + (s.flat ? ' · 中性 ' + s.flat : '');
+  // v1.6.82：随机同 bars 基线（同评估点 / 同 TP·SL / 同 horizon 的全多·全空对照）+ 理论保本线
+  const bl = s.baseline;
+  const baseTxt = (bl && bl.mean != null && s.decided)
+    ? ' · 随机基线（同 bars·同 TP/SL·同批点）≈' + r0(bl.mean) + '%（全多 ' + r0(bl.long) + ' / 全空 ' + r0(bl.short) + '） · 保本线 ' + r0(bl.breakeven) + '%' +
+      ' · Jev ' + ((s.winRate - bl.mean) >= 0 ? '高于基线 +' : '低于基线 ') + ((s.winRate - bl.mean) * 100).toFixed(1) + 'pp' +
+      (bl.missing ? '（基线覆盖 ' + bl.n + '/' + bl.decided + ' 档：更早记录已滚出 K 线窗口）' : '')
+    : '';
+  const blh = (bl && bl.byHorizon) ? JEV_HORIZON_IDS.filter(h => bl.byHorizon[h] && bl.byHorizon[h].mean != null) : [];
+  const baseH = blh.length
+    ? '<div class="jev-hist-note">分档随机基线：' + blh.map(h => JEV_HORIZON_NAMES[h] + ' ' + r0(bl.byHorizon[h].mean) + '%（全多 ' + r0(bl.byHorizon[h].long) + '/全空 ' + r0(bl.byHorizon[h].short) + '，n=' + bl.byHorizon[h].n + '）').join(' · ') + '</div>'
+    : '';
   const head = '<div class="mar-sep">── 最近 ' + hist.rows.length + ' 笔判断（一次调用一行；下方汇总为全部记录，单位「档」= 超短/短/中/长）──</div>' +
-    '<div class="jev-hist-sum">' + sumTxt + pendTxt + '</div>' +
+    '<div class="jev-hist-sum">' + sumTxt + baseTxt + pendTxt + '</div>' +
     (hist.preview && hist.preview.n && (hist.preview.tp || hist.preview.sl || hist.preview.open) ?
       '<div class="jev-hist-note">👀 预览（<b>未到期 · 不计入统计</b>）：' +
         (hist.preview.tp ? '<span style="color:#2ecc71">已触止盈 ' + hist.preview.tp + '</span> · ' : '') +
@@ -359,6 +381,7 @@ export function renderJevHistoryHtml(hist) {
         (hist.preview.noEntry ? ' · 缺K线 ' + hist.preview.noEntry : '') +
         '（覆盖下方显示的 ' + hist.rows.length + ' 笔，共 ' + hist.preview.n + ' 个未到期档）</div>' : '') +
     (hist.overdue ? '<div class="jev-hist-note" style="color:#f59e0b">⚠ 有 ' + hist.overdue + ' 档应已到期但尚未结算（需 1h/4h/1d K 线覆盖该时段；数据未就绪时下次回填会自动补上）</div>' : '') +
+    baseH +
     '<div class="jev-hist-note">' + (hist.maturityNote || '') + '</div>';
   return head + hist.rows.map(r => historyRowHtml(r)).join('');
 }
@@ -494,7 +517,10 @@ export function renderJevHtml(m) {
     '<div>5. <b>为什么 Jev 不能像经典因子那样回补历史</b>：历史上没有 Jev 的判断记录；且拿历史状态去问，模型训练数据已含此后行情 → 前视污染，所以只能前向累积。</div>' +
     '<div>6. <b>提示与声音</b>：每次判断都会进「<b>最近信号</b>」列表；但只有<b>短档方向发生变化</b>时才弹提示条/发声' +
       '（避免 15m 频率刷屏）。Jev 的默认音效是<b>静音</b>，可在「设置 → 通知与外观 → 分信号音效 → Jev（LLM）判断」里换成其它音效。</div>' +
-    '<div>7. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
+    '<div>7. <b>随机基线</b>：在<b>同一批评估点</b>上用「全做多 / 全做空」跑<b>同一</b> TP(2×ATR)/SL(1.5×ATR)，得到<b>无方向信息时</b>的命中率（≈随机猜方向）。' +
+      '命中率只有<b>高于基线</b>才算有信息；而 TP/SL 先到打平的<b>保本线</b> = SL/(TP+SL) ≈ <b>43%</b>。' +
+      '<span class="jev-dim">基线只覆盖仍能回推入场点的档（更早记录滚出 K 线窗口后不计入，会标注覆盖 n/N）。</span></div>' +
+    '<div>8. 本面板只做<b>显示与本地学习</b>，不接交易。</div>' +
     '</div></details>';
   return head + rel + fill + driver + sliders + rows + scalpBlock + hist + howto + foot;
 }

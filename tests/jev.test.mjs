@@ -15,7 +15,7 @@ import { sliderView, jevTsevRelation, buildJevModel, renderJevHtml, renderJevSet
 import { buildToolBoardModel, renderToolBoardHtml } from '../src/tech2/toolBoard.js';
 import { SIGNAL_KINDS, LIVE_ONLY_SIGNAL_KINDS, signalEventKey } from '../src/tech2/signalAlerts.js';
 import { SOUND_KIND_GROUPS, ALL_SIGNAL_KINDS, defaultSoundFor } from '../src/pwa/signalSounds.js';
-import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg, previewDecisionHorizon, scalpBarsNow, setScalpBars, scalpBarsSuggestion } from '../src/pwa/jevClient.js';
+import { evalDecisionHorizon, jevStats, JEV_EVAL, readJevCfg, previewDecisionHorizon, scalpBarsNow, setScalpBars, scalpBarsSuggestion, counterfactualWin, computeJevBaseline } from '../src/pwa/jevClient.js';
 
 let passed = 0, failed = 0;
 function ok(name, cond) { if (cond) { passed++; } else { failed++; console.log('FAIL:', name); } }
@@ -984,6 +984,82 @@ await fetchTests();
   const someFail = fedMapAfterFeed(plan, { canFeed: true, failed: ['short'] });
   ok('⭐ 单档喂失败 → 只清该档', someFail.short === undefined && someFail.scalp === true);
   ok('fedMap 空入力安全', Object.keys(fedMapAfterFeed(null, {})).length === 0 && Object.keys(fedMapAfterFeed(plan, {})).length === 2);
+})();
+
+// ============ 随机同 bars 基线（v1.6.82：让命中率可解释）============
+(function randomBaseline() {
+  const savedS = globalThis.S;
+  const ev = JEV_EVAL.short;                    // 1h × 24
+  const t0 = 1700000000000;
+  const up = [], upT = [], dn = [], dnT = [];
+  for (let i = 0; i < 200; i++) { up.push(100 + i); upT.push(t0 + i * 3600000); dn.push(200 - i); dnT.push(t0 + i * 3600000); }
+  globalThis.S = {
+    klines: { BTCUSDT: { [ev.tf]: up }, ETHUSDT: { [ev.tf]: dn } },
+    klinesT: { BTCUSDT: { [ev.tf]: upT }, ETHUSDT: { [ev.tf]: dnT } }, indicators: {}
+  };
+  try {
+    const recUp = { sym: 'BTCUSDT', ts: upT[10], matured: true, entry: { short: { tf: ev.tf, price: up[10], atr: 1 } }, dirs: { short: { strength: 74 } }, outcomes: { short: { win: 1, side: 1 } } };
+    const recDn = { sym: 'ETHUSDT', ts: dnT[10], matured: true, entry: { short: { tf: ev.tf, price: dn[10], atr: 1 } }, dirs: { short: { strength: -74 } }, outcomes: { short: { win: 1, side: -1 } } };
+    const cfUp = counterfactualWin(recUp, 'short');
+    ok('counterfactualWin 上涨窗口：全多赢(1) / 全空输(-1)', !!cfUp && cfUp.long === 1 && cfUp.short === -1);
+    const cfDn = counterfactualWin(recDn, 'short');
+    ok('counterfactualWin 下跌窗口：全多输(-1) / 全空赢(1)', !!cfDn && cfDn.long === -1 && cfDn.short === 1);
+    // 横盘：两边都未触 TP/SL → 0
+    const saveK = globalThis.S.klines.BTCUSDT[ev.tf];
+    globalThis.S.klines.BTCUSDT[ev.tf] = new Array(200).fill(100);
+    const cfFlat = counterfactualWin(recUp, 'short');
+    globalThis.S.klines.BTCUSDT[ev.tf] = saveK;
+    ok('counterfactualWin 横盘：两边都 0（窗口内未触发）', !!cfFlat && cfFlat.long === 0 && cfFlat.short === 0);
+    ok('counterfactualWin 未走满到期根数 → null', counterfactualWin({ sym: 'BTCUSDT', ts: upT[190], dirs: { short: { strength: 74 } } }, 'short') === null);
+    ok('counterfactualWin 决策 bar 滚出窗口 → null', counterfactualWin({ sym: 'BTCUSDT', ts: t0 - 9e8, dirs: { short: { strength: 74 } } }, 'short') === null);
+    ok('counterfactualWin entry 缺失 → 用 K 线回推后仍给出对照', (() => { const c = counterfactualWin({ sym: 'BTCUSDT', ts: upT[20], dirs: { short: { strength: 74 } } }, 'short'); return !!c && c.long === 1; })());
+    ok('counterfactualWin 中性档 → null', counterfactualWin(Object.assign({}, recUp, { dirs: { short: { strength: 3 } } }), 'short') === null);
+    ok('counterfactualWin 无 klines → null（不抛）', (() => { const save = globalThis.S; globalThis.S = {}; const r = counterfactualWin(recUp, 'short'); globalThis.S = save; return r === null; })());
+    ok('counterfactualWin 纯显示零副作用（不改记录）', (() => { const rec = Object.assign({}, recUp); counterfactualWin(rec, 'short'); return rec.outcomes.short.win === 1 && rec.matured === true; })());
+
+    // ===== 汇总：只含「已判定且有胜负」的点（与命中率同批）=====
+    const list = [
+      recUp,
+      recDn,
+      { sym: 'BTCUSDT', ts: upT[10], matured: true, entry: { short: { tf: ev.tf, price: up[10], atr: 1 } }, dirs: { short: { strength: 74 } }, outcomes: { short: { win: -1, side: 1 } } },
+      { sym: 'BTCUSDT', ts: upT[10], matured: true, dirs: { short: { strength: 74 } }, outcomes: { short: { win: 0, side: 1, reason: 'no-entry' } } },   // 不计
+      { sym: 'BTCUSDT', ts: upT[10], matured: false, dirs: { short: { strength: 74 } } }                                                                  // 未到期，不计
+    ];
+    const base = computeJevBaseline(list, null);
+    ok('computeJevBaseline：decided = 已判定且有胜负的档（排除 expired/未到期）', base.decided === 3 && base.n === 3);
+    ok('computeJevBaseline 全多 = 2/3（上升窗口 2 + 下降窗口 1）', near(base.long, 2 / 3));
+    ok('computeJevBaseline 全空 = 1/3', near(base.short, 1 / 3));
+    ok('computeJevBaseline mean = 二者均值（市场中性口径）', near(base.mean, 0.5));
+    ok('computeJevBaseline 保本线 = SL/(TP+SL) = 42.9%', near(base.breakeven, 1.5 / 3.5, 1e-9));
+    ok('computeJevBaseline 分档 n 与汇总一致', base.byHorizon.short.n === 3 && near(base.byHorizon.short.mean, 0.5));
+    ok('computeJevBaseline 按币过滤', computeJevBaseline(list, 'ETHUSDT').decided === 1);
+    ok('computeJevBaseline 空输入安全', computeJevBaseline(null, 'X').decided === 0 && computeJevBaseline(null, 'X').mean === null);
+    // missing：把 BTC K 线窗口裁到不含已判定 bar 的到期范围 → 无法回推
+    const saveBt = globalThis.S.klines.BTCUSDT[ev.tf], saveBtT = globalThis.S.klinesT.BTCUSDT[ev.tf];
+    globalThis.S.klines.BTCUSDT[ev.tf] = up.slice(0, 12); globalThis.S.klinesT.BTCUSDT[ev.tf] = upT.slice(0, 12);
+    const baseMiss = computeJevBaseline([recUp, recUp, recDn], null);
+    globalThis.S.klines.BTCUSDT[ev.tf] = saveBt; globalThis.S.klinesT.BTCUSDT[ev.tf] = saveBtT;
+    ok('computeJevBaseline 无法回推的点计入 missing（剔除出基线分母）', baseMiss.decided === 3 && baseMiss.n === 1 && baseMiss.missing === 2);
+
+    // ===== 面板：汇总行 + 分档行 + 逐档行（注入纯对象）=====
+    const blObj = { n: 3, decided: 3, missing: 0, long: 2 / 3, short: 1 / 3, mean: 0.5, breakeven: 1.5 / 3.5, byHorizon: { short: { n: 3, long: 2 / 3, short: 1 / 3, mean: 0.5 } } };
+    const hist = buildJevHistory(list, null, { limit: 10, baseline: blObj });
+    ok('buildJevHistory 把注入的 baseline 放进 summary', !!hist.summary.baseline && near(hist.summary.baseline.mean, 0.5));
+    const html = renderJevHistoryHtml(hist);
+    ok('汇总行显示随机基线 + 全多/全空 + 保本线', html.indexOf('随机基线') > 0 && html.indexOf('全多 67') > 0 && html.indexOf('保本线 43') > 0);
+    ok('汇总行显示 Jev 相对基线的 ±pp', /(高于|低于)基线/.test(html));
+    ok('分档随机基线行', html.indexOf('分档随机基线') > 0 && html.indexOf('短 50%') > 0);
+    const mNoBl = buildJevHistory(list, null, { limit: 10 });
+    ok('未注入 baseline → summary.baseline 为 null（不伪造）', mNoBl.summary.baseline === null && renderJevHistoryHtml(mNoBl).indexOf('随机基线') < 0);
+    const model = buildJevModel({ sym: 'BTCUSDT', cfg: {}, latest: null, decisions: list, stats: jevStats(list, 'BTCUSDT'), status: {}, baseline: blObj });
+    const sh = model.rows.find(r => r.id === 'short');
+    ok('buildJevModel 每档行带 baseline', !!sh.baseline && near(sh.baseline.mean, 0.5));
+    ok('renderJevHtml 逐档命中行显示随机基线', renderJevHtml(model).indexOf('随机基线 50%') > 0);
+    const jh = renderJevHtml(model);
+    ok('renderJevHtml 说明区含随机基线解释 + 保本线 43%', jh.indexOf('随机基线') > 0 && jh.indexOf('保本线') > 0 && jh.indexOf('43%') > 0);
+  } finally {
+    if (savedS === undefined) delete globalThis.S; else globalThis.S = savedS;
+  }
 })();
 
 console.log(`\n=== jev.test: ${passed} passed, ${failed} failed ===`);
