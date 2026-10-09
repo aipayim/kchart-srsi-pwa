@@ -3,7 +3,7 @@
 // 执行 "npm run version:gen" 重新生成。
 export const APP_VERSION = "1.6.84";
 export const APP_TAG = "";
-export const APP_COMMIT = "0629668";
-export const APP_DESCRIBE = "0629668";
+export const APP_COMMIT = "f817490";
+export const APP_DESCRIBE = "f817490";
 export const APP_DIRTY = true;
-export const APP_BUILD_TIME = "2026-10-09T04:22:31.410Z";
+export const APP_BUILD_TIME = "2026-10-09T04:43:05.594Z";
