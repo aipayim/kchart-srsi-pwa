@@ -13,10 +13,13 @@
  * 不修改 src/，不新增依赖（用项目已有 esbuild + playwright）。
  * 任一项断言失败 → exit 1；全过 → exit 0。
  *
+ * 已接入 `npm test`（跟在数测之后）。为不把“未装 Playwright 浏览器”的环境搞红：
+ *  - esbuild / playwright / Chromium 任一不可用 → 打印 `[SUMMARY] SKIP` 并 **exit 0**（醒目提示，不静默）；
+ *  - 需要强制跑（CI）→ 设 `CKX_IDB_VERIFY_REQUIRE=1`（不可用则 exit 1）；
+ *  - 想本地跳过 → 设 `CKX_SKIP_IDB_VERIFY=1`。
+ *
  * 运行：node scripts/verify-idb-autoincrement.mjs
  */
-import { build } from 'esbuild';
-import { chromium } from 'playwright';
 import { createServer } from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,12 +30,12 @@ const CKX_VAULT = path.resolve(ROOT, 'src/persistence/ckxVault.js');
 const EVAL_TIMEOUT_MS = 240_000;
 
 // ---------------------------------------------------------------- 打包入口（IIFE）
-async function makeBundle() {
+async function makeBundle(esbuild) {
   const entry = [
     `import { applyVault, collectVault, exportVaultBytes, importVault } from ${JSON.stringify(CKX_VAULT)};`,
     'globalThis.__ckx = { applyVault, collectVault, exportVaultBytes, importVault };',
   ].join('\n');
-  const res = await build({
+  const res = await esbuild.build({
     stdin: { contents: entry, resolveDir: path.dirname(CKX_VAULT), loader: 'js', sourcefile: 'ckx-entry.js' },
     bundle: true,
     format: 'iife',
@@ -216,9 +219,28 @@ function withTimeout(promise, ms, label) {
 
 async function main() {
   const t0 = Date.now();
+
+  // ---- 依赖探测（缺失即 SKIP，不阻塞 npm test）----
+  const REQUIRE = process.env.CKX_IDB_VERIFY_REQUIRE === '1';
+  const skip = (reason) => {
+    console.log('');
+    if (REQUIRE) { console.error(`[SUMMARY] FAIL —— CKX_IDB_VERIFY_REQUIRE=1 但无法运行：${reason}`); process.exit(1); }
+    console.log('══════════════════════════════════════════════════════════════════');
+    console.log(`[SUMMARY] SKIP —— 真实 Chromium IndexedDB 自增语义未验证：${reason}`);
+    console.log('          安装浏览器后可跑：npx playwright install chromium');
+    console.log('          强制要求本项（CI）：CKX_IDB_VERIFY_REQUIRE=1');
+    console.log('══════════════════════════════════════════════════════════════════');
+    process.exit(0);
+  };
+  if (process.env.CKX_SKIP_IDB_VERIFY === '1') skip('CKX_SKIP_IDB_VERIFY=1（用户显式跳过）');
+
+  let esbuild, chromium;
+  try { esbuild = await import('esbuild'); } catch (e) { return skip('esbuild 不可用（' + ((e && e.message) || e) + '）'); }
+  try { chromium = (await import('playwright')).chromium; } catch (e) { return skip('playwright 不可用（' + ((e && e.message) || e) + '）'); }
+
   let bundle = '';
   try {
-    bundle = await makeBundle();
+    bundle = await makeBundle(esbuild);
   } catch (e) {
     console.error('[FATAL] esbuild 打包失败：', (e && (e.message || e)) || e);
     process.exit(1);
@@ -229,7 +251,13 @@ async function main() {
   const port = server.address().port;
   const url = `http://127.0.0.1:${port}/`;
 
-  const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
+  } catch (e) {
+    server.close();
+    return skip('Chromium 无法启动（' + ((e && e.message) || e) + '）');
+  }
   let R = null;
   try {
     const page = await browser.newPage();

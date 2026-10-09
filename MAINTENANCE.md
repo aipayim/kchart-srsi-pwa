@@ -49,7 +49,7 @@ scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/register-ckx-embed.mjs
 scripts/verify-ckx-sdk.mjs
-scripts/verify-idb-autoincrement.mjs
+scripts/verify-idb-autoincrement.mjs   # 真实 Chromium 自增语义（npm test 内；无浏览器时 SKIP）
 scripts/verify-pwa-data.mjs
 
 # --- src/engine/ ---
