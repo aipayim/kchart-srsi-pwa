@@ -9,7 +9,7 @@
  * 真实 embed（`https://cryptokey.im/ckx/embed/`）需先把本 origin 注册进白名单，否则会被
  * `frame-ancestors` 拒绝（表现为一直等不到 `ckx:ready`）。
  */
-import { createCkxEmbedClient, fetchEmbedPolicy, makeNonce, CKX_EMBED_ORIGIN, CKX_EMBED_URL, CKX_PROTOCOL_V } from './ckxEmbed.js';
+import { createCkxEmbedClient, fetchEmbedPolicy, fetchIntegrators, makeNonce, CKX_EMBED_ORIGIN, CKX_EMBED_URL, CKX_PROTOCOL_V } from './ckxEmbed.js';
 
 const ESC = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 function originOf(url) { try { return new URL(url).origin; } catch (_) { return ''; } }
@@ -172,7 +172,9 @@ export function mountCkxDemo({ win, doc }) {
       <div style="font-size:12px;color:#8fa6bd">宿主 origin</div>
       <div id="dp-origin" style="font-family:ui-monospace,monospace;font-size:12px;margin-bottom:8px"></div>
       <div style="font-size:12px;color:#8fa6bd">真实 embed 白名单状态（GET /v1/ckx/embed/policy）</div>
-      <div id="dp-policy" style="font-size:12px;margin-bottom:0">查询中…</div>
+      <div id="dp-policy" style="font-size:12px;margin-bottom:6px">查询中…</div>
+      <div style="font-size:12px;color:#8fa6bd">公开合作方名单（GET /v1/ckx/integrators · /registry 数据源）</div>
+      <div id="dp-integrators" style="font-size:12px;margin-bottom:0">查询中…</div>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       <label style="font-size:12px;color:#8fa6bd">载体</label>
@@ -219,10 +221,14 @@ export function mountCkxDemo({ win, doc }) {
 
   $('dp-origin').textContent = origin;
   $('dp-policy').textContent = '查询中…';
+  // 0.4.0：policy 只回该 origin 的 {allowed, sla}；全量名单走 /v1/ckx/integrators
   fetchEmbedPolicy(origin).then((p) => {
-    $('dp-policy').textContent = p.allowed ? `✅ 已白名单（active）· 公开列表 ${p.origins.length} 项` : `❌ 未白名单（allowed=false）→ 真实 embed 会被拒绝；公开列表: ${JSON.stringify(p.origins)}`;
+    $('dp-policy').textContent = (p.allowed ? '✅ 已白名单（allowed=true）' : '❌ 未白名单（allowed=false）→ 真实 embed 会被拒绝') + ' · SLA ' + (p.sla || '标准');
     $('dp-policy').style.color = p.allowed ? '#6ee7a8' : '#ffb4b4';
   }).catch((e) => { $('dp-policy').textContent = `查询失败：${e.message}（可能是网络/代理）`; });
+  fetchIntegrators().then((r) => {
+    $('dp-integrators').textContent = `公开名单 ${r.origins.length} 项：${r.origins.join('、')}`;
+  }).catch((e) => { $('dp-integrators').textContent = `查询失败：${e.message}`; });
 
   function newClient() {
     const target = $('dp-target').value;

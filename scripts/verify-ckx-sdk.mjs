@@ -12,8 +12,8 @@
  *   node scripts/verify-ckx-sdk.mjs --json          # 机器可读输出
  *
  * 期望值来源：https://cryptokey.im/ckx/sdk/MANIFEST.json
- *   generatedAt: 2026-10-04T23:26:46.080Z
- *   package @cryptokey/ckx v0.3.0, formatVersion 1, license Apache-2.0
+ *   generatedAt: 2026-10-09T12:31:59.956Z
+ *   package @cryptokey/ckx v0.4.0, formatVersion 1, license Apache-2.0
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
@@ -27,17 +27,17 @@ const VENDOR_DIR = join(REPO, 'src', 'vendor', 'ckx');
 // MANIFEST.json 中的固定期望值（来源见文件头）。请勿手改，除非同步升级 SDK。
 export const EXPECTED = {
   package: '@cryptokey/ckx',
-  version: '0.3.0',
+  version: '0.4.0',
   formatVersion: '1',
-  generatedAt: '2026-10-04T23:26:46.080Z',
+  generatedAt: '2026-10-09T12:31:59.956Z',
   files: {
     'ckx.esm.js': {
-      bytes: 23862,
-      sha384: 'sha384-xaI7CqZ0AokQ5FJgll3MCFYbW9zGGSuA6Vq88YVI1y3LxHAfRgR4KWARCUbUMgVV',
+      bytes: 25599,
+      sha384: 'sha384-B998wtTBfvM0A++6GM4qpeGU0p6KIdju/SXau8MKsjtzU1teRAA8ouSWQSrV1lwZ',
     },
     'ckx.d.ts': {
-      bytes: 12700,
-      sha384: 'sha384-2cwgYdijBHHs03Gzfj8jlXhBR5EE8OTNy6sNjJAsat3qpbREQbOnJC2lJAzzxkKz',
+      bytes: 13450,
+      sha384: 'sha384-aijhVdXs+XZFxCZFgnNPAJmCEyE3M7SD3OwvMrJk9ijp/eOPh3pbNXKhNbS47voY',
     },
     LICENSE: {
       bytes: 11347,

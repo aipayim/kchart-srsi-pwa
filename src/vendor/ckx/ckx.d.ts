@@ -42,12 +42,29 @@ export type CkxCode = (typeof CKX_CODES)[number];
 export declare const CKX_PARAM_ERROR: 'INVALID_PARAMS';
 export type CkxAnyCode = CkxCode | typeof CKX_PARAM_ERROR;
 
+/** 错误码 → 稳定 i18n 键（`ckx.err.*`），宿主据此本地化。 */
+export declare const CKX_MESSAGE_KEYS: Readonly<Record<CkxAnyCode, string>>;
+
+/** 结构化可操作细节；**不含**密钥/部分明文/密码学 oracle。 */
+export interface CkxErrorDetail {
+  field?: string;
+  limit?: number;
+  actual?: number | string;
+  hint?: string;
+}
+
 // ---------------------------------------------------------------- 错误
 
+/**
+ * 错误语义细分（AIDID-2/GEN-6/GEN-7）：`message` 恒为**英文**，`messageKey` 稳定，
+ * `detail` 为结构化细节，`retryable` 表示重试是否有意义。
+ */
 export declare class CkxError extends Error {
   readonly code: CkxAnyCode;
-  readonly detail: string | undefined;
-  constructor(code: CkxAnyCode, message: string, detail?: string);
+  readonly messageKey: string;
+  readonly detail: CkxErrorDetail | undefined;
+  readonly retryable: boolean;
+  constructor(code: CkxAnyCode, message: string, detail?: CkxErrorDetail);
 }
 
 // ---------------------------------------------------------------- 数据类型
@@ -166,8 +183,13 @@ export declare function encryptToVideo(
   meta: CkxMetaInput,
   videoBytes: Uint8Array,
 ): Promise<Uint8Array>;
-/** 介质 E：视频文件字节 → 尾挂容器 → 解密；无合法尾挂抛 `CkxError('CKX_NO_CARRIER')`。 */
-export declare function decryptFromVideo(videoBytes: Uint8Array, password: string): Promise<CkxVideoDecryptResult>;
+/** 介质 E：视频文件字节 → 尾挂容器 → 解密；无合法尾挂抛 `CkxError('CKX_NO_CARRIER')`。
+ *  `options.schema` 与 `decrypt` 一致门禁（不符抛 `CKX_SCHEMA_MISMATCH`）。 */
+export declare function decryptFromVideo(
+  videoBytes: Uint8Array,
+  password: string,
+  options?: CkxDecryptOptions,
+): Promise<CkxVideoDecryptResult>;
 /** 介质 E 纯帧函数：`video || payload || magic || uint64LE(len)`（与站点 trailer 同构）。 */
 export declare function attachVideoTrailer(video: Uint8Array, payload: Uint8Array): Uint8Array;
 /** 介质 E 纯帧函数：切出尾挂 payload；magic 不匹配 / 长度非法 / 太短 → `null`。 */

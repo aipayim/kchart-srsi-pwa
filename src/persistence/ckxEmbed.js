@@ -58,9 +58,11 @@ export function buildInitMessage(nonce, o = {}) {
   if (o.theme) m.theme = o.theme;
   return m;
 }
-export function buildEncryptMessage(nonce, payload, meta) {
+export function buildEncryptMessage(nonce, payload, meta, carrier) {
   const m = { v: CKX_PROTOCOL_V, type: 'ckx:encrypt', nonce, payload };
   if (meta) m.meta = meta;
+  // 0.4.0：mode=image 时宿主可传载体基底（官方修复「静默忽略 carrier」，见 BL-1/AIPAY-1）
+  if (carrier) m.carrier = carrier;
   return m;
 }
 export function buildDecryptMessage(nonce, carrier, carrierName) {
@@ -98,7 +100,10 @@ export async function toArrayBufferAsync(payload) {
   throw new CkxEmbedError('CKX_EMBED_BAD_PAYLOAD', '不支持的载荷类型');
 }
 
-/** 免密钥查询某 origin 的 embed 白名单状态（公开接口）。 */
+/** 免密钥查询某 origin 的 embed 白名单状态（公开接口）。
+ *  ⚠️ 0.4.0 起 policy **只回该 origin 的 `{allowed, sla}`**（不再回全量名单）。
+ *  全量名单用 `fetchIntegrators()`。
+ */
 export async function fetchEmbedPolicy(origin, opts = {}) {
   const f = opts.fetch || (typeof fetch !== 'undefined' ? fetch : null);
   if (!f) throw new CkxEmbedError('CKX_EMBED_NO_FETCH', '当前环境没有 fetch');
@@ -107,7 +112,28 @@ export async function fetchEmbedPolicy(origin, opts = {}) {
   if (origin) url.searchParams.set('origin', origin);
   const res = await f(url.toString(), { headers: { accept: 'application/json' } });
   if (!res.ok) throw new CkxEmbedError('CKX_EMBED_POLICY_HTTP', `policy HTTP ${res.status}`);
-  return await res.json();
+  const body = await res.json();
+  // 兼容 0.3.x（含 origins）与 0.4.0（最小化）：只暴露必要字段 + sla
+  return {
+    allowed: !!body.allowed,
+    sla: body.sla === undefined ? null : body.sla,
+    origin: body.origin === undefined ? (origin || null) : body.origin,
+    freeFeatures: body.freeFeatures || CKX_EMBED_FREE_FEATURES,
+    proFeatures: body.proFeatures || CKX_EMBED_SIGNED_FEATURES,
+    slaLevels: body.slaLevels || null,
+    raw: body,
+  };
+}
+
+/** 全量合作方名单（0.4.0 新增 `/v1/ckx/integrators`，即 `/registry` 公示页数据源）。 */
+export async function fetchIntegrators(opts = {}) {
+  const f = opts.fetch || (typeof fetch !== 'undefined' ? fetch : null);
+  if (!f) throw new CkxEmbedError('CKX_EMBED_NO_FETCH', '当前环境没有 fetch');
+  const base = opts.endpoint || CKX_EMBED_ORIGIN;
+  const res = await f(new URL('/v1/ckx/integrators', base).toString(), { headers: { accept: 'application/json' } });
+  if (!res.ok) throw new CkxEmbedError('CKX_EMBED_INTEGRATORS_HTTP', `integrators HTTP ${res.status}`);
+  const body = await res.json();
+  return { origins: Array.isArray(body.origins) ? body.origins : [], slaByOrigin: body.slaByOrigin || {}, raw: body };
 }
 
 // ---------------------------------------------------------------- 客户端
@@ -138,6 +164,8 @@ export function createCkxEmbedClient(opts = {}) {
   let state = 'idle';           // idle | waiting | ready | closed
   let nonce = null;
   let caps = null;
+  let initMedium = null;        // 上一次 `ckx:init` 实际使用的 medium（embed 的 mode 只在 init 生效）
+  let capWaiters = [];
   let pending = null;
   let readyPromise = null;
   let readyResolve = null;
@@ -169,10 +197,29 @@ export function createCkxEmbedClient(opts = {}) {
     if (!r.ok) { note('ignored', { reason: r.reason }); return; }
     const m = r.msg;
     if (m.type === 'ckx:ready') return onReady(m);
-    if (m.type === 'ckx:capabilities') { caps = { capabilities: m.capabilities || [], pro: !!m.pro, granted: m.granted || [], source: m.source || 'none', expiresAt: m.expiresAt ?? null }; note('capabilities', { pro: caps.pro }); return; }
+    if (m.type === 'ckx:capabilities') {
+      caps = { capabilities: m.capabilities || [], pro: !!m.pro, granted: m.granted || [], source: m.source || 'none', expiresAt: m.expiresAt ?? null };
+      note('capabilities', { pro: caps.pro });
+      const w = capWaiters; capWaiters = [];
+      for (const fn of w) { try { fn(); } catch (_) {} }
+      return;
+    }
     if (m.type === 'ckx:error') return settle(null, new CkxEmbedError(m.code || 'CKX_EMBED_ERROR', m.message || 'embed 返回错误'));
     if (m.type === 'ckx:result' || m.type === 'ckx:plaintext') return settle(m, null);
     note('unhandled', { type: m.type });
+  }
+
+  function sendInit(mode) {
+    initMedium = mode || opts.medium || 'file';
+    try {
+      post(buildInitMessage(nonce, {
+        app: appOrigin,
+        mode: initMedium,
+        label: opts.label,
+        theme: opts.theme,
+        locale: opts.locale,
+      }));
+    } catch (e) { /* iframe 已移除 */ }
   }
 
   function onReady(m) {
@@ -182,19 +229,31 @@ export function createCkxEmbedClient(opts = {}) {
     caps = caps && caps.pro != null ? Object.assign({}, caps, { capabilities: m.capabilities || caps.capabilities, pro: !!m.pro }) : { capabilities: m.capabilities || [], pro: !!m.pro, granted: [], source: 'none', expiresAt: null };
     state = 'ready';
     note('ready', { nonce: String(nonce).slice(0, 8), pro: caps.pro });
-    try {
-      post(buildInitMessage(nonce, {
-        app: appOrigin,
-        mode: opts.medium || 'file',
-        label: opts.label,
-        theme: opts.theme,
-        locale: opts.locale,
-      }));
-    } catch (e) { /* iframe 已移除 */ }
+    sendInit(opts.medium || 'file');
     if (first) {
       if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; }
       if (readyResolve) readyResolve({ capabilities: caps.capabilities.slice(), pro: caps.pro });
     }
+  }
+
+  /**
+   * 切换 embed 的 `mode`：**mode 只在 `ckx:init` 生效**，所以必须重新 init。
+   * 不调用它的后果：`encrypt(payload,{medium:'image',carrier})` 会被 embed 按**旧 mode** 处理（静默产出错介质，实测确认）。
+   * 重新 init 后等 `ckx:capabilities` 确认（最多 `awaitAckMs`，不等也不报错，但会记 `medium-reinit-unacked`）。
+   */
+  async function setMedium(mode, o = {}) {
+    if (!mode) return;
+    if (mode === initMedium) { opts.medium = mode; return; }
+    opts.medium = mode;
+    if (state !== 'ready') return;              // 下次 init 会带上新 mode
+    sendInit(mode);
+    const ms = o.awaitAckMs == null ? 2000 : o.awaitAckMs;
+    const acked = await new Promise((res) => {
+      let done = false;
+      const t = setTimeout(() => { if (!done) { done = true; res(false); } }, ms);
+      capWaiters.push(() => { if (!done) { done = true; clearTimeout(t); res(true); } });
+    });
+    note(acked ? 'medium-reinit' : 'medium-reinit-unacked', { mode });
   }
 
   function settle(msg, err) {
@@ -277,8 +336,10 @@ export function createCkxEmbedClient(opts = {}) {
   async function encrypt(payload, o = {}) {
     await ready();
     const medium = o.medium || opts.medium || 'file';
+    if (medium !== initMedium) await setMedium(medium);   // ⚠️ 否则 embed 会按旧 mode 处理（静默错介质）
     const value = medium === 'text' && typeof payload === 'string' ? payload : await toArrayBufferAsync(payload);
-    const res = await request(buildEncryptMessage(nonce, value, o.meta), '加密');
+    const carrier = o.carrier ? await toArrayBufferAsync(o.carrier) : null;   // mode=image 时的载体基底
+    const res = await request(buildEncryptMessage(nonce, value, o.meta, carrier), '加密');
     if (res.kind === 'ciphertext') return { medium: 'text', text: res.text, meta: res.meta || {}, capabilities: (caps && caps.capabilities) || [] };
     if (res.kind === 'carrier') {
       const f = res.file || {};
@@ -310,9 +371,10 @@ export function createCkxEmbedClient(opts = {}) {
   }
 
   return {
-    ready, encrypt, decrypt, close,
+    ready, encrypt, decrypt, close, setMedium,
     getState: () => state,
     getNonce: () => nonce,
+    getMedium: () => initMedium || opts.medium || 'file',
     getCapabilities: () => (caps ? Object.assign({}, caps) : null),
     getLog: () => log.slice(),
     getEmbedUrl: () => embedSrc,

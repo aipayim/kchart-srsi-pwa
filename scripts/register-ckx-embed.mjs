@@ -13,6 +13,7 @@
  *   node scripts/register-ckx-embed.mjs --origin https://srsi.openapi.im --verify   # 完成验证
  *   node scripts/register-ckx-embed.mjs --origin https://srsi.openapi.im --status   # 查询状态
  *   node scripts/register-ckx-embed.mjs --origin https://srsi.openapi.im --policy   # 查询白名单是否生效
+ *   node scripts/register-ckx-embed.mjs --integrators                              # 公开合作方名单（/registry 数据源）
  *
  * 环境：Node ≥18（自带 fetch/WebCrypto）。受限网络下 Node 不读 http_proxy；可试
  *   `NODE_USE_ENV_PROXY=1 http_proxy=... https_proxy=... node scripts/register-ckx-embed.mjs ...`
@@ -64,7 +65,7 @@ async function jsonFetch(url, init = {}, fetchImpl = globalThis.fetch) {
 }
 
 function usage() {
-  process.stdout.write(`用法: node scripts/register-ckx-embed.mjs --origin <origin> [--write] [--verify] [--status] [--policy] [--json] [--endpoint <url>]\n`);
+  process.stdout.write(`用法: node scripts/register-ckx-embed.mjs --origin <origin> [--write] [--verify] [--status] [--policy] [--integrators] [--json] [--endpoint <url>]\n`);
 }
 
 export async function main(argv = process.argv.slice(2), deps = {}) {
@@ -77,7 +78,14 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   const val = (f) => { const i = argv.indexOf(f); return i >= 0 ? argv[i + 1] : null; };
   const json = has('--json');
   const endpoint = (val('--endpoint') || DEFAULT_ENDPOINT).replace(/\/+$/, '');
+  if (has('--integrators')) { /* 无需 --origin，见下方早退分支 */ }
   const originRaw = val('--origin');
+  if (has('--integrators')) {
+    const ir = await jsonFetch(`${endpoint}/v1/ckx/integrators`, {}, fetchImpl);
+    if (json) return { ok: ir.ok, integrators: ir.body, steps: [{ step: 'integrators', ok: ir.ok, body: ir.body }] };
+    log(`integrators: ${JSON.stringify((ir.body && ir.body.origins) || [])}`);
+    return { ok: ir.ok, integrators: ir.body };
+  }
   if (!originRaw || has('-h') || has('--help')) { usage(); return { ok: false, error: 'USAGE' }; }
   const norm = normalizeOrigin(originRaw);
   if (!norm.ok) { log(`❌ 非法 origin: ${originRaw}（需要 http(s)://host[:port]，禁 * / null）`); return { ok: false, error: norm.error }; }
@@ -89,7 +97,8 @@ export async function main(argv = process.argv.slice(2), deps = {}) {
   if (has('--policy')) {
     const r = await jsonFetch(`${endpoint}/v1/ckx/embed/policy?origin=${encodeURIComponent(origin)}`, {}, fetchImpl);
     emit({ step: 'policy', ok: r.ok, body: r.body });
-    if (!json) log(`policy: allowed=${r.body && r.body.allowed} origins=${JSON.stringify((r.body && r.body.origins) || [])}`);
+    // 0.4.0：只回该 origin 的 {allowed, sla}（不再含全量 origins；全量见 --integrators）
+    if (!json) log(`policy: allowed=${r.body && r.body.allowed} sla=${r.body && r.body.sla}（全量名单请用 --integrators）`);
     return { ok: r.ok, origin, policy: r.body, ...out };
   }
   if (has('--status')) {

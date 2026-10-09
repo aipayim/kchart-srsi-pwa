@@ -161,8 +161,9 @@ function makeFakeEmbed({ embedOrigin = CKX_EMBED_ORIGIN, cryptoMode = 'fake', fa
   check('P12 toArrayBufferAsync Uint8Array 偏移正确', new Uint8Array(await toArrayBufferAsync(new Uint8Array([9, 1, 2, 3]).subarray(1)))[0] === 1);
   await rejects('P13 toArrayBufferAsync 非法类型', () => toArrayBufferAsync(42), 'CKX_EMBED_BAD_PAYLOAD');
 
-  const pol = await fetchEmbedPolicy('https://x.test', { fetch: async (u) => ({ ok: true, json: async () => ({ ok: true, allowed: true, url: String(u) }) }) });
-  check('P14 fetchEmbedPolicy 拼 origin 参数', pol.allowed === true && pol.url.includes('origin=https%3A%2F%2Fx.test'));
+  const seenPolicy = [];
+  const pol = await fetchEmbedPolicy('https://x.test', { fetch: async (u) => { seenPolicy.push(String(u)); return { ok: true, json: async () => ({ ok: true, allowed: true }) }; } });
+  check('P14 fetchEmbedPolicy 拼 origin 参数 + 归一化（0.4.0 无 origins）', pol.allowed === true && seenPolicy[0].includes('origin=https%3A%2F%2Fx.test') && !('origins' in pol), seenPolicy[0]);
   check('P15 CKX_EMBED_ORIGIN 常量', CKX_EMBED_ORIGIN === 'https://cryptokey.im' && CKX_PROTOCOL_V === 1);
 }
 
@@ -342,6 +343,42 @@ function fakeLs(init = {}) {
   const sdkBytes = await CKX.encryptToFile('{"hello":1}', 'pw-in-embed', { app: 'https://x' });
   const embedDec = await client.decrypt(sdkBytes);
   check('X2 embed 能解 SDK 产物', embedDec.text === '{"hello":1}');
+  client.close();
+}
+
+// ---------------------------------------------------------------- 10) medium 只在 ckx:init 生效 → 切换必须重新 init
+// 回归（浏览器子代理实测抓出的客户端隐患）：client 用默认 medium 建好后，encrypt({medium:'image',carrier})
+// 若不重新 init，embed 仍按旧 mode 处理 → **静默产出错介质**。
+{
+  const modes = [];
+  const env = createFakeEnv({
+    embed: {
+      onLoad({ fromEmbed }) { fromEmbed({ v: 1, type: 'ckx:ready', formatVersion: '1', nonce: 'n10', capabilities: ['text', 'image', 'file'], pro: false }); },
+      onMessage(msg, { fromEmbed }) {
+        if (msg.type === 'ckx:init') { modes.push(msg.mode); fromEmbed({ v: 1, type: 'ckx:capabilities', nonce: 'n10', capabilities: ['text', 'image', 'file'], pro: false, granted: [], expiresAt: null, source: 'none' }); return; }
+        if (msg.type === 'ckx:encrypt') {
+          const mode = modes[modes.length - 1];
+          const file = mode === 'image'
+            ? { name: 'c.png', mime: 'image/png', bytes: new ArrayBuffer(4) }
+            : { name: 'c.ckx', mime: 'application/octet-stream', bytes: new ArrayBuffer(4) };
+          fromEmbed({ v: 1, type: 'ckx:result', nonce: 'n10', kind: 'carrier', file, meta: {} });
+        }
+      },
+    },
+  });
+  const client = createCkxEmbedClient({ win: env.win, doc: env.doc, timeoutMs: 3000 });   // 客户端默认 medium=file
+  await client.ready();
+  await new Promise((r) => setTimeout(r, 20));   // 等假 embed 处理排队的 ckx:init
+  check('M10a 初始 ckx:init 的 mode=file', modes[0] === 'file', modes.join(','));
+  const out = await client.encrypt('p', { medium: 'image', carrier: new ArrayBuffer(8) });
+  check('M10b 切换 medium 触发了重新 ckx:init(mode=image)', modes.includes('image'), modes.join(','));
+  check('M10c 结果按新 mode 处理（mime=image/png）', out.mime === 'image/png', out.mime);
+  check('M10d getMedium() 已更新为 image', client.getMedium() === 'image', client.getMedium());
+  check('M10e 日志记录 medium-reinit', client.getLog().some((l) => String(l.evt).startsWith('medium-reinit')), JSON.stringify(client.getLog().slice(-3)));
+  // 同 medium 再调一次不应重复 init
+  const before = modes.length;
+  await client.encrypt('q', { medium: 'image' });
+  check('M10f 同 medium 不重复 init', modes.length === before, `${before} -> ${modes.length}`);
   client.close();
 }
 

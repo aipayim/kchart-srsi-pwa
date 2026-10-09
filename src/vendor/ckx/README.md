@@ -7,10 +7,10 @@
 | 项 | 值 |
 |---|---|
 | 包名 | `@cryptokey/ckx` |
-| 版本 | **0.3.0** |
+| 版本 | **0.4.0** |
 | 规范 | CKX format version **1**（`SAFE v3` 容器） |
-| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-latest.zip`（60,729 B） |
-| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-04T23:26:46.080Z`） |
+| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-latest.zip`（63,900 B） |
+| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-09T12:31:59.956Z`） |
 | 许可 | **Apache-2.0**（见同目录 `LICENSE`；商标/Logo 不在授权内，本项目不使用其商标） |
 | 运行时依赖 | 无（zero dependencies，仅 Web Crypto） |
 | 引擎要求 | Node ≥ 18 / 现代浏览器（需 `crypto.subtle`） |
@@ -19,8 +19,8 @@
 
 | 文件 | 字节 | sha384 |
 |---|---|---|
-| `ckx.esm.js` | 23,862 | `sha384-xaI7CqZ0AokQ5FJgll3MCFYbW9zGGSuA6Vq88YVI1y3LxHAfRgR4KWARCUbUMgVV` |
-| `ckx.d.ts` | 12,700 | `sha384-2cwgYdijBHHs03Gzfj8jlXhBR5EE8OTNy6sNjJAsat3qpbREQbOnJC2lJAzzxkKz` |
+| `ckx.esm.js` | 25,599 | `sha384-B998wtTBfvM0A++6GM4qpeGU0p6KIdju/SXau8MKsjtzU1teRAA8ouSWQSrV1lwZ` |
+| `ckx.d.ts` | 13,450 | `sha384-aijhVdXs+XZFxCZFgnNPAJmCEyE3M7SD3OwvMrJk9ijp/eOPh3pbNXKhNbS47voY` |
 | `LICENSE` | 11,347 | `sha384-GM/3Jrs/y6+jGEosIuuAA1h6oD7Y9C3DghiynB5tWJofjn4Y6qvz9QFSh0PzRZBv` |
 
 校验：`node scripts/verify-ckx-sdk.mjs`（也可 `npm run verify:ckx`）。该校验使用 Node 内置
@@ -43,6 +43,14 @@ await CKX.encryptToFile(payload, password, { app, schema, schemaVersion });
 - 介质 **D**（`.ckx` 文件 = `SAFE v3` 容器原字节）为本项目推荐的默认导出格式。
 - 介质 A（base64url 文本）/ B（PNG 文本 LSB）/ E（视频尾挂）为可选载体；图片/视频易被压缩/转码损坏。
 - 免费开放层能力：`text` / `image` / `file` / `video`，**本地使用不发任何服务端请求**、不耗额度。
+
+## 破坏性变更（0.3.0 → 0.4.0，2026-10-09）
+
+- `CkxError.detail` 由 `string` 改为**结构化对象** `{field?,limit?,actual?,hint?}`；新增 `messageKey`（`ckx.err.*`，稳定 i18n 键）与 `retryable`（boolean）。
+  **本项目未读取 CKX 的 `err.detail`**（只用 `.code`/`.message`），故无代码影响；如日后要展示细节，请读 `messageKey` 或 `detail.hint`。
+- 错误语义细分：非 CKX 载体 → `CKX_NO_CARRIER`；载体结构损坏 → `CKX_CARRIER_DAMAGED`；GCM 认证失败 → `CKX_WRONG_PASSWORD`（不做密码/篡改 oracle 细分）。
+- `decryptFromVideo(video, password, options?)` 与 `decrypt` 对齐：支持 `options.schema` 并在不符时抛 `CKX_SCHEMA_MISMATCH`。
+- 服务端：`GET /v1/ckx/embed/policy?origin=` **只回该 origin 的 `{allowed, sla}`**（不再回全量名单）；全量名单改由 `GET /v1/ckx/integrators`（`/registry` 数据源）。
 
 ## 升级步骤
 

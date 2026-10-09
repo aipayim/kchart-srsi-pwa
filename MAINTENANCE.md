@@ -128,6 +128,7 @@ scripts/verify-pwa-data.mjs
   chanlunDisplay.test.mjs
   ckxBackup.test.mjs
   ckxEmbed.test.mjs
+  ckxErrors040.test.mjs
   ckxIdbRestore.test.mjs
   ckxVault.test.mjs
   consistency.test.mjs
