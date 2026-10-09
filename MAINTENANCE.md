@@ -27,6 +27,7 @@ GOAL.md
 LICENSE
 MAINTENANCE.md
 README.md
+ckx-demo.html
 index.html
 kchart.html
 package-lock.json
@@ -36,6 +37,7 @@ version.generated.js
 vite.config.js
 
 # --- public/ ---
+public/.well-known/cryptokey-ckx.txt
 public/_redirects
 public/favicon.png
 public/pwa-192.png
@@ -45,6 +47,8 @@ public/tsev-weights.json
 # --- scripts/ ---
 scripts/gen-icon.mjs
 scripts/gen-version.mjs
+scripts/register-ckx-embed.mjs
+scripts/verify-ckx-sdk.mjs
 scripts/verify-pwa-data.mjs
 
 # --- src/engine/ ---
@@ -102,18 +106,30 @@ scripts/verify-pwa-data.mjs
   exchange/orderState.js
   legacy.js
   main.js
+  persistence/ckxDemo.js
+  persistence/ckxEmbed.js
+  persistence/ckxVault.js
   persistence/indexdb.js
   styles.css
   version.generated.js
+
+# --- src/vendor/ckx/（vendored 第三方 SDK @cryptokey/ckx v0.3.0，Apache-2.0，逐字节原样） ---
+  vendor/ckx/LICENSE
+  vendor/ckx/README.md
+  vendor/ckx/ckx.d.ts
+  vendor/ckx/ckx.esm.js
 
 # --- tests/ ---
   adaptivePanel.test.mjs
   adaptivePortfolio.test.mjs
   chanlun.test.mjs
   chanlunDisplay.test.mjs
+  ckxEmbed.test.mjs
+  ckxVault.test.mjs
   consistency.test.mjs
   disciplineAnalysis.test.mjs
   fixtures/bnbusdt_klines.json
+  fixtures/ckx-test-vectors.json
   jev.test.mjs
   jevSrsiAudit.test.mjs
   jevSrsiStats.test.mjs
@@ -168,7 +184,7 @@ scripts/verify-pwa-data.mjs
 
 ```bash
 # ① 在源码版改代码
-cd /mnt/d/TEST/app/app36-trader-hst
+cd <MAIN_REPO>
 # …编辑 src/tech2/kchart.js / src/pwa/* / src/engine/* …
 npm test                 # 全量测试必须全绿（kchart 295 + 其余）
 
@@ -177,16 +193,26 @@ npm test                 # 全量测试必须全绿（kchart 295 + 其余）
 node scripts/gen-tsev-weights.mjs
 
 # ② 仅把白名单内改动同步到脱敏版
-cp src/tech2/kchart.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/tech2/kchart.js
-cp src/engine/disciplineAnalysis.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/engine/disciplineAnalysis.js
-cp src/engine/srsiOptimizer.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/engine/srsiOptimizer.js  # SRSI 优选器（kchart.js 已 import，须随包发布）
-cp src/pwa/localLoop.js /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/src/pwa/localLoop.js
-cp public/tsev-weights.json /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/public/tsev-weights.json
+cp src/tech2/kchart.js <SANITIZED_REPO>/src/tech2/kchart.js
+cp src/engine/disciplineAnalysis.js <SANITIZED_REPO>/src/engine/disciplineAnalysis.js
+cp src/engine/srsiOptimizer.js <SANITIZED_REPO>/src/engine/srsiOptimizer.js  # SRSI 优选器（kchart.js 已 import，须随包发布）
+cp src/pwa/localLoop.js <SANITIZED_REPO>/src/pwa/localLoop.js
+cp public/tsev-weights.json <SANITIZED_REPO>/public/tsev-weights.json
 # 若改了测试，也同步：
-cp tests/kchart.test.mjs /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版/tests/kchart.test.mjs
+cp tests/kchart.test.mjs <SANITIZED_REPO>/tests/kchart.test.mjs
+
+# 若动了 CKX 集成（加密备份 / iframe embed），同步这些白名单文件：
+cp src/persistence/ckxVault.js src/persistence/ckxEmbed.js src/persistence/ckxDemo.js <SANITIZED_REPO>/src/persistence/
+cp -r src/vendor/ckx <SANITIZED_REPO>/src/vendor/
+cp tests/ckxVault.test.mjs tests/ckxEmbed.test.mjs <SANITIZED_REPO>/tests/
+cp tests/fixtures/ckx-test-vectors.json <SANITIZED_REPO>/tests/fixtures/
+cp scripts/verify-ckx-sdk.mjs scripts/register-ckx-embed.mjs <SANITIZED_REPO>/scripts/
+cp ckx-demo.html <SANITIZED_REPO>/ckx-demo.html
+mkdir -p <SANITIZED_REPO>/public/.well-known && cp public/.well-known/cryptokey-ckx.txt <SANITIZED_REPO>/public/.well-known/
+# 并同步 package.json（version / test 链 / verify:ckx 脚本）与 vite.config.js（ckxDemo 构建入口）两个变体文件
 
 # ③ 在脱敏版跑精简测试 + 构建
-cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版
+cd <SANITIZED_REPO>
 npm test                 # 仅 kchart + consistency（白名单测试）
 npm run build            # 产出 dist/
 
@@ -209,7 +235,7 @@ git push origin main
 ```bash
 # ⚠️ 必须整条 && 链执行：先 cd 到本仓库并打印 pwd + ls dist/assets（防错门），再注入凭证部署。
 # 历史事故：曾多次在主仓 cwd 误部署未脱敏产物 → 必须有防错门。
-cd /mnt/d/TEST/app/app36-trader-hst/kchart-srsi-pwa-脱敏版 && pwd && ls dist/assets \
+cd <SANITIZED_REPO> && pwd && ls dist/assets \
   && [ -f package.json ] \
   && ! ls dist/assets/main-*.js >/dev/null 2>&1 \
   && ls dist/assets/kchart-*.js >/dev/null 2>&1 \

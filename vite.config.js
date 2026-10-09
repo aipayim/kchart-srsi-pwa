@@ -60,7 +60,8 @@ export default defineConfig({
     sourcemap: true,
     rollupOptions: {
       input: {
-        kchart: 'kchart.html'
+        kchart: 'kchart.html',
+        ckxDemo: 'ckx-demo.html'
       }
     }
   }
