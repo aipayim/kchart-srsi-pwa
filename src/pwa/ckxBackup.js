@@ -216,7 +216,7 @@ function $(id) { return typeof document !== 'undefined' ? document.getElementByI
 function msg(text, color) { const m = $('pwaCkxMsg'); if (m) { m.textContent = text || ''; m.style.color = color || 'var(--text2)'; } }
 function impMsg(text, color) { const m = $('pwaCkxImpMsg'); if (m) { m.textContent = text || ''; m.style.color = color || 'var(--text2)'; } }
 
-function cardHtml() {
+export function ckxCardHtml() {
   return '' +
     '<div class="ckx-sec">' +
       '<div id="pwaCkxPlan" class="ckx-plan">读取本机数据…</div>' +
@@ -231,6 +231,7 @@ function cardHtml() {
         '<button id="pwaCkxExpEmbed">🌐 CKX 在线导出</button>' +
         '<button id="pwaCkxRefreshPlan">刷新概览</button>' +
       '</div>' +
+      '<div id="pwaCkxMsg" class="ckx-hint"></div>' +
       '<div class="ckx-hint">口令即一切：CKX 无服务端、<b>无法找回</b>。图片/视频载体易损坏，推荐 .ckx 文件。</div>' +
     '</div>' +
     '<div class="ckx-sec">' +
@@ -421,7 +422,7 @@ export function renderCkxBackup() {
   if (!body) return;
   if (!body.__built) {
     body.__built = true;
-    body.innerHTML = cardHtml();
+    body.innerHTML = ckxCardHtml();
     bindCkxBackup();
     renderPlan();
     refreshList();

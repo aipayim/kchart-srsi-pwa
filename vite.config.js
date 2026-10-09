@@ -29,6 +29,8 @@ export default defineConfig({
         // （线上每次拉最新 HTML，断网才回退缓存），并保留 cleanup/clientsClaim/skipWaiting 自愈。
         globPatterns: ['**/*.{js,css,html,png,svg,ico,webmanifest}'],
         navigateFallback: 'kchart.html',
+        // 同源 iframe 自检页（mock embed）不能被 SW 回退成应用壳，否则收不到 ckx:ready
+        navigateFallbackDenylist: [/ckx-demo/],
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,

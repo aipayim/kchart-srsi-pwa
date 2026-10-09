@@ -6,7 +6,7 @@
 import {
   fmtBytes, mediumLabel, methodLabel, trimBackups, planLines, backupRowsHtml, previewHtml,
   listBackups, saveBackup, deleteBackup, clearBackups, exportBackup, previewBackup, applyBackup,
-  BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
+  ckxCardHtml, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
 } from '../src/pwa/ckxBackup.js';
 import { collectVault, VAULT_SCHEMA_ID, VAULT_CODES } from '../src/persistence/ckxVault.js';
 
@@ -61,6 +61,16 @@ const sampleDeps = () => ({ ls: fakeLs({ smartTrader: '{"a":1}', pwa_zoom: '1.25
   const prevSec = previewHtml(Object.assign({}, sum, { hasSecrets: true }), null);
   check('F11 previewHtml 含凭证提示', prevSec.includes('含凭证'));
   check('F12 previewHtml 空输入安全', previewHtml(null) === '');
+
+  // 回归（生产 E2E 抓出）：卡片必须真的渲染出所有被绑定的元素 id，否则 msg() 变 no-op（导出/删除无反馈）
+  const cardIds = ['pwaCkxPlan', 'pwaCkxMedium', 'pwaCkxSecrets', 'pwaCkxPw', 'pwaCkxPw2',
+    'pwaCkxExpLocal', 'pwaCkxExpEmbed', 'pwaCkxRefreshPlan', 'pwaCkxMsg',
+    'pwaCkxFile', 'pwaCkxPaste', 'pwaCkxClearIn', 'pwaCkxImpPw',
+    'pwaCkxPrevLocal', 'pwaCkxPrevEmbed', 'pwaCkxPrev', 'pwaCkxImpMsg',
+    'pwaCkxList', 'pwaCkxClearAll'];
+  const cardHtml = ckxCardHtml();
+  const missingIds = cardIds.filter((id) => !cardHtml.includes('id="' + id + '"'));
+  check('F13 ckxCardHtml 含全部绑定元素 id', missingIds.length === 0, missingIds.join(','));
 }
 
 // ---------------------------------------------------------------- 2) 备份存储
