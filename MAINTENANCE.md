@@ -49,6 +49,7 @@ scripts/gen-icon.mjs
 scripts/gen-version.mjs
 scripts/register-ckx-embed.mjs
 scripts/verify-ckx-sdk.mjs
+scripts/verify-idb-autoincrement.mjs
 scripts/verify-pwa-data.mjs
 
 # --- src/engine/ ---
@@ -127,6 +128,7 @@ scripts/verify-pwa-data.mjs
   chanlunDisplay.test.mjs
   ckxBackup.test.mjs
   ckxEmbed.test.mjs
+  ckxIdbRestore.test.mjs
   ckxVault.test.mjs
   consistency.test.mjs
   disciplineAnalysis.test.mjs
