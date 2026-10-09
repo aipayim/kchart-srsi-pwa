@@ -901,3 +901,21 @@ body.pwa .ja-p2-l{color:var(--text)}
 body.pwa .ja-p2-d{color:#6B7688;font-size:9.5px}
 body.pwa .ja-p2-x{font-size:9.5px;color:#7d8a9c;margin-top:4px;line-height:1.5}
 body.pwa .ja-p2-note{font-size:9px;color:#6B7688;margin-top:3px;line-height:1.5}
+
+/* ===== CKX 加密备份 / 恢复（设置页卡，v1.6.84） ===== */
+body.pwa .ckx-sec { border-top: 1px solid var(--border); padding: 8px 0; }
+body.pwa .ckx-sec:first-child { border-top: 0; padding-top: 2px; }
+body.pwa .ckx-sub { font-size: 11px; color: var(--text2); margin: 2px 0 6px; display: flex; align-items: center; gap: 8px; }
+body.pwa .ckx-plan { font-size: 10px; color: var(--text2); line-height: 1.7; margin-bottom: 6px; }
+body.pwa .ckx-hint { font-size: 10px; color: var(--text2); line-height: 1.6; margin-top: 4px; }
+body.pwa .ckx-chk { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text2); }
+body.pwa .ckx-primary { border-color: var(--accent) !important; color: var(--accent) !important; }
+body.pwa .ckx-tiny { font-size: 10px !important; padding: 1px 6px !important; }
+body.pwa .ckx-prev { font-size: 10px; color: var(--text2); line-height: 1.7; background: var(--card2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; margin: 6px 0; }
+body.pwa .ckx-prev code { font-size: 10px; color: var(--accent); }
+body.pwa .ckx-row { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text2); padding: 3px 0; border-bottom: 1px dashed var(--border); }
+body.pwa .ckx-row:last-child { border-bottom: 0; }
+body.pwa .ckx-row-t { flex: 0 0 auto; }
+body.pwa .ckx-row-m { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.pwa .ckx-row-b { font-size: 10px !important; padding: 1px 7px !important; }
+body.pwa .ckx-del { border-color: #ff5252 !important; color: #ff8a8a !important; }

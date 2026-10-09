@@ -76,6 +76,7 @@ scripts/verify-pwa-data.mjs
   pwa/alphaCore.js
   pwa/alphaLab.js
   pwa/carryLeg.js
+  pwa/ckxBackup.js
   pwa/data.js
   pwa/jevClient.js
   pwa/jevSrsiAudit.js
@@ -124,6 +125,7 @@ scripts/verify-pwa-data.mjs
   adaptivePortfolio.test.mjs
   chanlun.test.mjs
   chanlunDisplay.test.mjs
+  ckxBackup.test.mjs
   ckxEmbed.test.mjs
   ckxVault.test.mjs
   consistency.test.mjs

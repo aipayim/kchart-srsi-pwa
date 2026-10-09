@@ -28,6 +28,7 @@ import {
   onAuditChange, pairStats as auditPairStats
 } from './jevSrsiAudit.js';
 import { JEV_HORIZONS, JEV_MODES } from '../engine/jevState.js';
+import { renderCkxBackup, bindCkxBackup } from './ckxBackup.js';
 import {
   readJevCfg, patchJevCfg, jevStats, listDecisions, setJevToken, hasJevToken, previewDecisionHorizon, computeJevBaseline,
   testJevConnection, probeJevShapes, runJevOnce, clearDecisions, jevStatus, onJevChange,
@@ -1794,6 +1795,7 @@ export function refreshShell() {
   if (_curTab === 'settings') {      // 设置页：刷新 Jev 明细（默认收起；节流读 IndexedDB）
     try { renderJevSetHistory(); } catch (e) { /* 明细刷新失败不影响其它 */ }
     try { refreshJevData(false, 5000); } catch (e) { /* 忽略 */ }
+    try { renderCkxBackup(); } catch (e) { /* CKX 备份卡刷新失败不影响其它 */ }
     return;
   }
   if (_curTab !== 'kline') return;   // 其余页只需实时价
@@ -1849,6 +1851,7 @@ export function initPwaShell() {
   applyCollapseUI();
   initSettings();
   bindStorageCard();
+  try { bindCkxBackup(); } catch (e) {}
   bindCockpitAcc();
   bindEngine();
   bindToolBoard();
