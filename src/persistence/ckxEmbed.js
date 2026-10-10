@@ -256,6 +256,18 @@ export function createCkxEmbedClient(opts = {}) {
   function onReady(m) {
     if (state === 'closed') return;
     const first = state !== 'ready';
+    // 会话重启（例：embed 空闲超时后自动重开新会话 → 换 nonce）时，
+    // 把在途请求立即以明确错误结束；否则旧会话的 ckx:error 会被新 nonce 校验忽略，一直挂到自身 timeoutMs。
+    if (state === 'ready' && nonce && m.nonce !== nonce) {
+      if (pending) {
+        const p = pending; pending = null;
+        if (p.timer) clearTimeout(p.timer);
+        note('session-restarted');
+        try { p.reject(new CkxEmbedError('CKX_EMBED_SESSION_RESTARTED', 'embed 会话已重启（可能因空闲超时自动重开），本次操作已作废，请重试')); } catch (_) {}
+      } else {
+        note('session-restarted');
+      }
+    }
     nonce = m.nonce;
     caps = caps && caps.pro != null ? Object.assign({}, caps, { capabilities: m.capabilities || caps.capabilities, pro: !!m.pro }) : { capabilities: m.capabilities || [], pro: !!m.pro, granted: [], source: 'none', expiresAt: null };
     state = 'ready';

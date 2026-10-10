@@ -382,5 +382,34 @@ function fakeLs(init = {}) {
   client.close();
 }
 
+// ---------------------------------------------------------------- 11) embed 会话重启（超时后自动重开）→ 在途请求必须快速失败
+// 浏览器实测：embed 空闲超时后会换 nonce 自动重开；旧会话的 ckx:error 会被新 nonce 校验忽略 → 请求挂到自身 timeoutMs。
+{
+  let readyCount = 0;
+  const env = createFakeEnv({
+    embed: {
+      onLoad({ fromEmbed }) { readyCount++; fromEmbed({ v: 1, type: 'ckx:ready', formatVersion: '1', nonce: 'sess-' + readyCount, capabilities: ['file'], pro: false }); },
+      onMessage(msg, { fromEmbed }) {
+        if (msg.type === 'ckx:init') { fromEmbed({ v: 1, type: 'ckx:capabilities', nonce: 'sess-' + readyCount, capabilities: ['file'], pro: false, granted: [], expiresAt: null, source: 'none' }); return; }
+        // 故意不回复 ckx:encrypt（模拟用户未操作 → 超时重开）
+        if (msg.type === 'ckx:encrypt') {
+          setTimeout(() => { readyCount++; fromEmbed({ v: 1, type: 'ckx:ready', formatVersion: '1', nonce: 'sess-' + readyCount, capabilities: ['file'], pro: false }); }, 30);
+        }
+      },
+    },
+  });
+  const client = createCkxEmbedClient({ win: env.win, doc: env.doc, timeoutMs: 60000 });  // 自身超时很长
+  await client.ready();
+  await new Promise((r) => setTimeout(r, 20));
+  const t0 = Date.now();
+  const e = await client.encrypt('x', { medium: 'file' }).then(() => null, (err) => err);
+  const ms = Date.now() - t0;
+  check('N1 会话重启 → 在途请求以 CKX_EMBED_SESSION_RESTARTED 失败', !!e && e.code === 'CKX_EMBED_SESSION_RESTARTED', e && e.code);
+  check('N2 快速失败（未等到自身 60s 超时）', ms < 5000, ms + 'ms');
+  check('N3 日志记录 session-restarted', client.getLog().some((l) => l.evt === 'session-restarted'), '');
+  check('N4 重启后 nonce 已更新', client.getNonce() === 'sess-' + readyCount, client.getNonce());
+  client.close();
+}
+
 console.log(fails === 0 ? '\nALL PASS' : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);

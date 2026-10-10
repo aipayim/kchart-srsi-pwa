@@ -6,7 +6,7 @@
 import {
   fmtBytes, mediumLabel, methodLabel, trimBackups, planLines, backupRowsHtml, previewHtml,
   listBackups, saveBackup, deleteBackup, clearBackups, exportBackup, previewBackup, applyBackup,
-  ckxCardHtml, ckxTrustHtml, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
+  ckxCardHtml, ckxTrustHtml, ckxEmbedCfg, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
 } from '../src/pwa/ckxBackup.js';
 import { collectVault, VAULT_SCHEMA_ID, VAULT_CODES } from '../src/persistence/ckxVault.js';
 
@@ -78,6 +78,13 @@ const sampleDeps = () => ({ ls: fakeLs({ smartTrader: '{"a":1}', pwa_zoom: '1.25
   check('F15 信任条含 SDK 版本与 sha384 前缀', trust.includes('0.4.0') && /sha384-8jfvvqC/.test(trust), '');
   check('F16 信任条声明「不自行实现密码学」并给出官方清单/注册表链接', /不自行实现密码学/.test(trust) && trust.includes('/ckx/sdk/MANIFEST.json') && trust.includes('cryptokey.im/registry'), '');
   check('F17 卡片顶部包含信任条', ckxCardHtml().includes('ckx-trust'), '');
+
+  // 0.4.0：embed 路径必须携带 schema 信息性标签（否则 embed 产物 meta 无 schemaId，免密码无法识别归属）
+  const cfg = ckxEmbedCfg({}, 'file');
+  check('F18 embedCfg 携带 schema 标签 + 版本', cfg.schema === 'srsi.vault.v1' && cfg.schemaVersion === '1', JSON.stringify({ s: cfg.schema, v: cfg.schemaVersion }));
+  check('F19 embedCfg 传 medium/label', cfg.medium === 'file' && cfg.label === 'srsi-backup', '');
+  const cfgMock = ckxEmbedCfg({ mock: true, embedCfg: { locale: 'zh' } }, 'text');
+  check('F20 embedCfg mock 模式指向演示页并保留覆盖项', cfgMock.mock === true && /embed=mock/.test(cfgMock.mockUrl) && cfgMock.locale === 'zh' && cfgMock.medium === 'text', '');
 }
 
 // ---------------------------------------------------------------- 2) 备份存储

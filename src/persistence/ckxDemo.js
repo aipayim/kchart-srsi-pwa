@@ -166,6 +166,7 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
     try {
       if (staged.kind === 'encrypt') {
         const meta = { app: session.app || 'mock', label: session.label || undefined };
+        if (session.schema) { meta.schema = session.schema; meta.schemaVersion = session.schemaVersion || '1'; }
         if (typeof staged.payload === 'string') {
           const text = await ckx.encryptToText(staged.payload, pw, meta);
           $('mk-msg').textContent = '';
@@ -297,6 +298,7 @@ export function mountCkxDemo({ win, doc }) {
       mock: target === 'mock',
       medium: $('dp-medium').value,
       label: 'srsi-demo',
+      schema: 'srsi.vault.v1', schemaVersion: '1',   // 0.4.0：免费信息性标签
       theme: 'dark',
       onLog: null,
     });

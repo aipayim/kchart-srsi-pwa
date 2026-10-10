@@ -13,7 +13,7 @@
  */
 import {
   collectVault, exportVaultBytes, inspectVault, importVault, applyVault,
-  vaultSummary, vaultFilename, CKX_SDK,
+  vaultSummary, vaultFilename, CKX_SDK, VAULT_SCHEMA_ID, VAULT_SCHEMA_VERSION,
 } from '../persistence/ckxVault.js';
 
 // embed 客户端懒加载（仅当用户选「CKX 在线」时才拉取该 chunk；不进首屏预加载）
@@ -22,9 +22,10 @@ async function embedClient(cfg) {
   const m = await import('../persistence/ckxEmbed.js');
   return m.createCkxEmbedClient(cfg);
 }
-function embedCfg(opts, medium) {
+export function ckxEmbedCfg(opts, medium) {
   const mock = !!opts.mock;
-  return Object.assign({ medium, label: 'srsi-backup' }, opts.embedCfg || {}, mock ? { mock: true, mockUrl: opts.mockUrl || './ckx-demo.html?embed=mock' } : {});
+  // 0.4.0：免费层可携带 schemaId 作**信息性标签**→ embed 产物 meta.schemaId 也能被免密码 readMeta 读到
+  return Object.assign({ medium, label: 'srsi-backup', schema: VAULT_SCHEMA_ID, schemaVersion: String(VAULT_SCHEMA_VERSION) }, opts.embedCfg || {}, mock ? { mock: true, mockUrl: opts.mockUrl || './ckx-demo.html?embed=mock' } : {});
 }
 
 export const BACKUP_DB = 'smartTraderCKX';
@@ -159,7 +160,7 @@ export async function exportBackup(opts = {}, deps = {}) {
   const vault = await collectVault({ includeSecrets: !!opts.includeSecrets }, deps);
   const filename = vaultFilename();
   if (method === 'embed') {
-    const client = await embedClient(embedCfg(opts, medium));
+    const client = await embedClient(ckxEmbedCfg(opts, medium));
     try {
       const out = await client.encrypt(JSON.stringify(vault), { medium });
       const meta = out.meta || {};
@@ -179,7 +180,7 @@ export async function exportBackup(opts = {}, deps = {}) {
 /** 解密预览（dry-run）。method='embed' 时口令在官方界面输入。 */
 export async function previewBackup(carrier, opts = {}, deps = {}) {
   if (opts.method === 'embed') {
-    const client = await embedClient(embedCfg(opts, opts.medium || 'file'));
+    const client = await embedClient(ckxEmbedCfg(opts, opts.medium || 'file'));
     try {
       const out = await client.decrypt(carrier, { carrierName: opts.carrierName || 'vault.ckx' });
       const text = out.text != null ? out.text : new TextDecoder().decode(out.bytes || new Uint8Array());
