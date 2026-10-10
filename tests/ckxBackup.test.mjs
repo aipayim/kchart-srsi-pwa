@@ -6,7 +6,7 @@
 import {
   fmtBytes, mediumLabel, methodLabel, trimBackups, planLines, backupRowsHtml, previewHtml,
   listBackups, saveBackup, deleteBackup, clearBackups, exportBackup, previewBackup, applyBackup,
-  ckxCardHtml, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
+  ckxCardHtml, ckxTrustHtml, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
 } from '../src/pwa/ckxBackup.js';
 import { collectVault, VAULT_SCHEMA_ID, VAULT_CODES } from '../src/persistence/ckxVault.js';
 
@@ -71,6 +71,13 @@ const sampleDeps = () => ({ ls: fakeLs({ smartTrader: '{"a":1}', pwa_zoom: '1.25
   const cardHtml = ckxCardHtml();
   const missingIds = cardIds.filter((id) => !cardHtml.includes('id="' + id + '"'));
   check('F13 ckxCardHtml 含全部绑定元素 id', missingIds.length === 0, missingIds.join(','));
+
+  // 信任条（v1.6.86）：明确「加解密由 CKX 官方执行」+ 可验证版本/哈希 + 官方 Verified 徽章
+  const trust = ckxTrustHtml();
+  check('F14 信任条含官方 Verified 徽章', trust.includes('https://cryptokey.im/badge/ckx-verified.svg') && trust.includes('alt="CKX Verified Integrator"'), '');
+  check('F15 信任条含 SDK 版本与 sha384 前缀', trust.includes('0.4.0') && /sha384-8jfvvqC/.test(trust), '');
+  check('F16 信任条声明「不自行实现密码学」并给出官方清单/注册表链接', /不自行实现密码学/.test(trust) && trust.includes('/ckx/sdk/MANIFEST.json') && trust.includes('cryptokey.im/registry'), '');
+  check('F17 卡片顶部包含信任条', ckxCardHtml().includes('ckx-trust'), '');
 }
 
 // ---------------------------------------------------------------- 2) 备份存储

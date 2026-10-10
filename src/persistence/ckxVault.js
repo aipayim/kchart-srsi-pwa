@@ -23,6 +23,21 @@ export const VAULT_SCHEMA_VERSION = 1;
 export const VAULT_APP_ID = 'https://srsi.openapi.im';
 export const VAULT_CAPS = ['text', 'file'];
 
+/**
+ * vendored CKX SDK 的「发布身份」（供 UI 展示可验证信息 + 被 `scripts/verify-ckx-sdk.mjs` 交叉校验，
+ * 单一定义处；任何漂移都会让 `npm test` 失败）。
+ */
+export const CKX_SDK = {
+  version: '0.4.0',
+  esmBytes: 26823,
+  esmSha384: 'sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc',
+  manifestUrl: 'https://cryptokey.im/ckx/sdk/MANIFEST.json',
+  releaseUrl: 'https://cryptokey.im/v1/ckx/release',
+  badgeUrl: 'https://cryptokey.im/badge/ckx-verified.svg',
+  registryUrl: 'https://cryptokey.im/registry',
+  sri: 'sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc',
+};
+
 export const VAULT_CODES = {
   SCHEMA_MISMATCH: 'VAULT_SCHEMA_MISMATCH',
   VERSION_UNSUPPORTED: 'VAULT_VERSION_UNSUPPORTED',

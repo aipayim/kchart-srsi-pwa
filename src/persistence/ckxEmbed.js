@@ -49,13 +49,14 @@ export function makeNonce(bytes = 16) {
   return [...a].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** 构造 `ckx:init` 消息（schema/schemaVersion 属签约能力，默认不传 → 免费层可用）。 */
+/** 构造 `ckx:init` 消息。0.4.0：`schema` 已成为**免费信息性标签**（不再 fail-closed），`timeout` 可配会话空闲超时。 */
 export function buildInitMessage(nonce, o = {}) {
   const m = { v: CKX_PROTOCOL_V, type: 'ckx:init', nonce, app: o.app, mode: o.mode || 'file' };
   if (o.schema) { m.schema = o.schema; m.schemaVersion = String(o.schemaVersion ?? 1); }
   if (o.label) m.label = o.label;
   if (o.locale) m.locale = o.locale;
   if (o.theme) m.theme = o.theme;
+  if (o.timeout != null && Number.isFinite(Number(o.timeout))) m.timeout = Math.max(0, Math.floor(Number(o.timeout)));
   return m;
 }
 export function buildEncryptMessage(nonce, payload, meta, carrier) {
@@ -72,6 +73,13 @@ export function buildDecryptMessage(nonce, carrier, carrierName) {
 }
 export function buildCancelMessage(nonce) {
   return { v: CKX_PROTOCOL_V, type: 'ckx:cancel', nonce };
+}
+/** 0.4.0 新增：容量预检（不加密）。embed 回 `ckx:estimate.result`。 */
+export function buildEstimateMessage(nonce, payload, meta, carrier) {
+  const m = { v: CKX_PROTOCOL_V, type: 'ckx:estimate', nonce, payload };
+  if (meta) m.meta = meta;
+  if (carrier) m.carrier = carrier;
+  return m;
 }
 
 /**
@@ -173,6 +181,7 @@ export function createCkxEmbedClient(opts = {}) {
   let readyTimer = null;
   let bound = false;
   let root = null;
+  let boxEl = null;
   let iframeEl = null;
   const log = [];
 
@@ -198,14 +207,33 @@ export function createCkxEmbedClient(opts = {}) {
     const m = r.msg;
     if (m.type === 'ckx:ready') return onReady(m);
     if (m.type === 'ckx:capabilities') {
-      caps = { capabilities: m.capabilities || [], pro: !!m.pro, granted: m.granted || [], source: m.source || 'none', expiresAt: m.expiresAt ?? null };
-      note('capabilities', { pro: caps.pro });
+      caps = {
+        capabilities: m.capabilities || [], pro: !!m.pro, granted: m.granted || [],
+        source: m.source || 'none', expiresAt: m.expiresAt ?? null,
+        ignored: Array.isArray(m.ignored) ? m.ignored : [],      // 0.4.0：如 ['schema']（信息性标签被忽略的部分）
+        schemas: Array.isArray(m.schemas) ? m.schemas : [],
+        mediums: m.mediums || null,
+        sdkVersion: m.sdkVersion || null,
+        idleTimeoutSec: typeof m.idleTimeoutSec === 'number' ? m.idleTimeoutSec : null,
+      };
+      note('capabilities', { pro: caps.pro, ignored: caps.ignored.join(',') || '-' });
       const w = capWaiters; capWaiters = [];
       for (const fn of w) { try { fn(); } catch (_) {} }
       return;
     }
-    if (m.type === 'ckx:error') return settle(null, new CkxEmbedError(m.code || 'CKX_EMBED_ERROR', m.message || 'embed 返回错误'));
-    if (m.type === 'ckx:result' || m.type === 'ckx:plaintext') return settle(m, null);
+    if (m.type === 'ckx:resize') {           // 0.4.0：自适应 iframe 高度（可选用）
+      note('resize', { height: m.height });
+      applyResize(m.height);
+      if (typeof opts.onResize === 'function') { try { opts.onResize(m); } catch (_) {} }
+      return;
+    }
+    if (m.type === 'ckx:idle-warning') {     // 0.4.0：超时前预警（不是错误）
+      note('idle-warning', { remainingMs: m.remainingMs });
+      if (typeof opts.onIdleWarning === 'function') { try { opts.onIdleWarning(m); } catch (_) {} }
+      return;
+    }
+    if (m.type === 'ckx:error') return settle(null, new CkxEmbedError(m.code || 'CKX_EMBED_ERROR', m.message || 'embed 返回错误', { messageKey: m.messageKey, detail: m.detail, retryable: m.retryable }));
+    if (m.type === 'ckx:result' || m.type === 'ckx:plaintext' || m.type === 'ckx:estimate.result') return settle(m, null);
     note('unhandled', { type: m.type });
   }
 
@@ -215,9 +243,12 @@ export function createCkxEmbedClient(opts = {}) {
       post(buildInitMessage(nonce, {
         app: appOrigin,
         mode: initMedium,
+        schema: opts.schema,                 // 0.4.0：免费层可携带 schemaId 作信息性标签
+        schemaVersion: opts.schemaVersion,
         label: opts.label,
         theme: opts.theme,
         locale: opts.locale,
+        timeout: opts.timeout,               // 0.4.0：会话空闲超时可配（秒；0=禁用）
       }));
     } catch (e) { /* iframe 已移除 */ }
   }
@@ -270,12 +301,22 @@ export function createCkxEmbedClient(opts = {}) {
     bound = true;
   }
 
+  /** `ckx:resize`：默认让浮层高度跟随 embed 报告（`opts.autoHeight !== false`）。 */
+  function applyResize(height) {
+    if (opts.autoHeight === false) return;
+    const h = Number(height);
+    if (!Number.isFinite(h) || h <= 0 || !boxEl || !boxEl.style) return;
+    const maxH = (typeof win.innerHeight === 'number' && win.innerHeight > 0) ? win.innerHeight - 32 : h;
+    boxEl.style.height = Math.max(220, Math.min(h, maxH)) + 'px';
+  }
+
   function ensureOverlay() {
     if (iframeEl || !doc || !doc.body) return;
     root = doc.createElement('div');
     root.setAttribute('data-ckx-embed', '1');
     root.style.cssText = 'position:fixed;inset:0;z-index:2147483000;background:rgba(3,6,12,.82);display:flex;align-items:center;justify-content:center;padding:16px;backdrop-filter:blur(2px)';
     const box = doc.createElement('div');
+    boxEl = box;
     box.style.cssText = 'position:relative;width:min(460px,100%);height:min(720px,100%);background:#0b1018;border:1px solid #22303f;border-radius:12px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 18px 60px rgba(0,0,0,.55)';
     const bar = doc.createElement('div');
     bar.style.cssText = 'flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;font:12px/1.4 system-ui,sans-serif;color:#9fb3c8;background:#0e141d;border-bottom:1px solid #1d2836';
@@ -356,6 +397,24 @@ export function createCkxEmbedClient(opts = {}) {
     return { text: typeof res.text === 'string' ? res.text : null, bytes, meta: res.meta || {} };
   }
 
+  /**
+   * 容量预检（0.4.0）：不加密、不耗用户口令，先问 embed「装得下吗」。
+   * @returns {Promise<{fits:boolean, mode?:string, medium?:string, payloadBytes?:number, containerBytes?:number, requiredBytes?:number, availableBytes?:number, detail?:object}>}
+   */
+  async function estimate(payload, o = {}) {
+    await ready();
+    const medium = o.medium || opts.medium || 'file';
+    if (medium !== initMedium) await setMedium(medium);
+    const value = medium === 'text' && typeof payload === 'string' ? payload : await toArrayBufferAsync(payload);
+    const carrier = o.carrier ? await toArrayBufferAsync(o.carrier) : null;
+    const res = await request(buildEstimateMessage(nonce, value, o.meta, carrier), '容量预检');
+    return {
+      fits: !!res.fits, mode: res.mode, medium: res.medium, binary: !!res.binary,
+      payloadBytes: res.payloadBytes, containerBytes: res.containerBytes,
+      requiredBytes: res.requiredBytes, availableBytes: res.availableBytes, detail: res.detail || null,
+    };
+  }
+
   function close() {
     if (state === 'closed') return;
     try { if (state === 'ready' && nonce) post(buildCancelMessage(nonce)); } catch (e) { /* ignore */ }
@@ -371,7 +430,7 @@ export function createCkxEmbedClient(opts = {}) {
   }
 
   return {
-    ready, encrypt, decrypt, close, setMedium,
+    ready, encrypt, decrypt, estimate, close, setMedium,
     getState: () => state,
     getNonce: () => nonce,
     getMedium: () => initMedium || opts.medium || 'file',

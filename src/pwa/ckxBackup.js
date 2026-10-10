@@ -13,7 +13,7 @@
  */
 import {
   collectVault, exportVaultBytes, inspectVault, importVault, applyVault,
-  vaultSummary, vaultFilename,
+  vaultSummary, vaultFilename, CKX_SDK,
 } from '../persistence/ckxVault.js';
 
 // embed 客户端懒加载（仅当用户选「CKX 在线」时才拉取该 chunk；不进首屏预加载）
@@ -216,8 +216,23 @@ function $(id) { return typeof document !== 'undefined' ? document.getElementByI
 function msg(text, color) { const m = $('pwaCkxMsg'); if (m) { m.textContent = text || ''; m.style.color = color || 'var(--text2)'; } }
 function impMsg(text, color) { const m = $('pwaCkxImpMsg'); if (m) { m.textContent = text || ''; m.style.color = color || 'var(--text2)'; } }
 
+/**
+ * 信任条（纯函数，可单测）：明确「加解密由 CKX 官方执行」+ 可验证的版本/哈希 + 官方 Verified 徽章。
+ * 外链徽章加载失败不影响功能（仅缺图）。
+ */
+export function ckxTrustHtml() {
+  const short = String(CKX_SDK.esmSha384 || '').replace('sha384-', '').slice(0, 12);
+  return '<div class="ckx-trust">' +
+    '<img class="ckx-badge" src="' + esc(CKX_SDK.badgeUrl) + '" alt="CKX Verified Integrator" title="CKX 已验证合作方（cryptokey.im）" loading="lazy" referrerpolicy="no-referrer" width="120" height="30">' +
+    '<div class="ckx-trust-t">加解密<b>全部由 CKX（cryptokey.im）执行</b>，本产品不自行实现密码学。<br>' +
+      '本机加密用官方 SDK <code>' + esc(CKX_SDK.version) + '</code> · <code>sha384-' + esc(short) + '…</code> · ' +
+      '<a href="' + esc(CKX_SDK.manifestUrl) + '" target="_blank" rel="noopener noreferrer">官方清单</a> · ' +
+      '<a href="' + esc(CKX_SDK.registryUrl) + '" target="_blank" rel="noopener noreferrer">公开注册表</a>' +
+    '</div></div>';
+}
+
 export function ckxCardHtml() {
-  return '' +
+  return ckxTrustHtml() +
     '<div class="ckx-sec">' +
       '<div id="pwaCkxPlan" class="ckx-plan">读取本机数据…</div>' +
       '<div class="setting-row" style="flex-wrap:wrap;gap:8px">' +

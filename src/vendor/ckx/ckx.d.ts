@@ -197,6 +197,41 @@ export declare function detachVideoTrailer(file: Uint8Array): Uint8Array | null;
 /** 介质 E 纯帧函数：文件是否携带合法尾挂（不复制 payload）。 */
 export declare function hasVideoTrailer(file: Uint8Array): boolean;
 
+// ---------------------------------------------------------------- C2：轻量探测 / 载体规划 / 容器直嵌（AIDID-4/5）
+
+/** (AIDID-5) `readVideoMeta` 结果（同步探测，不解密）。 */
+export interface CkxVideoMetaResult {
+  hasTrailer: boolean;
+  containerBytes: number | null;
+  trailerOffset: number | null;
+  meta: CkxMeta | null;
+}
+/** 视频载体轻量同步探测：读尾部长度 + 明文 meta，不解密、不复制 payload。 */
+export declare function readVideoMeta(video: ArrayBuffer | Uint8Array): CkxVideoMetaResult;
+
+/** (AIDID-4) 用已有容器规划图片基底（省一次 PBKDF2）。 */
+export interface CkxCarrierPlan {
+  medium: 'image-text' | 'image-binary';
+  binary: boolean;
+  containerBytes: number;
+  requiredBytes: number;
+  recommended: { width: number; height: number };
+  formula: string;
+}
+/**
+ * 用已有容器规划图片基底。字符串容器 → 介质 B（默认），字节容器 → 介质 C（默认）；
+ * `opts.binary` 可显式覆盖，`opts.minSize` / `opts.maxSize` 覆盖边长 clamp（默认 256/4096）。
+ */
+export declare function planImageCarrier(
+  container: string | Uint8Array,
+  opts?: { binary?: boolean; minSize?: number; maxSize?: number },
+): CkxCarrierPlan;
+/** 把已加密容器写入 RGBA 像素（返回同一 `image` 引用，便于链式）。 */
+export declare function embedContainer(
+  image: CkxImageData,
+  container: string | Uint8Array,
+): { image: CkxImageData; medium: 'image-text' | 'image-binary' };
+
 // ---------------------------------------------------------------- 签约能力门控（M4）
 
 /** 签约判定来源。 */
@@ -385,3 +420,247 @@ export interface CkxSchema {
  * 原样透出，网络/超时抛 `CKX_TIMEOUT`。`apiKey` 永不进入日志 / 错误 message / 返回对象。
  */
 export declare const ckxSchema: CkxSchema;
+
+// ------------------------------------------------------------------ embed 协议 v1（postMessage）
+
+/**
+ * CKX iframe embed postMessage 协议的字段级类型（协议版本 `v` = 1）。
+ *
+ * 机器可读 JSON Schema：`https://cryptokey.im/ckx/spec/protocol-v1.schema.json`
+ * （发布副本 `/ckx/sdk/` 亦含本声明）。字段含义见 `https://cryptokey.im/ckx/spec/`。
+ *
+ * 握手：宿主等 `ckx:ready` → 回显其 `nonce` 发 `ckx:init` → 用 `ckx:encrypt` / `ckx:decrypt`
+ * 驱动 → 处理 `ckx:result` / `ckx:plaintext` / `ckx:error`。成功 `ckx:init` 前 embed 忽略一切消息。
+ */
+export type CkxEmbedProtocolVersion = 1;
+
+/** 宿主 → embed 的消息类型。 */
+export type CkxHostToEmbedType = 'ckx:init' | 'ckx:encrypt' | 'ckx:encrypt.bulk' | 'ckx:decrypt' | 'ckx:cancel' | 'ckx:estimate';
+/** embed → 宿主的消息类型。 */
+export type CkxEmbedToHostType =
+  | 'ckx:ready'
+  | 'ckx:capabilities'
+  | 'ckx:result'
+  | 'ckx:plaintext'
+  | 'ckx:error'
+  | 'ckx:idle-warning'
+  | 'ckx:resize'
+  | 'ckx:estimate.result';
+
+/** 介质自描述（BL-3）：`hostCarrier=true` 表示该介质接受宿主/用户提供的载体。 */
+export interface CkxMediumInfo {
+  hostCarrier: boolean;
+  carrier: string;
+}
+
+/** 四介质能力自描述。 */
+export interface CkxMediums {
+  text: CkxMediumInfo;
+  image: CkxMediumInfo;
+  file: CkxMediumInfo;
+  video: CkxMediumInfo;
+}
+
+/** 容器元数据（明文写入 SAFE v3 头；仅公开字段，切勿放业务明文）。 */
+
+/** 带二进制载荷的文件（浏览器中 `bytes` 为 ArrayBuffer）。 */
+export interface CkxFilePayload {
+  name: string;
+  mime: string;
+  bytes: ArrayBuffer | Uint8Array | string;
+}
+
+export interface CkxInitMessage {
+  v: CkxEmbedProtocolVersion;
+  type: 'ckx:init';
+  nonce: string;
+  /** 宿主 origin（裸 origin）；embed 会在反钓鱼横幅展示。 */
+  app: string;
+  mode?: 'text' | 'image' | 'file' | 'video';
+  schema?: string;
+  schemaVersion?: string;
+  label?: string;
+  locale?: string;
+  theme?: 'light' | 'dark';
+  strictMatching?: boolean;
+  timeout?: number;
+}
+
+export interface CkxEncryptMessage {
+  v: CkxEmbedProtocolVersion;
+  type: 'ckx:encrypt' | 'ckx:encrypt.bulk';
+  nonce: string;
+  payload?: string | ArrayBuffer | Uint8Array;
+  bulk?: Array<{
+    payload: string | ArrayBuffer | Uint8Array;
+    filename?: string;
+    label?: string;
+    mime?: string;
+    meta?: CkxMeta;
+  }>;
+  meta?: CkxMeta;
+  carrier?: string | ArrayBuffer | Uint8Array;
+  carrierName?: string;
+  filename?: string;
+  shard?: Record<string, unknown>;
+}
+
+export interface CkxDecryptMessage {
+  v: CkxEmbedProtocolVersion;
+  type: 'ckx:decrypt';
+  nonce: string;
+  carrier?: string | ArrayBuffer | Uint8Array;
+  carriers?: Array<string | ArrayBuffer | Uint8Array>;
+  carrierName?: string;
+  filename?: string;
+}
+
+export interface CkxCancelMessage {
+  v: CkxEmbedProtocolVersion;
+  type: 'ckx:cancel';
+  nonce: string;
+}
+
+/** 容量预检（不加密）；回复 `CkxEstimateResultMessage`。 */
+export interface CkxEstimateMessage {
+  v: CkxEmbedProtocolVersion;
+  type: 'ckx:estimate';
+  nonce: string;
+  payload: string | ArrayBuffer | Uint8Array;
+  meta?: CkxMeta;
+  carrier?: string | ArrayBuffer | Uint8Array;
+}
+
+export type CkxHostToEmbedMessage =
+  | CkxInitMessage
+  | CkxEncryptMessage
+  | CkxDecryptMessage
+  | CkxCancelMessage
+  | CkxEstimateMessage;
+
+export interface CkxReadyMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:ready';
+  nonce: string;
+  capabilities: string[];
+  pro: boolean;
+  strictMatching?: boolean;
+  shardLimits?: Record<string, unknown>;
+  branding?: Record<string, unknown>;
+  mediums?: CkxMediums;
+  sdkVersion?: string;
+}
+
+export interface CkxCapabilitiesMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:capabilities';
+  nonce: string;
+  capabilities: string[];
+  pro: boolean;
+  granted: string[];
+  schemas?: string[];
+  expiresAt?: number | null;
+  source?: string;
+  strictMatching?: boolean;
+  shardLimits?: Record<string, unknown>;
+  branding?: Record<string, unknown>;
+  mediums?: CkxMediums;
+  sdkVersion?: string;
+  /** 本次会话生效的空闲超时（秒；0 = 关闭），可由 `ckx:init.timeout` 覆盖。 */
+  idleTimeoutSec?: number;
+  /** 已接受但未授权（免费层降级为信息性标签）的字段，例如 `['schema']`；绝不静默丢弃。 */
+  ignored?: string[];
+}
+
+export interface CkxResultMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:result';
+  nonce: string;
+  kind: 'ciphertext' | 'carrier' | 'bulk';
+  text?: string;
+  file?: CkxFilePayload;
+  files?: CkxFilePayload[];
+  count?: number;
+  items?: Array<{
+    index: number;
+    kind: string;
+    text?: string;
+    file?: CkxFilePayload;
+    meta?: CkxMeta;
+    error?: Record<string, unknown>;
+  }>;
+  meta?: CkxMeta;
+}
+
+export interface CkxPlaintextMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:plaintext';
+  nonce: string;
+  text?: string;
+  bytes?: ArrayBuffer | Uint8Array;
+  meta?: CkxMeta;
+}
+
+export interface CkxEmbedErrorMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:error';
+  nonce: string;
+  code: string;
+  message: string;
+  messageKey?: string;
+  detail?: { field?: string; limit?: number; actual?: number; hint?: string } & Record<string, unknown>;
+  retryable?: boolean;
+}
+
+export interface CkxEstimateResultMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:estimate.result';
+  nonce: string;
+  mode?: 'text' | 'image' | 'file' | 'video';
+  medium?: 'A' | 'B' | 'C' | 'D' | 'E';
+  binary?: boolean;
+  payloadBytes?: number;
+  containerBytes?: number;
+  requiredBytes?: number;
+  availableBytes?: number;
+  fits: boolean;
+  detail?: { limit?: number; actual?: number } & Record<string, unknown>;
+}
+
+/** 空闲超时前的预警（随后若无交互将发 `CKX_TIMEOUT`）。 */
+export interface CkxIdleWarningMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:idle-warning';
+  nonce: string;
+  remainingMs?: number;
+}
+
+/** embed 内容尺寸（宿主可据此调整 iframe 高度）。 */
+export interface CkxResizeMessage {
+  v: CkxEmbedProtocolVersion;
+  formatVersion: string;
+  type: 'ckx:resize';
+  nonce: string;
+  height: number;
+  width?: number;
+}
+
+export type CkxEmbedToHostMessage =
+  | CkxReadyMessage
+  | CkxCapabilitiesMessage
+  | CkxResultMessage
+  | CkxPlaintextMessage
+  | CkxEmbedErrorMessage
+  | CkxIdleWarningMessage
+  | CkxResizeMessage
+  | CkxEstimateResultMessage;
+
+/** 任意 CKX embed 协议消息。 */
+export type CkxEmbedMessage = CkxHostToEmbedMessage | CkxEmbedToHostMessage;

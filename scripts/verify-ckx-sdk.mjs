@@ -12,11 +12,12 @@
  *   node scripts/verify-ckx-sdk.mjs --json          # 机器可读输出
  *
  * 期望值来源：https://cryptokey.im/ckx/sdk/MANIFEST.json
- *   generatedAt: 2026-10-09T12:31:59.956Z
+ *   generatedAt: 2026-10-09T23:45:42.071Z
  *   package @cryptokey/ckx v0.4.0, formatVersion 1, license Apache-2.0
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
+import { CKX_SDK, VAULT_SCHEMA_ID } from '../src/persistence/ckxVault.js';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -32,12 +33,12 @@ export const EXPECTED = {
   generatedAt: '2026-10-09T12:31:59.956Z',
   files: {
     'ckx.esm.js': {
-      bytes: 25599,
-      sha384: 'sha384-B998wtTBfvM0A++6GM4qpeGU0p6KIdju/SXau8MKsjtzU1teRAA8ouSWQSrV1lwZ',
+      bytes: 26823,
+      sha384: 'sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc',
     },
     'ckx.d.ts': {
-      bytes: 13450,
-      sha384: 'sha384-aijhVdXs+XZFxCZFgnNPAJmCEyE3M7SD3OwvMrJk9ijp/eOPh3pbNXKhNbS47voY',
+      bytes: 21656,
+      sha384: 'sha384-D6WRjAsYzK7SKv0mCRJv+pQzDSkkFxpGC0YqtvFSNGqrs367k2ixGDOBnX/NaNQe',
     },
     LICENSE: {
       bytes: 11347,
@@ -87,6 +88,16 @@ export function verifyCkxSdk(opts = {}) {
     if (entry.actualSha384 !== exp.sha384) entry.errors.push(`sha384 ${entry.actualSha384} != ${exp.sha384}`);
     entry.ok = entry.errors.length === 0;
     results.push(entry);
+  }
+  // 交叉校验 src 里的「单一定义处」CKX_SDK 是否与硬编码期望值一致（防止 UI 展示的版本/哈希漂移）
+  const esm = expected.files['ckx.esm.js'] || {};
+  const syncChecks = [
+    ['CKX_SDK.version', CKX_SDK.version, expected.version],
+    ['CKX_SDK.esmSha384', CKX_SDK.esmSha384, esm.sha384],
+    ['CKX_SDK.esmBytes', String(CKX_SDK.esmBytes), String(esm.bytes)],
+  ];
+  for (const [label, got, want] of syncChecks) {
+    results.push({ name: label, path: '(src/persistence/ckxVault.js)', expected: { sha384: want }, ok: got === want, exists: true, actualBytes: null, actualSha384: got, errors: got === want ? [] : [`${label} 与 vendored 期望值不一致：${got} ≠ ${want}`] });
   }
   return { ok: results.every((r) => r.ok), results, expected };
 }

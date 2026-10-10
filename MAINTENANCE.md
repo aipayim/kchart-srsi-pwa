@@ -129,11 +129,14 @@ scripts/verify-pwa-data.mjs
   ckxBackup.test.mjs
   ckxEmbed.test.mjs
   ckxErrors040.test.mjs
+  ckxEstimateResize.test.mjs
+  ckxCkxSchema.test.mjs
   ckxIdbRestore.test.mjs
   ckxVault.test.mjs
   consistency.test.mjs
   disciplineAnalysis.test.mjs
   fixtures/bnbusdt_klines.json
+  fixtures/ckx-protocol-v1.schema.json
   fixtures/ckx-test-vectors.json
   jev.test.mjs
   jevSrsiAudit.test.mjs

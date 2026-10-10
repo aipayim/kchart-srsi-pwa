@@ -51,6 +51,15 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
   const $ = (id) => doc.getElementById(id);
   function post(msg) { try { win.parent.postMessage(msg, parentOrigin); } catch (_) {} }
 
+  let readyPosted = false;
+  /** 0.4.0：把内容高度报给宿主（宿主默认据此调整浮层；见 ckxEmbed 的 applyResize）。 */
+  function reportResize() {
+    if (!readyPosted) return;
+    let h = 0;
+    try { h = Math.round((doc.body && doc.body.scrollHeight) || 0); } catch (_) {}
+    post({ v: 1, formatVersion: '1', type: 'ckx:resize', nonce, height: Math.max(320, h || 0) });
+  }
+
   function renderState() {
     $('mk-state').textContent = [
       `app:   ${session.app || '（未 init）'}`,
@@ -59,6 +68,7 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
       `待处理: ${staged ? (staged.kind === 'encrypt' ? `加密 ${fmtBytes(staged.size || 0)}` : `解密 ${fmtBytes(staged.size || 0)}`) : '（无，等待宿主 ckx:encrypt / ckx:decrypt）'}`,
       `capabilities: text,image,file,video · pro=false · source=mock`,
     ].join('\n');
+    reportResize();
   }
 
   function renderBody() {
@@ -73,6 +83,52 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
       $('mk-body').innerHTML = '';
       $('mk-return').disabled = true;
     }
+    reportResize();
+  }
+
+  /** 0.4.0：容量预检（本地近似实现；`detail.mock=true` 表示非官方精确口径）。 */
+  function handleEstimate(d) {
+    const mode = session.mode || 'file';
+    const payload = d.payload;
+    const payloadBytes = typeof payload === 'string'
+      ? new TextEncoder().encode(payload).length
+      : (payload && (payload.byteLength != null ? payload.byteLength : payload.length)) || 0;
+    let metaBytes = 0;
+    try { metaBytes = new TextEncoder().encode(JSON.stringify(Object.assign({ ckx: '1', app: session.app || 'mock' }, d.meta || {}))).length; } catch (_) {}
+    const containerOf = (typeof ckx.containerBytes === 'function')
+      ? ckx.containerBytes(metaBytes, payloadBytes)
+      : 41 + metaBytes + payloadBytes + 16;   // SAFE v3 头 41 + meta + payload + tag 16
+    const res = { v: 1, formatVersion: '1', type: 'ckx:estimate.result', nonce, mode, payloadBytes, detail: { mock: true } };
+    try {
+      if (mode === 'image') {
+        // 带 carrier 时按 RGBA 长度推断尺寸；否则用演示尺寸（勿当成官方精确值）
+        let size = { width: 64, height: 64 };
+        const carrier = d.carrier;
+        if (carrier) {
+          const bl = carrier.byteLength != null ? carrier.byteLength : (carrier.length || 0);
+          const px = Math.floor(bl / 4);
+          if (px >= 4) { const edge = Math.max(2, Math.floor(Math.sqrt(px))); size = { width: edge, height: edge }; }
+        }
+        const cap = (typeof ckx.estimateCapacity === 'function') ? ckx.estimateCapacity(size, { binary: true }) : null;
+        res.medium = 'B'; res.binary = true;
+        res.containerBytes = containerOf;
+        res.requiredBytes = payloadBytes;
+        res.availableBytes = cap ? Math.max(0, cap.maxPayloadBytes) : Math.max(0, containerOf);
+      } else {
+        res.medium = mode === 'text' ? 'A' : (mode === 'video' ? 'D' : 'C');
+        res.binary = mode !== 'text';
+        res.containerBytes = containerOf;
+        res.requiredBytes = containerOf;
+        res.availableBytes = Math.max(containerOf, 5 * 1024 * 1024);
+      }
+      res.fits = res.requiredBytes <= res.availableBytes;
+      if (!res.fits) res.detail = { limit: res.availableBytes, actual: res.requiredBytes, mock: true };
+    } catch (e) {
+      post({ v: 1, formatVersion: '1', type: 'ckx:error', nonce, code: (e && e.code) || 'CKX_ESTIMATE_FAILED', message: String((e && e.message) || e) });
+      return;
+    }
+    post(res);
+    reportResize();
   }
 
   win.addEventListener('message', (ev) => {
@@ -97,6 +153,8 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
       staged = { kind: 'decrypt', carrier: c, size }; decrypted = null; renderState(); renderBody();
     } else if (d.type === 'ckx:cancel') {
       staged = null; decrypted = null; renderState(); renderBody();
+    } else if (d.type === 'ckx:estimate') {
+      handleEstimate(d);
     }
   });
 
@@ -148,6 +206,8 @@ export function mountCkxMockEmbed({ win, doc, ckx }) {
 
   renderState(); renderBody();
   post({ v: 1, type: 'ckx:ready', formatVersion: '1', nonce: readyNonce, capabilities: ['text', 'image', 'file', 'video'], pro: false });
+  readyPosted = true;
+  reportResize();
   return { getNonce: () => nonce };
 }
 

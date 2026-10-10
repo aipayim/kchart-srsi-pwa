@@ -1,0 +1,875 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cryptokey.im/ckx/spec/protocol-v1.schema.json",
+  "_source": "https://cryptokey.im/ckx/spec/protocol-v1.schema.json (fetched 2026-10-10, 15202 B; official fixture, unmodified except this line)",
+  "title": "CKX iframe embed postMessage protocol v1",
+  "description": "Machine-readable, field-level contract for the CKX embed (https://cryptokey.im/ckx/embed/) postMessage protocol. Every message carries v=1 (protocol version) and nonce; embed→host messages additionally carry formatVersion (CKX container format, currently '1'). This schema is ADDITIVE: unknown fields are allowed so v1.x can add fields without breaking consumers — implementations MUST ignore unknown fields. The handshake is: host waits for ckx:ready, then sends ckx:init echoing the ready nonce; before a successful ckx:init the embed ignores every message. normative bearer is the CKX Format spec (https://cryptokey.im/ckx/spec/).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/hostToEmbed"
+    },
+    {
+      "$ref": "#/$defs/embedToHost"
+    }
+  ],
+  "$defs": {
+    "Nonce": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Correlation token; echoed exactly. Not an authentication credential."
+    },
+    "Meta": {
+      "type": "object",
+      "description": "Public container metadata (written in plaintext into the SAFE v3 header; <= 4096 bytes). Never place business plaintext here.",
+      "additionalProperties": true
+    },
+    "FilePayload": {
+      "type": "object",
+      "required": [
+        "name",
+        "mime",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "bytes": {
+          "description": "Binary payload. In the browser it is an ArrayBuffer; in a JSON snapshot it is a base64 string.",
+          "type": [
+            "object",
+            "string",
+            "array"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "FileMeta": {
+      "type": "object",
+      "required": [
+        "name",
+        "mime",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "mime": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer",
+          "description": "Byte length."
+        }
+      },
+      "additionalProperties": false
+    },
+    "Mediums": {
+      "type": "object",
+      "description": "Host capability self-description (BL-3). hostCarrier=true means the medium accepts a host/user supplied carrier.",
+      "required": [
+        "text",
+        "image",
+        "file",
+        "video"
+      ],
+      "properties": {
+        "text": {
+          "$ref": "#/$defs/Medium"
+        },
+        "image": {
+          "$ref": "#/$defs/Medium"
+        },
+        "file": {
+          "$ref": "#/$defs/Medium"
+        },
+        "video": {
+          "$ref": "#/$defs/Medium"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Medium": {
+      "type": "object",
+      "required": [
+        "hostCarrier"
+      ],
+      "properties": {
+        "hostCarrier": {
+          "type": "boolean"
+        },
+        "carrier": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "hostToEmbed": {
+      "type": "object",
+      "description": "Messages the host page sends to the embed iframe.",
+      "required": [
+        "v",
+        "type",
+        "nonce"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "enum": [
+            "ckx:init",
+            "ckx:encrypt",
+            "ckx:decrypt",
+            "ckx:cancel",
+            "ckx:estimate"
+          ]
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        }
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CkxInit"
+        },
+        {
+          "$ref": "#/$defs/CkxEncrypt"
+        },
+        {
+          "$ref": "#/$defs/CkxDecrypt"
+        },
+        {
+          "$ref": "#/$defs/CkxCancel"
+        },
+        {
+          "$ref": "#/$defs/CkxEstimate"
+        }
+      ]
+    },
+    "embedToHost": {
+      "type": "object",
+      "description": "Messages the embed iframe sends to the host page.",
+      "required": [
+        "v",
+        "type"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        }
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/CkxReady"
+        },
+        {
+          "$ref": "#/$defs/CkxCapabilities"
+        },
+        {
+          "$ref": "#/$defs/CkxResult"
+        },
+        {
+          "$ref": "#/$defs/CkxPlaintext"
+        },
+        {
+          "$ref": "#/$defs/CkxError"
+        },
+        {
+          "$ref": "#/$defs/CkxIdleWarning"
+        },
+        {
+          "$ref": "#/$defs/CkxResize"
+        },
+        {
+          "$ref": "#/$defs/CkxEstimateResult"
+        }
+      ]
+    },
+    "CkxEstimate": {
+      "title": "ckx:estimate",
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "nonce",
+        "payload"
+      ],
+      "description": "Capacity pre-check (no encryption): the embed replies with ckx:estimate.result.",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "ckx:estimate"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "payload": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "carrier": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ],
+          "description": "Carrier bytes (mode=image), to measure a real carrier's capacity."
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxEstimateResult": {
+      "title": "ckx:estimate.result",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "fits"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:estimate.result"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "mode": {
+          "enum": [
+            "text",
+            "image",
+            "file",
+            "video"
+          ]
+        },
+        "medium": {
+          "enum": [
+            "A",
+            "B",
+            "C",
+            "D",
+            "E"
+          ]
+        },
+        "binary": {
+          "type": "boolean"
+        },
+        "payloadBytes": {
+          "type": "integer"
+        },
+        "containerBytes": {
+          "type": "integer"
+        },
+        "requiredBytes": {
+          "type": "integer"
+        },
+        "availableBytes": {
+          "type": "integer"
+        },
+        "fits": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": "integer"
+            },
+            "actual": {
+              "type": "integer"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxIdleWarning": {
+      "title": "ckx:idle-warning",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce"
+      ],
+      "description": "Sent shortly before the idle timeout; a CKX_TIMEOUT error follows if the host/user does not interact.",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:idle-warning"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "remainingMs": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxResize": {
+      "title": "ckx:resize",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "height"
+      ],
+      "description": "Embed content size; the host may resize the iframe accordingly.",
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:resize"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxInit": {
+      "title": "ckx:init",
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "nonce",
+        "app"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "ckx:init"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "app": {
+          "type": "string",
+          "description": "Host origin (bare origin). The embed displays it in the anti-phishing banner."
+        },
+        "mode": {
+          "enum": [
+            "text",
+            "image",
+            "file",
+            "video"
+          ],
+          "default": "text"
+        },
+        "schema": {
+          "type": "string",
+          "description": "schemaId label. Carrying it is free; a registered/owned schemaId requires the signed `schema` capability."
+        },
+        "schemaVersion": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "locale": {
+          "type": "string",
+          "description": "BCP-47 tag; overrides detection for this session."
+        },
+        "theme": {
+          "enum": [
+            "light",
+            "dark"
+          ]
+        },
+        "strictMatching": {
+          "type": "boolean",
+          "description": "Requires the signed `strictMatching` capability."
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Idle timeout in seconds (0 = off). Default 120."
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxEncrypt": {
+      "title": "ckx:encrypt / ckx:encrypt.bulk",
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "nonce"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "enum": [
+            "ckx:encrypt",
+            "ckx:encrypt.bulk"
+          ]
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "payload": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ],
+          "description": "Text (string) or binary (ArrayBuffer) payload. Required unless bulk is present."
+        },
+        "bulk": {
+          "type": "array",
+          "description": "Bulk items (requires the signed `bulk` capability).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "payload": {},
+              "filename": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              },
+              "meta": {
+                "$ref": "#/$defs/Meta"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        },
+        "carrier": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ],
+          "description": "Host-supplied carrier (mode=image/video only)."
+        },
+        "carrierName": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "shard": {
+          "type": "object",
+          "description": "Shamir sharding request (requires the signed `shard` capability)."
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxDecrypt": {
+      "title": "ckx:decrypt",
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "nonce"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "ckx:decrypt"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "carrier": {
+          "type": [
+            "string",
+            "object",
+            "array"
+          ],
+          "description": "A single carrier: base64url ciphertext string, container bytes, or PNG pixels."
+        },
+        "carriers": {
+          "type": "array",
+          "description": "Multiple carriers (shard shares). Mutually exclusive with carrier."
+        },
+        "carrierName": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxCancel": {
+      "title": "ckx:cancel",
+      "type": "object",
+      "required": [
+        "v",
+        "type",
+        "nonce"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "type": {
+          "const": "ckx:cancel"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxReady": {
+      "title": "ckx:ready",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "capabilities",
+        "pro"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:ready"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pro": {
+          "type": "boolean"
+        },
+        "strictMatching": {
+          "type": "boolean"
+        },
+        "shardLimits": {
+          "type": "object"
+        },
+        "branding": {
+          "type": "object"
+        },
+        "mediums": {
+          "$ref": "#/$defs/Mediums"
+        },
+        "sdkVersion": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxCapabilities": {
+      "title": "ckx:capabilities",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "capabilities",
+        "pro",
+        "granted"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:capabilities"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "pro": {
+          "type": "boolean"
+        },
+        "granted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expiresAt": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "strictMatching": {
+          "type": "boolean"
+        },
+        "shardLimits": {
+          "type": "object"
+        },
+        "branding": {
+          "type": "object"
+        },
+        "mediums": {
+          "$ref": "#/$defs/Mediums"
+        },
+        "sdkVersion": {
+          "type": "string"
+        },
+        "idleTimeoutSec": {
+          "type": "integer",
+          "description": "Effective idle timeout for this session (0 = disabled); overridable via ckx:init.timeout."
+        },
+        "ignored": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Fields accepted but not authorized (degraded to informational labels on the free tier), e.g. [\"schema\"]. Never silently dropped."
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxResult": {
+      "title": "ckx:result",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "kind"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:result"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "kind": {
+          "enum": [
+            "ciphertext",
+            "carrier",
+            "bulk"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "kind=ciphertext: base64url container string."
+        },
+        "file": {
+          "$ref": "#/$defs/FilePayload"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/FilePayload"
+          }
+        },
+        "count": {
+          "type": "integer",
+          "description": "kind=bulk."
+        },
+        "items": {
+          "type": "array",
+          "description": "kind=bulk items.",
+          "items": {
+            "type": "object",
+            "required": [
+              "index",
+              "kind"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              },
+              "file": {
+                "$ref": "#/$defs/FilePayload"
+              },
+              "meta": {
+                "$ref": "#/$defs/Meta"
+              },
+              "error": {
+                "type": "object"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxPlaintext": {
+      "title": "ckx:plaintext",
+      "description": "Decryption result. Never sent automatically: it is posted only after the user clicks “send plaintext back”, or after the user explicitly enables revocable per-session trust (off by default, never silent).",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:plaintext"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "text": {
+          "type": "string"
+        },
+        "bytes": {
+          "description": "Binary plaintext (ArrayBuffer in the browser)."
+        },
+        "meta": {
+          "$ref": "#/$defs/Meta"
+        }
+      },
+      "additionalProperties": true
+    },
+    "CkxError": {
+      "title": "ckx:error",
+      "type": "object",
+      "required": [
+        "v",
+        "formatVersion",
+        "type",
+        "nonce",
+        "code",
+        "message"
+      ],
+      "properties": {
+        "v": {
+          "const": 1
+        },
+        "formatVersion": {
+          "const": "1"
+        },
+        "type": {
+          "const": "ckx:error"
+        },
+        "nonce": {
+          "$ref": "#/$defs/Nonce"
+        },
+        "code": {
+          "type": "string",
+          "description": "Machine-readable error code, e.g. CKX_NO_CARRIER, CKX_CARRIER_DAMAGED, CKX_WRONG_PASSWORD, CKX_PAYLOAD_TOO_LARGE, CKX_TIMEOUT, CKX_CAPABILITY_REQUIRED."
+        },
+        "message": {
+          "type": "string"
+        },
+        "messageKey": {
+          "type": "string",
+          "description": "i18n key for the localised message."
+        },
+        "detail": {
+          "type": "object",
+          "description": "Structured context, e.g. { field, limit, actual, hint }.",
+          "additionalProperties": true
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -9,8 +9,8 @@
 | 包名 | `@cryptokey/ckx` |
 | 版本 | **0.4.0** |
 | 规范 | CKX format version **1**（`SAFE v3` 容器） |
-| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-latest.zip`（63,900 B） |
-| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-09T12:31:59.956Z`） |
+| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-latest.zip`（67,960 B） |
+| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-09T23:45:42.071Z`） |
 | 许可 | **Apache-2.0**（见同目录 `LICENSE`；商标/Logo 不在授权内，本项目不使用其商标） |
 | 运行时依赖 | 无（zero dependencies，仅 Web Crypto） |
 | 引擎要求 | Node ≥ 18 / 现代浏览器（需 `crypto.subtle`） |
@@ -19,8 +19,8 @@
 
 | 文件 | 字节 | sha384 |
 |---|---|---|
-| `ckx.esm.js` | 25,599 | `sha384-B998wtTBfvM0A++6GM4qpeGU0p6KIdju/SXau8MKsjtzU1teRAA8ouSWQSrV1lwZ` |
-| `ckx.d.ts` | 13,450 | `sha384-aijhVdXs+XZFxCZFgnNPAJmCEyE3M7SD3OwvMrJk9ijp/eOPh3pbNXKhNbS47voY` |
+| `ckx.esm.js` | 26,823 | `sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc` |
+| `ckx.d.ts` | 21,656 | `sha384-D6WRjAsYzK7SKv0mCRJv+pQzDSkkFxpGC0YqtvFSNGqrs367k2ixGDOBnX/NaNQe` |
 | `LICENSE` | 11,347 | `sha384-GM/3Jrs/y6+jGEosIuuAA1h6oD7Y9C3DghiynB5tWJofjn4Y6qvz9QFSh0PzRZBv` |
 
 校验：`node scripts/verify-ckx-sdk.mjs`（也可 `npm run verify:ckx`）。该校验使用 Node 内置
@@ -51,6 +51,11 @@ await CKX.encryptToFile(payload, password, { app, schema, schemaVersion });
 - 错误语义细分：非 CKX 载体 → `CKX_NO_CARRIER`；载体结构损坏 → `CKX_CARRIER_DAMAGED`；GCM 认证失败 → `CKX_WRONG_PASSWORD`（不做密码/篡改 oracle 细分）。
 - `decryptFromVideo(video, password, options?)` 与 `decrypt` 对齐：支持 `options.schema` 并在不符时抛 `CKX_SCHEMA_MISMATCH`。
 - 服务端：`GET /v1/ckx/embed/policy?origin=` **只回该 origin 的 `{allowed, sla}`**（不再回全量名单）；全量名单改由 `GET /v1/ckx/integrators`（`/registry` 数据源）。
+
+## ⚠️ 发布可复现性（2026-10-09 实测）
+
+官方**同一版本号 `0.4.0` 被重新发布过**：`MANIFEST.generatedAt` 由 `12:31:59` → `23:45:42`，`ckx.esm.js` 25,599 → **26,823 B**、`ckx.d.ts` 13,450 → **21,656 B**。
+⇒ **不可只靠版本号判断是否最新**，必须比对 `sha384`（本项目 `scripts/verify-ckx-sdk.mjs` 已硬编码期望值；也可交叉核对 `GET /v1/ckx/release` 的 `sdk.sri`）。
 
 ## 升级步骤
 

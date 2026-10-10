@@ -919,3 +919,13 @@ body.pwa .ckx-row-t { flex: 0 0 auto; }
 body.pwa .ckx-row-m { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 body.pwa .ckx-row-b { font-size: 10px !important; padding: 1px 7px !important; }
 body.pwa .ckx-del { border-color: #ff5252 !important; color: #ff8a8a !important; }
+
+/* ===== CKX 信任条（v1.6.86）：加解密由官方执行 + 可验证版本/哈希 + Verified 徽章 ===== */
+body.pwa .ckx-trust { display: flex; gap: 8px; align-items: flex-start; padding: 7px 8px; margin-bottom: 6px;
+  background: var(--card2); border: 1px solid var(--border); border-radius: 8px; }
+body.pwa .ckx-badge { flex: 0 0 auto; width: 120px; height: 30px; opacity: .95; }
+body.pwa .ckx-badge:not([src]) { display: none; }
+body.pwa .ckx-trust-t { flex: 1; min-width: 0; font-size: 10px; line-height: 1.6; color: var(--text2); }
+body.pwa .ckx-trust-t b { color: var(--text); }
+body.pwa .ckx-trust-t code { font-size: 9.5px; color: var(--accent); word-break: break-all; }
+body.pwa .ckx-trust-t a { color: var(--accent); text-decoration: none; }
