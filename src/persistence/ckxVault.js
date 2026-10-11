@@ -133,7 +133,12 @@ export const IDB_PLAN = [
   { db: 'smart-trader-v1', stores: ['events', 'state', 'candles', 'trades', 'reconcile'] },
   { db: 'kchart_jev', stores: ['decisions', 'srsiPairs'] },
   { db: 'smartTraderRM', stores: ['ruleSignals'] },
+  { db: 'kchart_pwa', stores: ['disc'] },        // TSEV 已学权重 + 本地因子样本（localLoop）
+  { db: 'smartTraderAP', stores: ['events'] },   // 自适应组合事件流
 ];
+
+/** 无 keyPath（out-of-line key）的 store 的记录包封字段：必须连 key 一起备份，否则恢复丢 key。 */
+export const KEYLESS_WRAP = { key: '__ckxKey', value: '__ckxValue' };
 
 /** 凭证所在的 IDB 记录键（默认不进 `data`，仅 `includeSecrets` 时进 `secrets`）。 */
 export const SECRET_IDB = {
@@ -192,16 +197,27 @@ function defaultIdbAdapter() {
   }
   return {
     async list(dbName, storeName) {
+      // 用游标而非 getAll：**无 keyPath 的 store 必须连 key 一起取出**（否则恢复时丢 key）
       const r = await withStore(dbName, storeName, 'readonly', (s) => new Promise((res, rej) => {
-        const q = s.getAll();
-        q.onsuccess = () => res(q.result);
+        const keyless = s.keyPath == null;
+        const out = [];
+        const q = s.openCursor();
+        q.onsuccess = () => {
+          const c = q.result;
+          if (!c) return res(out);
+          out.push(keyless ? { [KEYLESS_WRAP.key]: c.key, [KEYLESS_WRAP.value]: c.value } : c.value);
+          c.continue();
+        };
         q.onerror = () => rej(q.error);
       }));
       return r && r.missing ? [] : r;
     },
     async put(dbName, storeName, rec) {
       const r = await withStore(dbName, storeName, 'readwrite', (s) => new Promise((res, rej) => {
-        const q = s.put(rec);
+        let q;
+        const wrapped = rec && typeof rec === 'object' && KEYLESS_WRAP.key in rec && KEYLESS_WRAP.value in rec;
+        if (wrapped) q = s.put(rec[KEYLESS_WRAP.value], rec[KEYLESS_WRAP.key]);   // 无 keyPath：显式 key
+        else q = s.put(rec);
         q.onsuccess = () => res(true);
         q.onerror = () => rej(q.error);
       }));

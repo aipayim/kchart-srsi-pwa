@@ -50,6 +50,7 @@ scripts/gen-version.mjs
 scripts/register-ckx-embed.mjs
 scripts/verify-ckx-sdk.mjs
 scripts/verify-idb-autoincrement.mjs   # 真实 Chromium 自增语义（npm test 内；无浏览器时 SKIP）
+scripts/verify-idb-keyless.mjs         # 真实 Chromium 无 keyPath store 备份/恢复（npm test 内；无浏览器时 SKIP）
 scripts/verify-pwa-data.mjs
 
 # --- src/engine/ ---

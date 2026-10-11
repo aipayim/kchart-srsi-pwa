@@ -18,7 +18,7 @@ import {
   vaultSummary, vaultFilename, isVaultLsKey, VaultError, VAULT_CODES,
   VAULT_SCHEMA_ID, VAULT_SCHEMA_VERSION, VAULT_APP_ID,
   LS_INCLUDE_EXACT, LS_INCLUDE_PREFIX, LS_EXCLUDE_EXACT, LS_EXCLUDE_PREFIX,
-  IDB_PLAN, SECRET_IDB,
+  IDB_PLAN, SECRET_IDB, KEYLESS_WRAP,
 } from '../src/persistence/ckxVault.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -285,5 +285,32 @@ let roundTripVault = null;
 }
 
 // ---------------------------------------------------------------- 汇总
+// ---------------------------------------------------------------- 12) 全量覆盖：TSEV 权重库 + 自适应组合事件库 + 无 keyPath store
+{
+  const plan = {};
+  for (const { db, stores } of IDB_PLAN) plan[db] = stores;
+  check('P4 计划含 TSEV 权重库 kchart_pwa/disc（此前漏项）', !!(plan.kchart_pwa || []).includes('disc'), JSON.stringify(Object.keys(plan)));
+  check('P5 计划含自适应组合事件库 smartTraderAP/events（此前漏项）', !!(plan.smartTraderAP || []).includes('events'));
+  check('P6 KEYLESS_WRAP 契约稳定', KEYLESS_WRAP.key === '__ckxKey' && KEYLESS_WRAP.value === '__ckxValue');
+}
+{
+  // 无 keyPath store 的记录（带包封）必须**原样透传**，collect → apply 不丢 key
+  const keylessRecs = [
+    { [KEYLESS_WRAP.key]: 'samples', [KEYLESS_WRAP.value]: { v: 5, stats: { 'BTCUSDT|pullback|15m|1': { buckets: { 3: { n: 40, h: 21 } } } }, sampleCount: 1234 } },
+    { [KEYLESS_WRAP.key]: 'samples-legacy', [KEYLESS_WRAP.value]: { v: 2, stats: {} } },
+  ];
+  const idbA = fakeIdb({ 'kchart_pwa/disc': keylessRecs, 'smartTraderAP/events': [{ id: 'e1', t: 1, kind: 'rebalance' }] });
+  const vault = await collectVault({}, { ls: fakeLs({ smartTrader: '{}' }), idb: idbA });
+  check('W1 collect 保留无 keyPath 记录的 key 包封', (((vault.data.idb['kchart_pwa'] || {}).disc) || []).length === 2 && vault.data.idb['kchart_pwa'].disc[0][KEYLESS_WRAP.key] === 'samples');
+  check('W2 collect 含自适应组合事件', (((vault.data.idb['smartTraderAP'] || {}).events) || []).length === 1);
+  const idbB = fakeIdb({});
+  const r = await applyVault(vault, { mode: 'overwrite' }, { ls: fakeLs({}), idb: idbB });
+  const back = (idbB._m.get('kchart_pwa/disc') || []);
+  check('W3 apply 写回后 key/值逐字节一致', r.idb === 3 && back.length === 2 && JSON.stringify(back) === JSON.stringify(keylessRecs));
+  check('W4 apply 写回组合事件', (idbB._m.get('smartTraderAP/events') || []).length === 1);
+  const sum = vaultSummary(vault);
+  check('W5 摘要计数含新库', sum.idbDetail['kchart_pwa/disc'] === 2 && sum.idbDetail['smartTraderAP/events'] === 1, JSON.stringify(sum.idbDetail));
+}
+
 console.log(fails === 0 ? '\nALL PASS' : `\n${fails} FAILED`);
 process.exit(fails === 0 ? 0 : 1);
