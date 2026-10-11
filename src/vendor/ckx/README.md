@@ -7,10 +7,10 @@
 | 项 | 值 |
 |---|---|
 | 包名 | `@cryptokey/ckx` |
-| 版本 | **0.4.0** |
+| 版本 | **0.6.0** |
 | 规范 | CKX format version **1**（`SAFE v3` 容器） |
-| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-latest.zip`（67,960 B） |
-| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-09T23:45:42.071Z`） |
+| 下载 | `https://cryptokey.im/ckx/sdk/ckx-sdk-0.6.0.zip`（**版本化不可变**，84,410 B；`-latest.zip` 同字节） |
+| 完整性清单 | `https://cryptokey.im/ckx/sdk/MANIFEST.json`（`generatedAt: 2026-10-10T16:39:15.312Z`） |
 | 许可 | **Apache-2.0**（见同目录 `LICENSE`；商标/Logo 不在授权内，本项目不使用其商标） |
 | 运行时依赖 | 无（zero dependencies，仅 Web Crypto） |
 | 引擎要求 | Node ≥ 18 / 现代浏览器（需 `crypto.subtle`） |
@@ -19,8 +19,8 @@
 
 | 文件 | 字节 | sha384 |
 |---|---|---|
-| `ckx.esm.js` | 26,823 | `sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc` |
-| `ckx.d.ts` | 21,656 | `sha384-D6WRjAsYzK7SKv0mCRJv+pQzDSkkFxpGC0YqtvFSNGqrs367k2ixGDOBnX/NaNQe` |
+| `ckx.esm.js` | 38,339 | `sha384-MX/J65JF+GfT+z5z9bUqU8GSad4QIQRkh4ahqNERSuvshVdzg1LXpJUqypvA+1F0` |
+| `ckx.d.ts` | 26,782 | `sha384-8Tx8dO9fkfj/1e+BIp5tA9V8fWlJ7CIzayvuiau4rcuoed0CPLPFHB6JdNV5Ai2o` |
 | `LICENSE` | 11,347 | `sha384-GM/3Jrs/y6+jGEosIuuAA1h6oD7Y9C3DghiynB5tWJofjn4Y6qvz9QFSh0PzRZBv` |
 
 校验：`node scripts/verify-ckx-sdk.mjs`（也可 `npm run verify:ckx`）。该校验使用 Node 内置
@@ -52,10 +52,20 @@ await CKX.encryptToFile(payload, password, { app, schema, schemaVersion });
 - `decryptFromVideo(video, password, options?)` 与 `decrypt` 对齐：支持 `options.schema` 并在不符时抛 `CKX_SCHEMA_MISMATCH`。
 - 服务端：`GET /v1/ckx/embed/policy?origin=` **只回该 origin 的 `{allowed, sla}`**（不再回全量名单）；全量名单改由 `GET /v1/ckx/integrators`（`/registry` 数据源）。
 
-## ⚠️ 发布可复现性（2026-10-09 实测）
+## ✅ 发布可复现性（2026-10-10 已由官方修复）
+
+0.6.0 起提供**版本化不可变**包（`ckx-sdk-0.6.0.zip`），官方明确「升级请用新版本号 URL」。
+历史问题（保留记录）：
 
 官方**同一版本号 `0.4.0` 被重新发布过**：`MANIFEST.generatedAt` 由 `12:31:59` → `23:45:42`，`ckx.esm.js` 25,599 → **26,823 B**、`ckx.d.ts` 13,450 → **21,656 B**。
 ⇒ **不可只靠版本号判断是否最新**，必须比对 `sha384`（本项目 `scripts/verify-ckx-sdk.mjs` 已硬编码期望值；也可交叉核对 `GET /v1/ckx/release` 的 `sdk.sri`）。
+
+## 0.6.0 变更（本仓已适配）
+
+- **新增 `verifyIntegrity(carrier)`**（免密码的结构完整性自检，→ `CkxIntegrityResult`）——回应本仓 P1-2 反馈。
+- **介质 G · 非对称**（可选）：`generateRecipientKeyPair` / `encryptToRecipient` / `decryptAsRecipient` / `readRecipientMeta` / `recipientKeyFingerprint`（CKXA v1：X25519+HKDF-SHA256+AES-256-GCM；不支持时明确 `CKX_UNSUPPORTED_FORMAT_VERSION`，**不静默降级**）。本仓暂未采用。
+- embed：`ckx:idle-warning` 现在**真的会发出**（lead = `min(30s, max(5s, ⌊timeout/3⌋))`）；`/ckx/mock/` 可从任意 origin 内嵌。
+- KDF：`iterations` 下限 600000 且只允许上调；读取端按容器声明值派生（兼容历史 100000）。
 
 ## 升级步骤
 

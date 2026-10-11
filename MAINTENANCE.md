@@ -130,6 +130,7 @@ scripts/verify-pwa-data.mjs
   ckxEmbed.test.mjs
   ckxErrors040.test.mjs
   ckxEstimateResize.test.mjs
+  ckxBackwardCompat.test.mjs
   ckxCkxSchema.test.mjs
   ckxIdbRestore.test.mjs
   ckxVault.test.mjs
@@ -137,6 +138,7 @@ scripts/verify-pwa-data.mjs
   disciplineAnalysis.test.mjs
   fixtures/bnbusdt_klines.json
   fixtures/ckx-protocol-v1.schema.json
+  fixtures/vault-sdk-0.4.0.json
   fixtures/ckx-test-vectors.json
   jev.test.mjs
   jevSrsiAudit.test.mjs

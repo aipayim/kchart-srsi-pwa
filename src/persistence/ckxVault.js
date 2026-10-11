@@ -28,14 +28,16 @@ export const VAULT_CAPS = ['text', 'file'];
  * 单一定义处；任何漂移都会让 `npm test` 失败）。
  */
 export const CKX_SDK = {
-  version: '0.4.0',
-  esmBytes: 26823,
-  esmSha384: 'sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc',
+  version: '0.6.0',
+  esmBytes: 38339,
+  esmSha384: 'sha384-MX/J65JF+GfT+z5z9bUqU8GSad4QIQRkh4ahqNERSuvshVdzg1LXpJUqypvA+1F0',
   manifestUrl: 'https://cryptokey.im/ckx/sdk/MANIFEST.json',
+  /** 0.6.0 起提供**版本化不可变**包（同版本重发布问题已由官方修复，见反馈 N-2） */
+  zipUrl: 'https://cryptokey.im/ckx/sdk/ckx-sdk-0.6.0.zip',
   releaseUrl: 'https://cryptokey.im/v1/ckx/release',
   badgeUrl: 'https://cryptokey.im/badge/ckx-verified.svg',
   registryUrl: 'https://cryptokey.im/registry',
-  sri: 'sha384-8jfvvqCRlplWeJwZJWte1nOAj0rML4uaQatQS4rP2hAF9tgVHFwU9KPQ3PT2kwcc',
+  sri: 'sha384-MX/J65JF+GfT+z5z9bUqU8GSad4QIQRkh4ahqNERSuvshVdzg1LXpJUqypvA+1F0',
 };
 
 export const VAULT_CODES = {
@@ -333,6 +335,15 @@ export async function exportVaultBytes(vault, password, meta = {}, deps = {}) {
     createdAt: vault.exportedAt || new Date().toISOString(),
   };
   return CKX.encryptToFile(payload, password, metaInput);
+}
+
+/**
+ * 免密码的**结构完整性自检**（SDK 0.6.0 新增 `verifyIntegrity`）→ `{ok, reason, medium, containerBytes, metaBytes, payloadBytes, meta}`。
+ * ⚠️ 只覆盖头部/结构；**密文区**被截断/篡改仍会表现为 `CKX_WRONG_PASSWORD`（无口令的固有限制，见反馈 P1-2 补充）。
+ */
+export async function inspectVaultIntegrity(bytes, deps = {}) {
+  const CKX = await loadCkx(deps.ckx);
+  try { return CKX.verifyIntegrity(bytes); } catch (e) { return { ok: false, reason: (e && e.code) || 'verify-failed' }; }
 }
 
 /** 免密码读取载体公开元数据（meta 不加密）。 */

@@ -174,8 +174,110 @@ export declare function decrypt(
   password: string,
   options?: CkxDecryptOptions,
 ): Promise<CkxDecryptResult>;
-/** 只读公开元数据，不解密；不可读/非 CKX 载体返回 `null`。 */
+/** 只读公开元数据，不解密；不可读/非 CKX 载体返回 `null`。同时探测非对称容器 `CKXA`（介质 G）。 */
 export declare function readMeta(carrier: string | Uint8Array | CkxImageData): CkxMeta | null;
+
+// ---------------------------------------------------------------- 介质 G：非对称容器 `CKXA` v1（R16 Phase 5）
+
+/** 容器 magic = ASCII `CKXA`（只读，勿就地修改）。 */
+export declare const CKXA_MAGIC: Uint8Array;
+/** 容器版本（字节 4）= 1。 */
+export declare const CKXA_VERSION: 1;
+/** 固定 header 字节数（magic‖ver‖epk‖wrapIv‖wrappedCEK‖metaLen）= 101。 */
+export declare const CKXA_HEADER_BYTES: 101;
+/** `wrappedCEK` 字节数 = CEK(32) + GCM tag(16) = 48。 */
+export declare const CKXA_WRAPPED_CEK_BYTES: 48;
+/** 临时公钥 `epk` 字节数 = 32。 */
+export declare const CKXA_EPK_BYTES: 32;
+/** CEK 字节数 = 32（AES-256）。 */
+export declare const CKXA_CEK_BYTES: 32;
+/** `wrapIv` 字节数 = 12。 */
+export declare const CKXA_WRAP_IV_BYTES: 12;
+/** `contentIv` 字节数 = 12。 */
+export declare const CKXA_CONTENT_IV_BYTES: 12;
+/** `wrapAad` 字节数 = magic(4)+ver(1)+epk(32) = 37。 */
+export declare const CKXA_WRAP_AAD_BYTES: 37;
+/** `metaJSON` 上限 = 4096 B（与 SAFE v3 一致）。 */
+export declare const CKXA_META_MAX_BYTES: 4096;
+/** `metaJSON` 中标记「非对称容器」的字段名 = `asym`。 */
+export declare const CKXA_META_TAG_FIELD: 'asym';
+/** `meta.asym` 取值 = `"1"`。 */
+export declare const CKXA_META_TAG_VALUE: '1';
+
+/** X25519 收件人密钥对（公钥 raw / 私钥 PKCS#8，均 base64url）。 */
+export interface CkxRecipientKeyPair {
+  /** base64url(raw 32 B X25519 public key)；可公开分发。 */
+  publicKey: string;
+  /** base64url(PKCS#8 DER)；**必须**保密。 */
+  privateKey: string;
+}
+/** `encryptToRecipient` 元数据入参（与 `CkxMetaInput` 同形）。 */
+export type CkxAsymMetaInput = CkxMetaInput;
+/** `decryptAsRecipient` 选项（`schema` 不符抛 `CKX_SCHEMA_MISMATCH`）。 */
+export interface CkxAsymDecryptOptions {
+  schema?: string | null;
+}
+/** `decryptAsRecipient` 结果。 */
+export interface CkxAsymDecryptResult {
+  plaintext: Uint8Array;
+  text: string | null;
+  meta: CkxMeta;
+}
+
+/** 生成 X25519 收件人密钥对；运行时无 X25519 → `CKX_UNSUPPORTED_FORMAT_VERSION`。 */
+export declare function generateRecipientKeyPair(): Promise<CkxRecipientKeyPair>;
+/** 导出公钥为 base64url(raw 32 B)。 */
+export declare function exportRecipientPublicKey(key: CryptoKey): Promise<string>;
+/** 导出私钥为 base64url(PKCS#8 DER)（WebCrypto 不支持 X25519 私钥 raw 导出）。 */
+export declare function exportRecipientPrivateKey(key: CryptoKey): Promise<string>;
+/** 导入 base64url(raw 32 B) 公钥；长度/编码非法 → `INVALID_PARAMS`。 */
+export declare function importRecipientPublicKey(publicKeyB64: string): Promise<CryptoKey>;
+/** 导入 base64url(PKCS#8 DER) 私钥；导入失败 → `INVALID_PARAMS`。 */
+export declare function importRecipientPrivateKey(privateKeyB64: string): Promise<CryptoKey>;
+/** 由私钥反推公钥（base64url raw 32 B）——便于只存私钥的宿主发布公钥。 */
+export declare function recipientPublicKeyFromPrivate(privateKeyB64: string): Promise<string>;
+/** 公钥指纹 = `hex(SHA-256(raw)[0..8))`（小写 16 hex 字符），仅展示用。 */
+export declare function recipientKeyFingerprint(publicKeyB64: string): Promise<string>;
+/** 介质 G：用收件人公钥加密 → `CKXA` v1 容器字节。 */
+export declare function encryptToRecipient(
+  payload: string | Uint8Array,
+  recipientPublicKeyB64: string,
+  meta: CkxAsymMetaInput,
+): Promise<Uint8Array>;
+/** 介质 G：用收件人私钥解密；私钥不匹配/篡改统一抛 `CKX_WRONG_PASSWORD`。 */
+export declare function decryptAsRecipient(
+  container: Uint8Array | string,
+  recipientPrivateKeyB64: string,
+  options?: CkxAsymDecryptOptions,
+): Promise<CkxAsymDecryptResult>;
+/** 只读 `CKXA` 公开元数据（不解密、不抛）；非 CKXA / 不可解析 → `null`。 */
+export declare function readRecipientMeta(container: Uint8Array | string): CkxMeta | null;
+/** 是否以 `CKXA` magic 开头（不看版本/长度）。 */
+export declare function hasCkxAsymMagic(bytes: Uint8Array): boolean;
+/** `verifyIntegrity` 的机器可读结论（**不**做任何解密，不构成密码 oracle）。 */
+export type CkxIntegrityReason =
+  | 'ok'
+  | 'empty'
+  | 'not-a-ckx-carrier'
+  | 'truncated-header'
+  | 'unsupported-format-version'
+  | 'meta-too-large'
+  | 'truncated-meta'
+  | 'invalid-meta'
+  | 'no-payload';
+/** `verifyIntegrity` 结果：结构是否自洽 + 可读的公开元数据（不接触口令/明文）。 */
+export interface CkxIntegrityResult {
+  ok: boolean;
+  reason: CkxIntegrityReason;
+  medium: CkxMedium | null;
+  containerBytes: number | null;
+  metaBytes: number | null;
+  payloadBytes: number | null;
+  meta: CkxMeta | null;
+}
+/** 免密码结构自检（只读 magic/版本/metaLen/长度/公开 meta）；任意畸形输入都返回
+ *  `{ ok:false, reason }`，**绝不抛**。`ok:true` 只代表结构自洽，不代表口令正确。 */
+export declare function verifyIntegrity(carrier: string | Uint8Array | CkxImageData): CkxIntegrityResult;
 /** 介质 E：容器尾挂到视频原文件字节，返回可直接保存为视频文件的字节。 */
 export declare function encryptToVideo(
   payload: string | Uint8Array,

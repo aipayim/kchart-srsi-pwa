@@ -9,6 +9,7 @@ import {
   ckxCardHtml, ckxTrustHtml, ckxEmbedCfg, BACKUP_MAX, BACKUP_DB, BACKUP_STORE,
 } from '../src/pwa/ckxBackup.js';
 import { collectVault, VAULT_SCHEMA_ID, VAULT_CODES } from '../src/persistence/ckxVault.js';
+import { CKX_SDK } from '../src/persistence/ckxVault.js';
 
 let fails = 0;
 const check = (name, cond) => { if (!cond) { fails++; console.error('FAIL:', name); } else console.log('ok:', name); };
@@ -75,7 +76,8 @@ const sampleDeps = () => ({ ls: fakeLs({ smartTrader: '{"a":1}', pwa_zoom: '1.25
   // 信任条（v1.6.86）：明确「加解密由 CKX 官方执行」+ 可验证版本/哈希 + 官方 Verified 徽章
   const trust = ckxTrustHtml();
   check('F14 信任条含官方 Verified 徽章', trust.includes('https://cryptokey.im/badge/ckx-verified.svg') && trust.includes('alt="CKX Verified Integrator"'), '');
-  check('F15 信任条含 SDK 版本与 sha384 前缀', trust.includes('0.4.0') && /sha384-8jfvvqC/.test(trust), '');
+  const sdkShort = String(CKX_SDK.esmSha384).replace('sha384-', '').slice(0, 12);
+  check('F15 信任条含 SDK 版本与 sha384 前缀（取自 CKX_SDK 真值）', trust.includes(CKX_SDK.version) && trust.includes('sha384-' + sdkShort), CKX_SDK.version + ' / ' + sdkShort);
   check('F16 信任条声明「不自行实现密码学」并给出官方清单/注册表链接', /不自行实现密码学/.test(trust) && trust.includes('/ckx/sdk/MANIFEST.json') && trust.includes('cryptokey.im/registry'), '');
   check('F17 卡片顶部包含信任条', ckxCardHtml().includes('ckx-trust'), '');
 
